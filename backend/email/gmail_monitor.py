@@ -1,0 +1,723 @@
+"""Monitor de Gmail via API REST para notificaciones de tutelas.
+
+Arquitectura: 15 funciones independientes y testeables.
+Flujo: Email → Clasificar tipo → Extraer radicado → Match/Crear caso → Descargar adjuntos → Guardar .md
+"""
+
+import base64
+import json
+import logging
+import os
+import re
+import time
+from datetime import datetime
+from pathlib import Path
+
+from sqlalchemy.orm import Session
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+
+from backend.config import BASE_DIR
+from backend.database.models import Email, Case, Document, AuditLog
+from backend.database.seed import classify_document
+
+logger = logging.getLogger("tutelas.gmail")
+
+_APP_DIR = Path(__file__).resolve().parent.parent.parent
+TOKEN_PATH = _APP_DIR / "gmail_token.json"
+CREDENTIALS_PATH = _APP_DIR / "gmail_credentials.json"
+
+VALID_EXTENSIONS = {".pdf", ".docx", ".doc", ".xlsx"}
+
+# Correos que se ignoran (alertas, spam, no jurídicos)
+IGNORE_SENDERS = {"noreply@google.com", "no-reply@accounts.google.com", "googleplay-noreply@google.com"}
+IGNORE_SUBJECTS = {"alerta de seguridad", "configurar tu dispositivo", "privacidad en play", "verify your"}
+
+# Typos comunes en subjects judiciales
+SUBJECT_TYPOS = {
+    "NOTIFIA": "NOTIFICA", "ADMISORIIO": "ADMISORIO", "NOTIFICAICON": "NOTIFICACION",
+    "TUTLEA": "TUTELA", "SENTECIA": "SENTENCIA", "DESACTO": "DESACATO",
+    "IMPUGNAICON": "IMPUGNACION", "AVOACAR": "AVOCAR",
+}
+
+
+# ═══════════════════════════════════════════════════════════
+# 1. AUTENTICACIÓN GMAIL
+# ═══════════════════════════════════════════════════════════
+
+def _get_gmail_service():
+    """Obtener servicio Gmail API autenticado con auto-refresh de token.
+    Returns: googleapiclient.discovery.Resource del servicio Gmail."""
+    if not TOKEN_PATH.exists():
+        raise Exception("gmail_token.json no encontrado. Ejecute la autorizacion OAuth2.")
+
+    with open(TOKEN_PATH) as f:
+        token_data = json.load(f)
+
+    creds = Credentials(
+        token=token_data["token"],
+        refresh_token=token_data.get("refresh_token"),
+        token_uri=token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+        client_id=token_data.get("client_id"),
+        client_secret=token_data.get("client_secret"),
+        scopes=token_data.get("scopes"),
+    )
+
+    if creds.expired or not creds.valid:
+        creds.refresh(Request())
+        token_data["token"] = creds.token
+        with open(TOKEN_PATH, "w") as f:
+            json.dump(token_data, f, indent=2)
+
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+# ═══════════════════════════════════════════════════════════
+# 2-6. FUNCIONES DE EXTRACCIÓN Y CLASIFICACIÓN
+# ═══════════════════════════════════════════════════════════
+
+def _normalize_typos(subject: str) -> str:
+    """Corregir typos comunes en subjects judiciales.
+    Returns: subject corregido."""
+    result = subject or ""
+    for wrong, correct in SUBJECT_TYPOS.items():
+        result = result.replace(wrong, correct)
+    return result
+
+
+def _should_ignore(subject: str, sender: str) -> bool:
+    """Determinar si un email debe ignorarse (alertas Google, spam, etc).
+    Returns: True si debe ignorarse."""
+    s = (sender or "").lower()
+    for ignore in IGNORE_SENDERS:
+        if ignore in s:
+            return True
+    subj_lower = (subject or "").lower()
+    for ignore in IGNORE_SUBJECTS:
+        if ignore in subj_lower:
+            return True
+    return False
+
+
+def classify_email_type(subject: str, sender: str) -> str:
+    """Clasificar tipo de actuación judicial del email por su subject.
+    Returns: TUTELA_NUEVA|AUTO_ADMISORIO|FALLO_1RA|FALLO_2DA|IMPUGNACION|
+             INCIDENTE_DESACATO|NOTIFICACION|TRASLADO|REQUERIMIENTO|SALIENTE|OTRO"""
+    subj = (subject or "").upper()
+
+    # Correos salientes (reenviados por la Gobernación)
+    if "ELEMENTOS ENVIADOS" in subj or "CORREO ENVIADO" in subj:
+        return "SALIENTE"
+
+    if "INCIDENTE" in subj or "DESACATO" in subj:
+        return "INCIDENTE_DESACATO"
+    if "SEGUNDA INSTANCIA" in subj or "2DA INSTANCIA" in subj or "FALLO 2" in subj:
+        return "FALLO_2DA"
+    if "IMPUGNA" in subj:
+        return "IMPUGNACION"
+    if "SENTENCIA" in subj or "FALLO" in subj:
+        return "FALLO_1RA"
+    if "ADMITE" in subj or "ADMISORIO" in subj or "AVOCA" in subj:
+        return "AUTO_ADMISORIO"
+    if "TRASLADO" in subj:
+        return "TRASLADO"
+    if "REQUERIMIENTO" in subj:
+        return "REQUERIMIENTO"
+    if "NOTIFIC" in subj:
+        return "NOTIFICACION"
+    if "TUTELA" in subj:
+        return "TUTELA_NUEVA"
+    return "OTRO"
+
+
+def extract_radicado(text: str) -> dict:
+    """Extraer radicado judicial del texto (subject + body).
+    Usa patrones centralizados de regex_library.py.
+    Returns: {'radicado_23': str, 'radicado_corto': str}"""
+    from backend.agent.regex_library import (
+        RAD_23_CONTINUOUS, RAD_23_WITH_SEPARATORS, RAD_T_FORMAT, RAD_LABEL, RAD_GENERIC,
+    )
+    result = {"radicado_23": "", "radicado_corto": ""}
+
+    # Patrón 1: Radicado completo 23 dígitos (estricto primero, laxo como fallback)
+    m = RAD_23_CONTINUOUS.pattern.search(text)
+    if not m:
+        m = RAD_23_WITH_SEPARATORS.pattern.search(text)
+    if not m:
+        # Fallback laxo para emails con separadores atipicos
+        m = re.search(r"(68[\d]{5,7}[-\s\.]?[\d]{3,4}[-\s\.]?[\d]{4}[-\s\.]?[\d]{5}[-\s\.]?[\d]{2})", text)
+    if m:
+        result["radicado_23"] = m.group(1)
+
+    # Patrón 2: Formato T-00053/2026
+    m = RAD_T_FORMAT.pattern.search(text)
+    if m:
+        result["radicado_corto"] = f"{m.group(2)}-{m.group(1).zfill(5)}"
+        return result
+
+    # Patrón 3: RAD 2026-00053 o Radicado 2026-053
+    m = RAD_LABEL.pattern.search(text)
+    if m:
+        result["radicado_corto"] = f"{m.group(1)}-{m.group(2).zfill(5)}"
+        return result
+
+    # Patrón 4: Extraer del radicado 23 dígitos
+    if result["radicado_23"]:
+        clean = re.sub(r"[\s\-\.]", "", result["radicado_23"])
+        m = re.search(r"(20\d{2})(\d{5})(\d{2})$", clean)
+        if m:
+            result["radicado_corto"] = f"{m.group(1)}-{m.group(2)}"
+
+    # Patrón 5: Cualquier 20XX-NNNNN suelto (fallback genérico)
+    if not result["radicado_corto"]:
+        m = RAD_GENERIC.pattern.search(text)
+        if m:
+            result["radicado_corto"] = f"{m.group(1)}-{m.group(2).zfill(5)}"
+
+    return result
+
+
+def extract_forest(body: str, attachment_names: list[str]) -> str:
+    """Extraer número FOREST del body del correo.
+    FOREST válido SOLO proviene de tutelas@santander.gov.co.
+    Returns: número FOREST (10-13 dígitos) o '' si no se encuentra."""
+    from backend.agent.forest_extractor import FOREST_PATTERN, FOREST_BLACKLIST
+
+    m = FOREST_PATTERN.search(body or "")
+    if m and m.group(1) not in FOREST_BLACKLIST:
+        return m.group(1)
+
+    # NO buscar en nombres de archivos DOCX — esos números son radicados internos de salida
+    return ""
+
+
+def extract_accionante(subject: str, body: str) -> str:
+    """Extraer nombre del accionante del email.
+    Returns: nombre en MAYÚSCULAS o '' si no se encuentra."""
+    SKIP_WORDS = {
+        "ACCION", "TUTELA", "AUTO", "JUZGADO", "NOTIFICACION", "SENTENCIA",
+        "FALLO", "REMITE", "OFICIO", "MUNICIPAL", "CIRCUITO", "PROMISCUO",
+        "SECRETARIA", "EDUCACION", "DEPARTAMENTAL", "SANTANDER", "GOBERNACION",
+        "RADICADO", "NOTIFICA", "ADMISION", "COMPETENCIA", "TRASLADO",
+        "BUCARAMANGA", "BARRANCABERMEJA", "FLORIDABLANCA", "COLOMBIA",
+        "REPUBLICA", "HONORABLE", "DESPACHO", "URGENTE", "PERSONERIA",
+    }
+
+    for text in [subject or "", (body or "")[:2000]]:
+        patterns = [
+            r"(?i)accionante[:\s]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{5,50})",
+            r"(?i)demandante[:\s]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{5,50})",
+            r"(?i)promovida?\s+por\s+(?:el señor |la señora )?([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{5,50})",
+        ]
+        for pat in patterns:
+            match = re.search(pat, text)
+            if match:
+                name = re.sub(r"[\n\r]+", " ", match.group(1).strip())
+                name = re.sub(r"\s+", " ", name).strip()
+                words = name.upper().split()
+                non_skip = [w for w in words if w not in SKIP_WORDS and len(w) > 2]
+                if len(non_skip) >= 2:
+                    return name.upper()[:60]
+    return ""
+
+
+# ═══════════════════════════════════════════════════════════
+# 7-8. FUNCIONES DE PARSEO DE EMAIL
+# ═══════════════════════════════════════════════════════════
+
+def _extract_body_complete(payload: dict) -> str:
+    """Extraer texto plano del payload del email (recursivo para multipart).
+    Returns: texto del body completo."""
+    mime_type = payload.get("mimeType", "")
+    body_data = payload.get("body", {}).get("data")
+
+    if mime_type == "text/plain" and body_data:
+        return base64.urlsafe_b64decode(body_data).decode("utf-8", errors="replace")
+
+    for part in payload.get("parts", []):
+        result = _extract_body_complete(part)
+        if result:
+            return result
+
+    return ""
+
+
+def _find_attachment_parts(payload: dict) -> list[dict]:
+    """Encontrar todas las partes que son adjuntos (recursivo).
+    Returns: lista de dicts con filename, attachmentId, size."""
+    attachments = []
+    filename = payload.get("filename", "")
+    body = payload.get("body", {})
+
+    if filename and body.get("attachmentId"):
+        attachments.append({
+            "filename": filename,
+            "attachmentId": body["attachmentId"],
+            "size": body.get("size", 0),
+        })
+
+    for part in payload.get("parts", []):
+        attachments.extend(_find_attachment_parts(part))
+
+    return attachments
+
+
+# ═══════════════════════════════════════════════════════════
+# 9-11. FUNCIONES DE MATCHING Y CREACIÓN DE CASOS
+# ═══════════════════════════════════════════════════════════
+
+def _is_duplicate(db: Session, radicado_corto: str, tipo: str, date: datetime) -> bool:
+    """Verificar si un email es duplicado (mismo radicado+tipo en últimas 24h).
+    Returns: True si ya existe un email similar reciente."""
+    if not radicado_corto:
+        return False
+    from datetime import timedelta
+    since = date - timedelta(hours=24) if date else datetime.utcnow() - timedelta(hours=24)
+    existing = db.query(Email).filter(
+        Email.subject.contains(radicado_corto),
+        Email.date_received >= since,
+    ).first()
+    return existing is not None
+
+
+def _normalize_rad_num(text: str) -> str | None:
+    """Normalizar radicado a formato 'YEAR:SEQ' para comparación."""
+    m = re.match(r"(20\d{2})[-\s]?0*(\d+)", str(text or ""))
+    return f"{m.group(1)}:{m.group(2)}" if m else None
+
+
+def match_to_case(db: Session, radicado_data: dict, accionante: str) -> Case | None:
+    """Buscar caso existente para vincular email.
+    Prioridad: rad_23 completo > rad_corto exacto > personería > accionante (si mismo radicado).
+    Returns: Case o None."""
+    rad_23 = radicado_data.get("radicado_23", "")
+    rad_corto = radicado_data.get("radicado_corto", "")
+
+    # 1. Radicado 23 dígitos COMPLETO (20 dígitos normalizados)
+    if rad_23:
+        norm_new = re.sub(r"[^0-9]", "", rad_23)
+        if len(norm_new) >= 18:
+            cases = db.query(Case).filter(
+                Case.radicado_23_digitos.isnot(None), Case.radicado_23_digitos != ""
+            ).all()
+            for c in cases:
+                norm_ex = re.sub(r"[^0-9]", "", c.radicado_23_digitos or "")
+                if len(norm_ex) >= 18 and norm_new[:20] == norm_ex[:20]:
+                    return c
+
+    # 2. Radicado corto EXACTO en folder_names
+    if rad_corto:
+        m = re.match(r"(20\d{2})[-]?0*(\d+)", rad_corto)
+        if m:
+            year, num = m.group(1), m.group(2)
+            cases = db.query(Case).filter(Case.folder_name.ilike(f"{year}%")).all()
+            for c in cases:
+                norm = _normalize_rad_num(c.folder_name)
+                if norm and norm == f"{year}:{num}":
+                    return c
+
+    # 3. Personería por municipio
+    if accionante:
+        m = re.search(
+            r"(?:personero|personera|personería|personeria)\s+(?:municipal\s+)?(?:de|del)\s+(?:el\s+)?([A-Za-záéíóúñÁÉÍÓÚÑ]+)",
+            accionante, re.IGNORECASE,
+        )
+        if m:
+            municipio = m.group(1).strip().upper()
+            if len(municipio) >= 3 and municipio not in {"SANTANDER", "LA", "DE"}:
+                cases = db.query(Case).filter(Case.accionante.ilike(f"%{municipio}%")).all()
+                for c in cases:
+                    acc = (c.accionante or "").upper()
+                    if any(kw in acc for kw in ("PERSONERO", "PERSONERA", "PERSONERÍA")):
+                        # Verificar radicado no sea diferente
+                        if rad_corto:
+                            case_norm = _normalize_rad_num(c.folder_name)
+                            email_norm = _normalize_rad_num(rad_corto)
+                            if case_norm and email_norm and case_norm != email_norm:
+                                continue  # Radicado diferente → no es este caso
+                        return c
+
+    # 4. Accionante — SOLO si radicado coincide o no hay radicado
+    if accionante and len(accionante) >= 8:
+        case = db.query(Case).filter(Case.accionante.ilike(f"%{accionante[:20]}%")).first()
+        if case:
+            if rad_corto:
+                case_norm = _normalize_rad_num(case.folder_name)
+                m = re.match(r"(20\d{2})[-]?0*(\d+)", rad_corto)
+                email_norm = f"{m.group(1)}:{m.group(2)}" if m else None
+                if case_norm and email_norm and case_norm != email_norm:
+                    logger.info(f"Accionante '{accionante[:20]}' existe pero rad {rad_corto} diferente → caso nuevo")
+                    return None
+            return case
+
+    return None
+
+
+def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case | None:
+    """Crear carpeta y caso nuevo en la DB.
+    Returns: Case creado o None si no hay radicado."""
+    rad_corto = radicado_data.get("radicado_corto", "")
+    rad_23 = radicado_data.get("radicado_23", "")
+    if not rad_corto:
+        return None
+
+    # Verificar que NO exista ya
+    m = re.match(r"(20\d{2})[-]?0*(\d+)", rad_corto)
+    if m:
+        year, num = m.group(1), m.group(2)
+        existing = db.query(Case).filter(Case.folder_name.ilike(f"{year}%")).all()
+        for ec in existing:
+            norm = _normalize_rad_num(ec.folder_name)
+            if norm and norm == f"{year}:{num}":
+                return ec
+
+    clean_acc = re.sub(r"[\n\r]", " ", accionante or "").strip()
+    if not clean_acc:
+        clean_acc = "[PENDIENTE REVISION]"
+    folder_name = re.sub(r'[<>:"/\\|?*]', '', f"{rad_corto} {clean_acc}").strip()[:80]
+    folder_path = BASE_DIR / folder_name
+    folder_path.mkdir(parents=True, exist_ok=True)
+
+    case = Case(
+        folder_name=folder_name,
+        folder_path=str(folder_path),
+        accionante=clean_acc if clean_acc != "[PENDIENTE REVISION]" else None,
+        radicado_23_digitos=rad_23 or None,
+        processing_status="PENDIENTE",
+        estado="ACTIVO",
+        tipo_actuacion="TUTELA",
+    )
+    db.add(case)
+    db.flush()
+
+    db.add(AuditLog(
+        case_id=case.id,
+        action="CREAR",
+        source="gmail_api",
+        new_value=f"Caso creado desde email. Accionante: {clean_acc[:50]}",
+    ))
+    db.commit()
+    logger.info(f"Caso creado: {folder_name}")
+    return case
+
+
+# ═══════════════════════════════════════════════════════════
+# 12-14. FUNCIONES DE DESCARGA Y GUARDADO
+# ═══════════════════════════════════════════════════════════
+
+def download_attachments(service, msg_id: str, case: Case | None, db: Session) -> tuple[list, list]:
+    """Descargar adjuntos del email y registrar en DB.
+    Returns: (guardados: list[dict], ignorados: list[str])"""
+    msg = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+    att_parts = _find_attachment_parts(msg.get("payload", {}))
+
+    save_dir = Path(case.folder_path) if case and case.folder_path else BASE_DIR / "_emails_sin_clasificar"
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    guardados = []
+    ignorados = []
+
+    for att in att_parts:
+        filename = re.sub(r"[\r\n]+", " ", att["filename"]).strip()
+        ext = Path(filename).suffix.lower()
+        if ext not in VALID_EXTENSIONS:
+            ignorados.append(filename)
+            continue
+
+        att_data = service.users().messages().attachments().get(
+            userId="me", messageId=msg_id, id=att["attachmentId"]
+        ).execute()
+        file_data = base64.urlsafe_b64decode(att_data["data"])
+
+        save_path = save_dir / filename
+        counter = 1
+        while save_path.exists():
+            save_path = save_dir / f"{Path(filename).stem}_{counter}{ext}"
+            counter += 1
+
+        save_path.write_bytes(file_data)
+        guardados.append({"filename": save_path.name, "saved_path": str(save_path)})
+
+        if case:
+            db.add(Document(
+                case_id=case.id, filename=save_path.name, file_path=str(save_path),
+                doc_type=classify_document(save_path.name), file_size=len(file_data),
+            ))
+
+    return guardados, ignorados
+
+
+def save_email_md(save_dir: Path, metadata: dict, body: str, adjuntos: list) -> None:
+    """Guardar email como .md en la carpeta del caso. NO sobreescribe si ya existe.
+    Args: save_dir, metadata={subject, sender, date, folder_name}, body, adjuntos"""
+    if not save_dir.exists():
+        return
+
+    date_part = datetime.utcnow().strftime("%Y%m%d")
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(metadata.get("date", ""))
+        date_part = dt.strftime("%Y%m%d")
+    except Exception:
+        pass
+
+    clean_subject = re.sub(r'[<>:"/\\|?*\n\r]', '', (metadata.get("subject") or "sin_asunto")[:50]).strip()
+    clean_subject = re.sub(r'\s+', '_', clean_subject)
+    filename = f"Email_{date_part}_{clean_subject}.md"
+
+    save_path = save_dir / filename
+    if save_path.exists():
+        return  # NO sobreescribir
+
+    att_list = ""
+    if adjuntos:
+        att_list = "\n## Adjuntos\n" + "\n".join(f"- {a.get('filename', '?')}" for a in adjuntos)
+
+    content = f"""# {metadata.get('subject') or '(Sin asunto)'}
+
+**De:** {metadata.get('sender', '')}
+**Fecha:** {metadata.get('date', '')}
+**Caso:** {metadata.get('folder_name', '')}
+
+---
+
+{body}
+{att_list}
+"""
+    try:
+        save_path.write_text(content, encoding="utf-8")
+    except Exception:
+        pass
+
+
+def update_case_fields(db: Session, case: Case, tipo: str, data: dict) -> list[str]:
+    """Actualizar campos del caso con datos del email si están vacíos.
+    Returns: lista de campos actualizados."""
+    updated = []
+    rad_23 = data.get("radicado_23", "")
+    forest = data.get("forest", "")
+    accionante = data.get("accionante", "")
+
+    if rad_23 and not case.radicado_23_digitos:
+        case.radicado_23_digitos = rad_23
+        updated.append("RADICADO_23_DIGITOS")
+
+    if forest and not case.radicado_forest:
+        case.radicado_forest = forest
+        updated.append("RADICADO_FOREST")
+
+    if accionante and not case.accionante:
+        case.accionante = accionante
+        updated.append("ACCIONANTE")
+
+    if tipo == "INCIDENTE_DESACATO" and (not case.incidente or case.incidente != "SI"):
+        case.incidente = "SI"
+        updated.append("INCIDENTE")
+
+    if tipo == "IMPUGNACION" and (not case.impugnacion or case.impugnacion != "SI"):
+        case.impugnacion = "SI"
+        updated.append("IMPUGNACION")
+
+    if updated:
+        case.updated_at = datetime.utcnow()
+        for field in updated:
+            db.add(AuditLog(
+                case_id=case.id, field_name=field,
+                old_value="", new_value=getattr(case, field.lower(), ""),
+                action="IMPORT_EMAIL", source="gmail_api",
+            ))
+
+    return updated
+
+
+# ═══════════════════════════════════════════════════════════
+# 15. FUNCIÓN PRINCIPAL
+# ═══════════════════════════════════════════════════════════
+
+def check_inbox(db: Session) -> list[dict]:
+    """Revisar bandeja de Gmail, clasificar y procesar cada email no leído.
+    Returns: lista de dicts con resultado por cada email procesado."""
+    results = []
+
+    try:
+        service = _get_gmail_service()
+
+        # Buscar TODOS los emails no leídos (paginando)
+        messages = []
+        page_token = None
+        while True:
+            kwargs = {"userId": "me", "q": "is:unread", "maxResults": 50}
+            if page_token:
+                kwargs["pageToken"] = page_token
+            response = service.users().messages().list(**kwargs).execute()
+            messages.extend(response.get("messages", []))
+            page_token = response.get("nextPageToken")
+            if not page_token or len(messages) >= 200:
+                break
+
+        if not messages:
+            return results
+
+        existing_ids = {e.message_id for e in db.query(Email.message_id).all()}
+
+        for msg_ref in messages:
+            try:
+                msg = service.users().messages().get(userId="me", id=msg_ref["id"], format="full").execute()
+                headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+                message_id = headers.get("Message-ID", headers.get("Message-Id", msg_ref["id"]))
+
+                # Duplicado en DB → solo marcar como leído
+                if message_id in existing_ids:
+                    try:
+                        service.users().messages().modify(
+                            userId="me", id=msg_ref["id"], body={"removeLabelIds": ["UNREAD"]}
+                        ).execute()
+                    except Exception:
+                        pass
+                    continue
+
+                subject = _normalize_typos(headers.get("Subject", ""))
+                sender = headers.get("From", "")
+                date_str = headers.get("Date", "")
+
+                # Ignorar emails no jurídicos
+                if _should_ignore(subject, sender):
+                    try:
+                        service.users().messages().modify(
+                            userId="me", id=msg_ref["id"], body={"removeLabelIds": ["UNREAD"]}
+                        ).execute()
+                    except Exception:
+                        pass
+                    results.append({"subject": subject, "accion": "IGNORADO", "error": None})
+                    continue
+
+                # Parsear fecha
+                date_received = None
+                try:
+                    from email.utils import parsedate_to_datetime
+                    date_received = parsedate_to_datetime(date_str)
+                except Exception:
+                    date_received = datetime.utcnow()
+
+                # Extraer body y adjuntos
+                body = _extract_body_complete(msg.get("payload", {}))
+                att_parts = _find_attachment_parts(msg.get("payload", {}))
+                att_names = [a["filename"] for a in att_parts]
+
+                # ── CLASIFICAR ──
+                full_text = f"{subject} {body}"
+                tipo = classify_email_type(subject, sender)
+                radicado_data = extract_radicado(full_text)
+                forest = extract_forest(body, att_names)
+                accionante = extract_accionante(subject, body)
+
+                logger.info(f"Email: tipo={tipo} rad={radicado_data.get('radicado_corto','')} acc={accionante[:20]}")
+
+                # ── MATCH O CREAR ──
+                case = match_to_case(db, radicado_data, accionante)
+                created_new = False
+                accion = "CASO_EXISTENTE"
+
+                if tipo == "SALIENTE":
+                    accion = "SALIENTE"
+                elif not case:
+                    case = create_new_case(db, radicado_data, accionante)
+                    if case:
+                        created_new = True
+                        accion = "CASO_NUEVO"
+
+                # ── DESCARGAR ADJUNTOS ──
+                guardados, ignorados = download_attachments(service, msg_ref["id"], case, db)
+
+                # ── GUARDAR .md ──
+                if case and case.folder_path and body:
+                    save_email_md(
+                        Path(case.folder_path),
+                        {"subject": subject, "sender": sender, "date": date_str, "folder_name": case.folder_name},
+                        body, guardados,
+                    )
+
+                # ── ACTUALIZAR CAMPOS DEL CASO ──
+                campos_actualizados = []
+                if case:
+                    data = {**radicado_data, "forest": forest, "accionante": accionante}
+                    campos_actualizados = update_case_fields(db, case, tipo, data)
+
+                # ── REGISTRAR EMAIL EN DB ──
+                email_record = Email(
+                    message_id=message_id, subject=subject, sender=sender,
+                    date_received=date_received, body_preview=body or "",
+                    case_id=case.id if case else None,
+                    attachments=guardados, status="ASIGNADO" if case else "PENDIENTE",
+                    processed_at=datetime.utcnow(),
+                )
+                db.add(email_record)
+
+                if case:
+                    db.add(AuditLog(
+                        case_id=case.id, action="IMPORT_EMAIL", source="gmail_api",
+                        new_value=f"Email: {subject[:100]}",
+                    ))
+
+                # ── MARCAR COMO LEÍDO ──
+                try:
+                    service.users().messages().modify(
+                        userId="me", id=msg_ref["id"], body={"removeLabelIds": ["UNREAD"]}
+                    ).execute()
+                except Exception:
+                    pass
+
+                results.append({
+                    "subject": subject,
+                    "tipo": tipo,
+                    "radicado_corto": radicado_data.get("radicado_corto", ""),
+                    "radicado_23": radicado_data.get("radicado_23", ""),
+                    "forest": forest,
+                    "accionante": accionante[:40],
+                    "matched_case": case.folder_name if case else None,
+                    "accion": accion,
+                    "adjuntos_guardados": len(guardados),
+                    "adjuntos_ignorados": len(ignorados),
+                    "campos_actualizados": campos_actualizados,
+                    "error": None,
+                })
+
+            except Exception as e:
+                logger.error(f"Error procesando email: {e}")
+                results.append({"subject": "", "accion": "ERROR", "error": str(e)[:100]})
+                continue
+
+        db.commit()
+
+    except Exception as e:
+        logger.error(f"Error Gmail API: {e}")
+        results.append({"error": f"Error Gmail API: {e}"})
+
+    return results
+
+
+# ═══════════════════════════════════════════════════════════
+# UTILIDAD: Retroactivamente crear .md de emails existentes
+# ═══════════════════════════════════════════════════════════
+
+def save_existing_emails_as_md(db: Session) -> int:
+    """Guardar todos los emails existentes como .md en sus carpetas.
+    Returns: número de emails guardados."""
+    emails = db.query(Email).filter(
+        Email.case_id.isnot(None), Email.body_preview.isnot(None), Email.body_preview != "",
+    ).all()
+
+    saved = 0
+    for em in emails:
+        case = db.query(Case).filter(Case.id == em.case_id).first()
+        if not case or not case.folder_path:
+            continue
+        date_str = em.date_received.strftime("%a, %d %b %Y %H:%M") if em.date_received else ""
+        save_email_md(
+            Path(case.folder_path),
+            {"subject": em.subject or "", "sender": em.sender or "", "date": date_str, "folder_name": case.folder_name},
+            em.body_preview, em.attachments or [],
+        )
+        saved += 1
+    return saved

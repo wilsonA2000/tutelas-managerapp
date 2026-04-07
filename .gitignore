@@ -1,0 +1,51 @@
+# Secrets and credentials
+.env
+gmail_token.json
+gmail_credentials.json
+secrets/
+
+# Database
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reports (generated)
+data/exports/
+
+# Logs
+*.log
+logs/
+
+# Temporary
+/tmp/
+*.tmp
