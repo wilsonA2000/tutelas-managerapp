@@ -211,4 +211,30 @@ export const getAgentTools = () =>
 export const getAgentTokenStats = () =>
   api.get('/agent/tokens').then(r => r.data);
 
+// DB Management
+export const createBackup = () =>
+  api.post('/db/backup').then(r => r.data);
+
+export const listBackups = () =>
+  api.get('/db/backups').then(r => r.data);
+
+export const restoreBackup = (filename: string) =>
+  api.post('/db/restore', null, { params: { filename } }).then(r => r.data);
+
+export const startRebuild = (extractText = true, importCsv = true) =>
+  api.post('/db/rebuild', null, { params: { extract_text: extractText, import_csv: importCsv } }).then(r => r.data);
+
+export const getRebuildStatus = () =>
+  api.get('/db/rebuild/status').then(r => r.data);
+
+export const getSandboxCompare = () =>
+  api.get('/db/sandbox/compare').then(r => r.data);
+
+// Document management
+export const suggestDocTarget = (docId: number) =>
+  api.get(`/extraction/docs/${docId}/suggest-target`).then(r => r.data);
+
+export const moveDocument = (docId: number, targetCaseId: number) =>
+  api.post(`/extraction/docs/${docId}/move/${targetCaseId}`).then(r => r.data);
+
 export default api;

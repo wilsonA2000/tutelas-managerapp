@@ -6,7 +6,7 @@ import {
   ArrowLeft, Save, FileText, ExternalLink, Loader2,
   AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2,
 } from 'lucide-react'
-import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument } from '../services/api'
+import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk } from '../services/api'
 
 // ─── Field Definitions ──────────────────────────────────────────────────────
 
@@ -253,8 +253,12 @@ function FormSection({
 
 // ─── Document Panel ──────────────────────────────────────────────────────────
 
-function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filename: string; doc_type: string }>; onDeleteDoc?: (docId: number) => void }) {
+function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filename: string; doc_type: string; verificacion?: string; verificacion_detalle?: string }>; onDeleteDoc?: (docId: number) => void }) {
   const [previewDocId, setPreviewDocId] = useState<number | null>(null)
+  const [resolveDocId, setResolveDocId] = useState<number | null>(null)
+  const [suggestions, setSuggestions] = useState<Array<{ case_id: number; folder_name: string; confidence: string; reason: string }>>([])
+  const [loadingSuggest, setLoadingSuggest] = useState(false)
+  const qc = useQueryClient()
 
   if (!docs?.length) {
     return (
@@ -298,10 +302,119 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
     OTRO: 'bg-gray-100 text-gray-500',
   }
 
+  const noPerteneceDocs = docs.filter(d => d.verificacion === 'NO_PERTENECE')
+  const sospechosoDocs = docs.filter(d => d.verificacion === 'SOSPECHOSO')
+
+  async function handleResolve(docId: number) {
+    setResolveDocId(docId)
+    setLoadingSuggest(true)
+    setSuggestions([])
+    try {
+      const data = await suggestDocTarget(docId)
+      setSuggestions(data.suggestions || [])
+    } catch {
+      toast.error('Error buscando sugerencias')
+    }
+    setLoadingSuggest(false)
+  }
+
+  async function handleMove(docId: number, targetCaseId: number) {
+    if (!confirm('Mover este documento al caso seleccionado?')) return
+    try {
+      await moveDocument(docId, targetCaseId)
+      toast.success('Documento movido exitosamente')
+      setResolveDocId(null)
+      qc.invalidateQueries({ queryKey: ['case'] })
+    } catch {
+      toast.error('Error moviendo documento')
+    }
+  }
+
+  async function handleMarkOk(docId: number) {
+    try {
+      await markDocOk(docId)
+      toast.success('Documento marcado como OK')
+      setResolveDocId(null)
+      qc.invalidateQueries({ queryKey: ['case'] })
+    } catch {
+      toast.error('Error marcando documento')
+    }
+  }
+
   const previewDoc = docs.find(d => d.id === previewDocId)
 
   return (
     <div>
+      {/* Alerta de docs NO_PERTENECE */}
+      {noPerteneceDocs.length > 0 && (
+        <div className="mx-4 mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+          <div className="flex items-center gap-2 text-red-700 text-xs font-semibold">
+            <AlertCircle size={14} />
+            {noPerteneceDocs.length} documento{noPerteneceDocs.length > 1 ? 's' : ''} NO pertenece{noPerteneceDocs.length > 1 ? 'n' : ''} a este caso
+          </div>
+          <p className="text-xs text-red-500 mt-1">Usa el boton "Resolver" en cada documento para reasignarlo</p>
+        </div>
+      )}
+      {sospechosoDocs.length > 0 && (
+        <div className="mx-4 mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <div className="flex items-center gap-2 text-yellow-700 text-xs font-medium">
+            <AlertCircle size={12} />
+            {sospechosoDocs.length} documento{sospechosoDocs.length > 1 ? 's' : ''} sospechoso{sospechosoDocs.length > 1 ? 's' : ''}
+          </div>
+        </div>
+      )}
+
+      {/* Modal de resolver doc */}
+      {resolveDocId && (
+        <div className="mx-4 mt-3 p-4 bg-white border-2 border-red-300 rounded-lg shadow-lg">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-sm font-semibold text-gray-700">Resolver documento</h4>
+            <button onClick={() => setResolveDocId(null)} className="text-gray-400 hover:text-gray-600 text-xs">Cerrar</button>
+          </div>
+          <p className="text-xs text-gray-500 mb-3 truncate">
+            {docs.find(d => d.id === resolveDocId)?.filename}
+          </p>
+          {loadingSuggest ? (
+            <div className="flex items-center gap-2 text-xs text-gray-400 py-2">
+              <Loader2 size={14} className="animate-spin" /> Buscando caso destino...
+            </div>
+          ) : suggestions.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500 font-medium">Sugerencias:</p>
+              {suggestions.map(s => (
+                <div key={s.case_id} className="flex items-center justify-between bg-gray-50 p-2 rounded text-xs">
+                  <div className="min-w-0">
+                    <p className="font-medium text-gray-700 truncate">{s.folder_name}</p>
+                    <p className="text-gray-400">{s.reason}</p>
+                    <span className={`inline-block mt-1 px-1.5 py-0.5 rounded text-xs font-medium ${
+                      s.confidence === 'ALTA' ? 'bg-green-100 text-green-700' :
+                      s.confidence === 'MEDIA' ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>{s.confidence}</span>
+                  </div>
+                  <button
+                    onClick={() => handleMove(resolveDocId, s.case_id)}
+                    className="ml-2 px-3 py-1 bg-[#1A5276] text-white rounded text-xs hover:bg-[#154360] flex-shrink-0"
+                  >
+                    Mover
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-gray-400 py-2">No se encontraron sugerencias de destino</p>
+          )}
+          <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+            <button
+              onClick={() => handleMarkOk(resolveDocId)}
+              className="px-3 py-1 text-xs bg-green-50 text-green-700 border border-green-200 rounded hover:bg-green-100"
+            >
+              Pertenece aqui (marcar OK)
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Preview iframe */}
       {previewDoc && canPreview(previewDoc.filename) && (
         <div className="border-b border-gray-200">
@@ -348,12 +461,36 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
               <p className="text-xs text-gray-700 group-hover:text-[#1A5276] truncate font-medium transition-colors max-w-[280px]" title={doc.filename}>
                 {doc.filename}
               </p>
-              <span className={`mt-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${TYPE_COLORS[doc.doc_type] ?? 'bg-gray-100 text-gray-500'}`}>
-                {DOC_TYPE_LABELS[doc.doc_type] ?? doc.doc_type}
-              </span>
+              <div className="flex items-center gap-1 mt-1 flex-wrap">
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${TYPE_COLORS[doc.doc_type] ?? 'bg-gray-100 text-gray-500'}`}>
+                  {DOC_TYPE_LABELS[doc.doc_type] ?? doc.doc_type}
+                </span>
+                {doc.verificacion === 'NO_PERTENECE' && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 border border-red-300">
+                    NO PERTENECE
+                  </span>
+                )}
+                {doc.verificacion === 'SOSPECHOSO' && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+                    Sospechoso
+                  </span>
+                )}
+                {doc.verificacion === 'OK' && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs text-green-600">
+                    ✓
+                  </span>
+                )}
+              </div>
             </div>
             <div className="flex flex-col items-end gap-1 flex-shrink-0 mt-1">
-              {canPreview(doc.filename) ? (
+              {doc.verificacion === 'NO_PERTENECE' ? (
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleResolve(doc.id) }}
+                  className="px-2 py-0.5 text-xs bg-red-50 text-red-600 border border-red-200 rounded hover:bg-red-100 transition-colors"
+                >
+                  Resolver
+                </button>
+              ) : canPreview(doc.filename) ? (
                 <span className="text-xs text-gray-400">Vista previa</span>
               ) : (
                 <ExternalLink size={14} className="text-gray-300 group-hover:text-[#1A5276] transition-colors" />
@@ -417,7 +554,7 @@ function ResizablePanels({
     }
   }, [isDragging])
 
-  const docs = (caseData.documents ?? []) as Array<{ id: number; filename: string; doc_type: string }>
+  const docs = (caseData.documents ?? []) as Array<{ id: number; filename: string; doc_type: string; verificacion?: string; verificacion_detalle?: string }>
 
   return (
     <div ref={containerRef} className="flex-1 overflow-hidden flex min-h-0" style={{ cursor: isDragging ? 'col-resize' : undefined }}>

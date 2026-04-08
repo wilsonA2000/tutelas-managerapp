@@ -776,63 +776,124 @@ export default function Extraction() {
       )}
 
       {/* Suspicious Documents */}
-      {(suspiciousQ.data ?? []).length > 0 && (
-        <div className="bg-white rounded-xl border border-orange-200 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-orange-100 bg-orange-50">
-            <div className="flex items-center gap-2">
-              <FileWarning size={15} className="text-orange-500" />
-              <h2 className="text-sm font-semibold text-orange-700">
-                Documentos Sospechosos
-                <span className="ml-2 bg-orange-100 text-orange-700 text-xs px-2 py-0.5 rounded-full font-medium">
-                  {(suspiciousQ.data ?? []).length}
-                </span>
-              </h2>
-            </div>
-            <button
-              onClick={() => verifyAllMut.mutate()}
-              disabled={verifyAllMut.isPending}
-              className="flex items-center gap-1.5 text-xs text-orange-600 hover:text-orange-800 font-medium disabled:opacity-50"
-            >
-              <SearchIcon size={12} />
-              {verifyAllMut.isPending ? 'Verificando...' : 'Re-verificar todos'}
-            </button>
-          </div>
-          <div className="overflow-x-auto max-h-72 overflow-y-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-orange-100 bg-orange-50/50 sticky top-0">
-                  <th className="text-left px-4 py-2 text-xs font-semibold text-orange-600 uppercase">Carpeta</th>
-                  <th className="text-left px-4 py-2 text-xs font-semibold text-orange-600 uppercase">Documento</th>
-                  <th className="text-left px-4 py-2 text-xs font-semibold text-orange-600 uppercase">Detalle</th>
-                  <th className="px-4 py-2" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-orange-100">
-                {(suspiciousQ.data ?? []).map((d: { doc_id: number; case_id: number; case_name: string; filename: string; verificacion: string; detalle: string }) => (
-                  <tr key={d.doc_id} className="hover:bg-orange-50/30">
-                    <td className="px-4 py-2.5">
-                      <span className="font-mono text-xs text-gray-700">{d.case_name?.substring(0, 35)}</span>
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-gray-600">{d.filename?.substring(0, 35)}</td>
-                    <td className="px-4 py-2.5">
-                      <span className="text-xs text-orange-600">{d.detalle?.substring(0, 50)}</span>
-                    </td>
-                    <td className="px-4 py-2.5 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button onClick={() => markOkMut.mutate(d.doc_id)} disabled={markOkMut.isPending}
-                          className="text-xs text-green-600 hover:text-green-800 font-medium disabled:opacity-50">OK</button>
-                        <button onClick={() => navigate(`/cases/${d.case_id}`)} className="p-1 text-gray-400 hover:text-orange-600">
-                          <ChevronRight size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      {(suspiciousQ.data ?? []).length > 0 && (() => {
+        const allDocs = suspiciousQ.data ?? []
+        const noPertenece = allDocs.filter((d: any) => d.verificacion === 'NO_PERTENECE')
+        const sospechosos = allDocs.filter((d: any) => d.verificacion === 'SOSPECHOSO')
+        return (
+          <>
+            {/* NO_PERTENECE — Rojo */}
+            {noPertenece.length > 0 && (
+              <div className="bg-white rounded-xl border border-red-200 shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between px-5 py-3 border-b border-red-100 bg-red-50">
+                  <div className="flex items-center gap-2">
+                    <ShieldAlert size={15} className="text-red-500" />
+                    <h2 className="text-sm font-semibold text-red-700">
+                      Documentos que NO Pertenecen
+                      <span className="ml-2 bg-red-100 text-red-700 text-xs px-2 py-0.5 rounded-full font-medium">
+                        {noPertenece.length}
+                      </span>
+                    </h2>
+                  </div>
+                  <button
+                    onClick={() => verifyAllMut.mutate()}
+                    disabled={verifyAllMut.isPending}
+                    className="flex items-center gap-1.5 text-xs text-red-600 hover:text-red-800 font-medium disabled:opacity-50"
+                  >
+                    <SearchIcon size={12} />
+                    {verifyAllMut.isPending ? 'Verificando...' : 'Re-verificar'}
+                  </button>
+                </div>
+                <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-red-100 bg-red-50/50 sticky top-0">
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-red-600 uppercase">Carpeta</th>
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-red-600 uppercase">Documento</th>
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-red-600 uppercase">Detalle</th>
+                        <th className="px-4 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-red-100">
+                      {noPertenece.map((d: any) => (
+                        <tr key={d.doc_id} className="hover:bg-red-50/30">
+                          <td className="px-4 py-2.5">
+                            <span className="font-mono text-xs text-gray-700">{d.case_name?.substring(0, 35)}</span>
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-gray-600">{d.filename?.substring(0, 35)}</td>
+                          <td className="px-4 py-2.5">
+                            <span className="text-xs text-red-600">{d.detalle?.substring(0, 60)}</span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <button onClick={() => markOkMut.mutate(d.doc_id)} disabled={markOkMut.isPending}
+                                className="text-xs text-green-600 hover:text-green-800 font-medium disabled:opacity-50">OK</button>
+                              <button onClick={() => navigate(`/cases/${d.case_id}`)} className="px-2 py-0.5 text-xs bg-red-50 text-red-600 border border-red-200 rounded hover:bg-red-100">
+                                Resolver
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* SOSPECHOSOS — Naranja */}
+            {sospechosos.length > 0 && (
+              <div className="bg-white rounded-xl border border-orange-200 shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between px-5 py-3 border-b border-orange-100 bg-orange-50">
+                  <div className="flex items-center gap-2">
+                    <FileWarning size={15} className="text-orange-500" />
+                    <h2 className="text-sm font-semibold text-orange-700">
+                      Documentos Sospechosos
+                      <span className="ml-2 bg-orange-100 text-orange-700 text-xs px-2 py-0.5 rounded-full font-medium">
+                        {sospechosos.length}
+                      </span>
+                    </h2>
+                  </div>
+                </div>
+                <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-orange-100 bg-orange-50/50 sticky top-0">
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-orange-600 uppercase">Carpeta</th>
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-orange-600 uppercase">Documento</th>
+                        <th className="text-left px-4 py-2 text-xs font-semibold text-orange-600 uppercase">Detalle</th>
+                        <th className="px-4 py-2" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-orange-100">
+                      {sospechosos.map((d: any) => (
+                        <tr key={d.doc_id} className="hover:bg-orange-50/30">
+                          <td className="px-4 py-2.5">
+                            <span className="font-mono text-xs text-gray-700">{d.case_name?.substring(0, 35)}</span>
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-gray-600">{d.filename?.substring(0, 35)}</td>
+                          <td className="px-4 py-2.5">
+                            <span className="text-xs text-orange-600">{d.detalle?.substring(0, 50)}</span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <button onClick={() => markOkMut.mutate(d.doc_id)} disabled={markOkMut.isPending}
+                                className="text-xs text-green-600 hover:text-green-800 font-medium disabled:opacity-50">OK</button>
+                              <button onClick={() => navigate(`/cases/${d.case_id}`)} className="p-1 text-gray-400 hover:text-orange-600">
+                                <ChevronRight size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )
+      })()}
 
       {/* Review Queue */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -883,7 +944,19 @@ export default function Extraction() {
                 {reviewQueue.map((c) => (
                   <tr key={c.case_id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3">
-                      <span className="font-mono text-xs text-[#1A5276] font-medium">{c.folder_name}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-xs text-[#1A5276] font-medium">{c.folder_name}</span>
+                        {(c as any).docs_no_pertenece > 0 && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700" title={`${(c as any).docs_no_pertenece} doc(s) NO pertenecen`}>
+                            {(c as any).docs_no_pertenece}
+                          </span>
+                        )}
+                        {(c as any).docs_sospechosos > 0 && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700" title={`${(c as any).docs_sospechosos} doc(s) sospechosos`}>
+                            {(c as any).docs_sospechosos}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-gray-700 text-xs">{c.accionante || c.ACCIONANTE || '—'}</td>
                     <td className="px-4 py-3">

@@ -147,6 +147,31 @@ async def lifespan(app: FastAPI):
     # Monitor de Gmail desactivado — todo es manual
     add_monitor_log("Aplicacion iniciada - Gmail en modo manual")
 
+    # Scheduler de backup diario (6:00 AM)
+    import threading
+    from backend.services.backup_service import create_backup
+
+    def _daily_backup_scheduler():
+        """Thread daemon que ejecuta backup diario a las 6 AM."""
+        import time as _time
+        while True:
+            now = datetime.now()
+            # Calcular segundos hasta las 6:00 AM del dia siguiente
+            target = now.replace(hour=6, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target = target.replace(day=target.day + 1)
+            wait_seconds = (target - now).total_seconds()
+            _time.sleep(wait_seconds)
+            try:
+                result = create_backup(reason="scheduled")
+                add_monitor_log(f"Backup diario: {result.get('filename', result.get('error', '?'))}")
+            except Exception as e:
+                add_monitor_log(f"Error en backup diario: {e}", level="error")
+
+    backup_thread = threading.Thread(target=_daily_backup_scheduler, daemon=True, name="daily-backup")
+    backup_thread.start()
+    add_monitor_log("Scheduler de backup diario activado (6:00 AM)")
+
     yield
 
     # Cleanup
@@ -192,6 +217,8 @@ from backend.routers.intelligence import router as intelligence_router
 app.include_router(intelligence_router)
 from backend.routers.agent import router as agent_router
 app.include_router(agent_router)
+from backend.routers.db import router as db_router
+app.include_router(db_router)
 
 
 # ============================================================
@@ -221,8 +248,12 @@ gmail_check_result = {}
 def _run_gmail_check_background():
     """Ejecutar revision de Gmail en background (thread)."""
     global gmail_check_in_progress, gmail_check_result, last_gmail_check
+    from backend.services.backup_service import auto_backup
 
     try:
+        # Backup automatico antes de revision Gmail
+        auto_backup("pre_gmail")
+
         db = SessionLocal()
         add_monitor_log("Revision manual de Gmail iniciada...")
 
@@ -449,8 +480,12 @@ def _run_sync_background():
     from backend.config import BASE_DIR
     from backend.database.models import Document
     from backend.database.seed import classify_document, is_case_folder
+    from backend.services.backup_service import auto_backup
 
     try:
+        # Backup automatico antes de sync
+        auto_backup("pre_sync")
+
         db = SessionLocal()
         sync_result = {"step": "Escaneando carpetas...", "current": 0, "total": 7, "docs_added": 0, "cases_fixed": 0, "paths_fixed": 0, "new_cases": 0, "docs_verified": 0, "docs_moved": 0, "docs_suspicious": 0}
         VALID_EXT = {".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".md"}
@@ -711,8 +746,12 @@ def _run_extraction_background():
     """Ejecutar extraccion masiva en background thread."""
     global extraction_in_progress, extraction_progress
     import time as _time
+    from backend.services.backup_service import auto_backup
 
     try:
+        # Backup automatico antes de extraccion masiva
+        auto_backup("pre_extraction")
+
         db = SessionLocal()
         pending = db.query(Case).filter(
             Case.processing_status.in_(["PENDIENTE", "REVISION"]),

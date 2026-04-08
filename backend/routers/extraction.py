@@ -64,10 +64,15 @@ def _get_fields_data(case) -> dict:
 def _run_extraction_cases(case_ids: list[int]):
     """Ejecutar extraccion en background para una lista de case IDs."""
     import time
+    from backend.services.backup_service import auto_backup
+
     _main.extraction_in_progress = True
     _main.extraction_progress = {"current": 0, "total": len(case_ids), "case_name": "Iniciando...", "success": 0, "errors": 0}
 
     try:
+        # Backup automatico antes de extraccion batch
+        auto_backup("pre_extraction")
+
         db = SessionLocal()
         for i, cid in enumerate(case_ids):
             if not _main.extraction_in_progress:
@@ -501,3 +506,77 @@ def api_move_doc(doc_id: int, target_case_id: int, db: Session = Depends(get_db)
     doc.verificacion_detalle = f"Movido desde caso {old_case_id}"
     db.commit()
     return {"message": f"Documento movido a {target.folder_name}"}
+
+
+@router.get("/docs/{doc_id}/suggest-target")
+def api_suggest_target(doc_id: int, db: Session = Depends(get_db)):
+    """Sugerir caso destino para un documento NO_PERTENECE.
+
+    Busca por radicado 23d, radicado corto y accionante en el texto del documento.
+    """
+    import re
+    from backend.database.models import Document
+
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if not doc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404)
+
+    text = (doc.extracted_text or "")[:10000].upper()
+    detalle = doc.verificacion_detalle or ""
+    source_case = db.query(Case).filter(Case.id == doc.case_id).first()
+    suggestions = []
+
+    # 1. Buscar radicado 23d en el texto
+    rad23_matches = re.findall(r'(68[\d]{17,21})', re.sub(r'[\s\-\.]', '', text))
+    source_rad23 = re.sub(r'[\s\-\.]', '', (source_case.radicado_23_digitos or '') if source_case else '')
+
+    all_cases = db.query(Case).filter(Case.id != doc.case_id).all()
+
+    for rad23 in rad23_matches:
+        if len(rad23) >= 20 and rad23 != source_rad23:
+            for c in all_cases:
+                c_rad = re.sub(r'[\s\-\.]', '', c.radicado_23_digitos or '')
+                if c_rad and len(c_rad) >= 15 and c_rad[-12:] == rad23[-12:]:
+                    suggestions.append({
+                        "case_id": c.id,
+                        "folder_name": c.folder_name,
+                        "confidence": "ALTA",
+                        "reason": f"Radicado 23d coincide: {rad23}",
+                    })
+
+    # 2. Buscar por radicado corto en detalle de verificacion
+    m = re.search(r'Radicado\s+(20\d{2})[-\s]?0*(\d{2,5})', detalle)
+    if m and not suggestions:
+        target_seq = m.group(2).zfill(5)
+        pattern = f"{m.group(1)}-{target_seq}"
+        for c in all_cases:
+            if c.folder_name and pattern in c.folder_name:
+                suggestions.append({
+                    "case_id": c.id,
+                    "folder_name": c.folder_name,
+                    "confidence": "MEDIA",
+                    "reason": f"Radicado corto coincide: {pattern}",
+                })
+
+    # 3. Buscar por accionante mencionado en filename
+    if not suggestions:
+        fname_upper = doc.filename.upper()
+        for c in all_cases:
+            if c.accionante and len(c.accionante) > 5:
+                # Buscar primer apellido del accionante en el filename
+                first_word = c.accionante.split()[0].upper() if c.accionante else ""
+                if first_word and len(first_word) >= 4 and first_word in fname_upper:
+                    suggestions.append({
+                        "case_id": c.id,
+                        "folder_name": c.folder_name,
+                        "confidence": "BAJA",
+                        "reason": f"Nombre '{first_word}' aparece en filename",
+                    })
+
+    return {
+        "doc_id": doc_id,
+        "filename": doc.filename,
+        "current_case": source_case.folder_name if source_case else None,
+        "suggestions": suggestions[:5],
+    }

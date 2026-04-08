@@ -41,6 +41,10 @@ def get_review_queue(db: Session) -> list[dict]:
             if not getattr(case, attr):
                 empty_fields.append(csv_col)
 
+        # Contar docs con alertas de verificacion
+        docs_no_pertenece = sum(1 for d in case.documents if d.verificacion == "NO_PERTENECE")
+        docs_sospechosos = sum(1 for d in case.documents if d.verificacion == "SOSPECHOSO")
+
         queue.append({
             "case_id": case.id,
             "folder_name": case.folder_name,
@@ -48,6 +52,8 @@ def get_review_queue(db: Session) -> list[dict]:
             "low_confidence_fields": [e.field_name for e in low_confidence],
             "empty_fields": empty_fields,
             "document_count": len(case.documents),
+            "docs_no_pertenece": docs_no_pertenece,
+            "docs_sospechosos": docs_sospechosos,
         })
 
     return queue
