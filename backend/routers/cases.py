@@ -207,8 +207,52 @@ def api_sync_single_case(case_id: int, db: Session = Depends(get_db)):
             docs_removed += 1
 
     db.commit()
+
+    # Verificacion inteligente de pertenencia (0 llamadas IA, todo local)
+    from backend.extraction.pipeline import verify_document_belongs, extract_document_text
+
+    docs_moved = 0
+    docs_suspicious = 0
+    reassign_stats = {}
+
+    db.refresh(case)
+    for doc in list(case.documents):
+        if doc.verificacion in ("OK", "REASIGNADO"):
+            continue
+        if not doc.extracted_text and doc.file_path and Path(doc.file_path).exists():
+            try:
+                text, method = extract_document_text(doc)
+                if text and len(text.strip()) >= 50:
+                    doc.extracted_text = text
+                    doc.extraction_method = method
+            except Exception:
+                pass
+        if not doc.extracted_text or len(doc.extracted_text or "") < 100:
+            continue
+
+        status, detalle = verify_document_belongs(case, doc)
+        doc.verificacion = status
+        doc.verificacion_detalle = detalle
+
+        if status == "NO_PERTENECE":
+            docs_moved += 1
+            from backend.database.models import AuditLog
+            db.add(AuditLog(
+                case_id=case.id,
+                field_name="DOC_NO_PERTENECE",
+                old_value=doc.filename,
+                new_value=detalle[:200],
+                action="SYNC_VERIFY",
+                source="sync_individual",
+            ))
+        elif status == "SOSPECHOSO":
+            docs_suspicious += 1
+
+    db.commit()
     return {
-        "message": f"+{docs_added} docs, -{docs_removed} eliminados",
+        "message": f"+{docs_added} docs, -{docs_removed} eliminados, {docs_moved} reasignados, {docs_suspicious} sospechosos",
         "docs_added": docs_added,
         "docs_removed": docs_removed,
+        "docs_moved": docs_moved,
+        "docs_suspicious": docs_suspicious,
     }

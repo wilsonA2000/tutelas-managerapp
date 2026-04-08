@@ -16,9 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend.database.database import init_db, get_db, SessionLocal
 from backend.database.seed import run_seed
 from backend.routers import cases, documents, extraction, dashboard, reports, emails, seguimiento
-from backend.email.gmail_monitor import check_inbox
+from backend.email.gmail_monitor import check_inbox, get_gmail_total, sync_inbox
 from backend.extraction.pipeline import process_folder
-from backend.database.models import Case
+from backend.database.models import Case, Email
 
 # Logging estructurado
 from backend.core.logging import setup_logging, get_logger
@@ -314,6 +314,63 @@ def _run_gmail_check_background():
             pass
 
 
+@app.get("/api/emails/gmail-stats")
+def api_gmail_stats():
+    """Total real de correos en Gmail vs importados en DB."""
+    db = SessionLocal()
+    try:
+        gmail = get_gmail_total()
+        db_total = db.query(Email).count()
+        db_asignados = db.query(Email).filter(Email.status == "ASIGNADO").count()
+        db_pendientes = db.query(Email).filter(Email.status == "PENDIENTE").count()
+        return {
+            "gmail_total": gmail.get("total", 0),
+            "gmail_unread": gmail.get("unread", 0),
+            "db_total": db_total,
+            "db_asignados": db_asignados,
+            "db_pendientes": db_pendientes,
+            "faltan": max(0, gmail.get("total", 0) - db_total),
+            "error": gmail.get("error"),
+        }
+    finally:
+        db.close()
+
+
+@app.post("/api/emails/sync")
+def api_sync_emails():
+    """Sincronizar correos faltantes (leidos + no leidos) desde Gmail."""
+    global gmail_check_in_progress, gmail_check_result
+    import threading
+
+    if gmail_check_in_progress:
+        return {"status": "running", "message": "Ya hay una sincronizacion en progreso."}
+
+    def _run_sync():
+        global gmail_check_in_progress, gmail_check_result
+        try:
+            db = SessionLocal()
+            gmail_check_result = {"step": "Sincronizando correos (solo registro, sin crear carpetas)...", "emails_found": 0}
+            results = sync_inbox(db)
+            imported = results[0].get("imported", 0) if results else 0
+            gmail_check_result["emails_found"] = imported
+            gmail_check_result["step"] = f"Sync completado: {imported} correos importados"
+            add_monitor_log(f"Sync completo: {imported} emails importados")
+        except Exception as e:
+            gmail_check_result["step"] = f"Error: {e}"
+            gmail_check_result["error"] = str(e)
+        finally:
+            gmail_check_in_progress = False
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    gmail_check_in_progress = True
+    gmail_check_result = {"step": "Iniciando sync...", "emails_found": 0}
+    threading.Thread(target=_run_sync, daemon=True).start()
+    return {"status": "started", "message": "Sincronizacion iniciada (todos los correos)"}
+
+
 @app.post("/api/emails/check")
 def api_check_emails_manual():
     """Lanzar revision de Gmail en background. Solo permite UNA revision a la vez."""
@@ -395,11 +452,11 @@ def _run_sync_background():
 
     try:
         db = SessionLocal()
-        sync_result = {"step": "Escaneando carpetas...", "current": 0, "total": 3, "docs_added": 0, "cases_fixed": 0, "paths_fixed": 0, "new_cases": 0}
+        sync_result = {"step": "Escaneando carpetas...", "current": 0, "total": 7, "docs_added": 0, "cases_fixed": 0, "paths_fixed": 0, "new_cases": 0, "docs_verified": 0, "docs_moved": 0, "docs_suspicious": 0}
         VALID_EXT = {".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".md"}
 
-        # Fase 1/3: Registrar documentos faltantes
-        sync_result["step"] = "Paso 1/3: Escaneando documentos..."
+        # Fase 1/7: Registrar documentos faltantes
+        sync_result["step"] = "Paso 1/7: Escaneando documentos..."
         cases = db.query(Case).filter(Case.folder_path.isnot(None)).all()
         for i, case in enumerate(cases):
             if not case.folder_path or not Path(case.folder_path).exists():
@@ -416,8 +473,62 @@ def _run_sync_background():
                 sync_result["cases_fixed"] += 1
         sync_result["current"] = 1
 
-        # Fase 2/3: Corregir paths rotos
-        sync_result["step"] = "Paso 2/3: Corrigiendo paths..."
+        # Fase 2/7: Verificacion inteligente y reasignacion de documentos
+        sync_result["step"] = "Paso 2/7: Verificando pertenencia de documentos..."
+        from backend.extraction.pipeline import verify_document_belongs, extract_document_text
+        reassign_stats = {}
+
+        all_cases = db.query(Case).filter(Case.folder_path.isnot(None)).all()
+        for case in all_cases:
+            if not case.folder_path or not Path(case.folder_path).exists():
+                continue
+            if not case.documents:
+                continue
+
+            sync_result["case_name"] = case.folder_name or ""
+
+            for doc in list(case.documents):
+                if doc.verificacion in ("OK", "REASIGNADO"):
+                    continue
+                if not doc.extracted_text and doc.file_path and Path(doc.file_path).exists():
+                    try:
+                        text, method = extract_document_text(doc)
+                        if text and len(text.strip()) >= 50:
+                            doc.extracted_text = text
+                            doc.extraction_method = method
+                    except Exception:
+                        pass
+                if not doc.extracted_text or len(doc.extracted_text or "") < 100:
+                    continue
+
+                status, detalle = verify_document_belongs(case, doc)
+                doc.verificacion = status
+                doc.verificacion_detalle = detalle
+                sync_result["docs_verified"] += 1
+
+                if status == "NO_PERTENECE":
+                    sync_result["docs_moved"] += 1
+                    from backend.database.models import AuditLog
+                    db.add(AuditLog(
+                        case_id=case.id,
+                        field_name="DOC_NO_PERTENECE",
+                        old_value=doc.filename,
+                        new_value=detalle[:200],
+                        action="SYNC_VERIFY",
+                        source="sync_fase2",
+                    ))
+                elif status == "SOSPECHOSO":
+                    sync_result["docs_suspicious"] += 1
+
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+
+        sync_result["current"] = 2
+
+        # Fase 3/7: Corregir paths rotos
+        sync_result["step"] = "Paso 3/7: Corrigiendo paths..."
         all_docs = db.query(Document).all()
         for doc in all_docs:
             if doc.file_path and not Path(doc.file_path).exists():
@@ -427,10 +538,10 @@ def _run_sync_background():
                     if new_path.exists():
                         doc.file_path = str(new_path)
                         sync_result["paths_fixed"] += 1
-        sync_result["current"] = 2
+        sync_result["current"] = 3
 
         # Fase 3/3: Buscar carpetas nuevas
-        sync_result["step"] = "Paso 3/3: Buscando carpetas nuevas..."
+        sync_result["step"] = "Paso 4/7: Buscando carpetas nuevas..."
         for entry in sorted(BASE_DIR.iterdir()):
             if not entry.is_dir() or not is_case_folder(entry.name):
                 continue
@@ -444,21 +555,20 @@ def _run_sync_background():
                                         doc_type=classify_document(f.name), file_size=f.stat().st_size))
                         sync_result["docs_added"] += 1
                 sync_result["new_cases"] += 1
-        sync_result["current"] = 3
+        sync_result["current"] = 4
 
         # Fase 4/6: Eliminar documentos fantasma (archivo no existe en disco)
-        sync_result["step"] = "Paso 4/6: Limpiando documentos fantasma..."
-        sync_result["total"] = 6
+        sync_result["step"] = "Paso 5/7: Limpiando documentos fantasma..."
         docs_removed = 0
         all_docs = db.query(Document).all()
         for doc in all_docs:
             if doc.file_path and not Path(doc.file_path).exists():
                 db.delete(doc)
                 docs_removed += 1
-        sync_result["current"] = 4
+        sync_result["current"] = 5
 
-        # Fase 5/6: Eliminar casos huerfanos (carpeta eliminada del disco)
-        sync_result["step"] = "Paso 5/6: Limpiando casos sin carpeta..."
+        # Fase 6/7: Eliminar casos huerfanos (carpeta eliminada del disco)
+        sync_result["step"] = "Paso 6/7: Limpiando casos sin carpeta..."
         cases_removed = 0
         from backend.database.models import Email, Extraction, AuditLog as AL, TokenUsage, ComplianceTracking
         all_cases = db.query(Case).filter(Case.folder_path.isnot(None)).all()
@@ -474,10 +584,10 @@ def _run_sync_background():
                 db.delete(case)
                 cases_removed += 1
         sync_result["cases_removed"] = cases_removed
-        sync_result["current"] = 5
+        sync_result["current"] = 6
 
-        # Fase 6/6: Renombrar carpetas [PENDIENTE REVISION] si ya tienen accionante
-        sync_result["step"] = "Paso 6/6: Renombrando carpetas pendientes..."
+        # Fase 7/7: Renombrar carpetas [PENDIENTE REVISION] si ya tienen accionante
+        sync_result["step"] = "Paso 7/7: Renombrando carpetas pendientes..."
         import re
         folders_renamed = 0
         cases_pendiente = db.query(Case).filter(Case.folder_name.contains("[PENDIENTE")).all()
@@ -510,7 +620,7 @@ def _run_sync_background():
                 folders_renamed += 1
             except Exception:
                 pass
-        sync_result["current"] = 6
+        sync_result["current"] = 7
 
         db.commit()
         parts = []
@@ -519,6 +629,8 @@ def _run_sync_background():
         if cases_removed > 0: parts.append(f"-{cases_removed} casos eliminados")
         if docs_removed > 0: parts.append(f"-{docs_removed} docs fantasma")
         if folders_renamed > 0: parts.append(f"{folders_renamed} renombradas")
+        if sync_result.get('docs_moved', 0) > 0: parts.append(f"{sync_result['docs_moved']} reasignados")
+        if sync_result.get('docs_suspicious', 0) > 0: parts.append(f"{sync_result['docs_suspicious']} sospechosos")
         sync_result["step"] = f"Listo: {', '.join(parts)}" if parts else "Listo: sin cambios"
         add_monitor_log(sync_result["step"])
     except Exception as e:

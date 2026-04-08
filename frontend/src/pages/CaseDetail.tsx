@@ -513,7 +513,7 @@ export default function CaseDetail() {
     mutationFn: () => syncSingleCase(caseId),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['case', caseId] })
-      if (data.docs_added > 0 || data.docs_removed > 0) {
+      if (data.docs_added > 0 || data.docs_removed > 0 || data.docs_moved > 0 || data.docs_suspicious > 0) {
         toast.success(data.message)
       } else {
         toast('Carpeta sincronizada, sin cambios', { icon: '\u2705' })

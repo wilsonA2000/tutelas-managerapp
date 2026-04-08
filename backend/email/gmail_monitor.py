@@ -535,25 +535,150 @@ def update_case_fields(db: Session, case: Case, tipo: str, data: dict) -> list[s
 # 15. FUNCIÓN PRINCIPAL
 # ═══════════════════════════════════════════════════════════
 
+def get_gmail_total() -> dict:
+    """Consultar total de correos en Gmail (etiqueta INBOX, sin spam/papelera).
+    Returns: {'total': int, 'unread': int}"""
+    try:
+        service = _get_gmail_service()
+
+        # Total en label "INBOX" (excluye spam, papelera, borradores)
+        label_info = service.users().labels().get(userId="me", id="INBOX").execute()
+        total = label_info.get("messagesTotal", 0)
+        unread = label_info.get("messagesUnread", 0)
+
+        return {"total": total, "unread": unread}
+    except Exception as e:
+        logger.error(f"Error consultando total Gmail: {e}")
+        return {"total": 0, "unread": 0, "error": str(e)}
+
+
+def sync_inbox(db: Session) -> list[dict]:
+    """Sincronizar TODOS los correos de Gmail a DB (solo registro, NO crea carpetas ni casos).
+    Importa correos faltantes como registros en la tabla Email sin efectos secundarios.
+    Returns: lista de dicts con resultado por cada email importado."""
+    results = []
+
+    try:
+        service = _get_gmail_service()
+        existing_ids = {e.message_id for e in db.query(Email.message_id).all()}
+
+        # Fallback: indexar por subject+sender para detectar duplicados con message_id diferente
+        existing_subjects = set()
+        for e in db.query(Email.subject, Email.sender).all():
+            if e.subject and e.sender:
+                existing_subjects.add((e.subject.strip()[:100], e.sender.strip()[:50]))
+
+        # Paginar TODOS los mensajes del inbox
+        messages = []
+        page_token = None
+        while True:
+            kwargs = {"userId": "me", "labelIds": ["INBOX"], "maxResults": 100}
+            if page_token:
+                kwargs["pageToken"] = page_token
+            response = service.users().messages().list(**kwargs).execute()
+            messages.extend(response.get("messages", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+        if not messages:
+            return results
+
+        imported = 0
+        skipped = 0
+
+        for msg_ref in messages:
+            try:
+                msg = service.users().messages().get(userId="me", id=msg_ref["id"], format="metadata",
+                    metadataHeaders=["Subject", "From", "Date", "Message-ID", "Message-Id"]).execute()
+                headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+                message_id = headers.get("Message-ID", headers.get("Message-Id", msg_ref["id"]))
+
+                if message_id in existing_ids:
+                    skipped += 1
+                    continue
+
+                subject = _normalize_typos(headers.get("Subject", ""))
+                sender = headers.get("From", "")
+                date_str = headers.get("Date", "")
+
+                if _should_ignore(subject, sender):
+                    skipped += 1
+                    continue
+
+                # Doble check: evitar duplicados por subject+sender (message_id truncados del backup)
+                subj_key = (subject.strip()[:100], sender.strip()[:50])
+                if subj_key in existing_subjects:
+                    skipped += 1
+                    existing_ids.add(message_id)
+                    continue
+
+                date_received = None
+                try:
+                    from email.utils import parsedate_to_datetime
+                    from datetime import timezone
+                    dt = parsedate_to_datetime(date_str)
+                    date_received = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                except Exception:
+                    date_received = datetime.utcnow()
+
+                # Solo clasificar y buscar caso — NO crear carpetas ni casos nuevos
+                tipo = classify_email_type(subject, sender)
+                radicado_data = extract_radicado(f"{subject}")
+
+                # Match a caso existente (sin crear nuevo)
+                case = match_to_case(db, radicado_data, "")
+
+                email_record = Email(
+                    message_id=message_id, subject=subject, sender=sender,
+                    date_received=date_received, body_preview="",
+                    case_id=case.id if case else None,
+                    attachments=[], status="ASIGNADO" if case else "PENDIENTE",
+                    processed_at=datetime.utcnow(),
+                )
+                db.add(email_record)
+                existing_ids.add(message_id)
+                existing_subjects.add(subj_key)
+                imported += 1
+
+                if imported % 50 == 0:
+                    db.commit()
+                    logger.info(f"Sync: {imported} importados, {skipped} omitidos...")
+
+            except Exception as e:
+                logger.error(f"Error sync email: {e}")
+                continue
+
+        db.commit()
+        results.append({"imported": imported, "skipped": skipped, "total_gmail": len(messages)})
+        logger.info(f"Sync completado: {imported} importados, {skipped} omitidos de {len(messages)} en Gmail")
+
+    except Exception as e:
+        logger.error(f"Error sync Gmail: {e}")
+        results.append({"error": str(e)})
+
+    return results
+
+
 def check_inbox(db: Session) -> list[dict]:
-    """Revisar bandeja de Gmail, clasificar y procesar cada email no leído.
+    """Revisar bandeja de Gmail: solo emails NO LEIDOS, procesa completo (descarga adjuntos, crea casos).
     Returns: lista de dicts con resultado por cada email procesado."""
     results = []
 
     try:
         service = _get_gmail_service()
 
-        # Buscar TODOS los emails no leídos (paginando)
+        # Solo emails no leidos
         messages = []
         page_token = None
         while True:
-            kwargs = {"userId": "me", "q": "is:unread", "maxResults": 50}
+            kwargs = {"userId": "me", "q": "is:unread", "maxResults": 100}
             if page_token:
                 kwargs["pageToken"] = page_token
             response = service.users().messages().list(**kwargs).execute()
             messages.extend(response.get("messages", []))
             page_token = response.get("nextPageToken")
-            if not page_token or len(messages) >= 200:
+            if not page_token or len(messages) >= 500:
                 break
 
         if not messages:
@@ -592,11 +717,13 @@ def check_inbox(db: Session) -> list[dict]:
                     results.append({"subject": subject, "accion": "IGNORADO", "error": None})
                     continue
 
-                # Parsear fecha
+                # Parsear fecha y normalizar a UTC
                 date_received = None
                 try:
                     from email.utils import parsedate_to_datetime
-                    date_received = parsedate_to_datetime(date_str)
+                    from datetime import timezone
+                    dt = parsedate_to_datetime(date_str)
+                    date_received = dt.astimezone(timezone.utc).replace(tzinfo=None)
                 except Exception:
                     date_received = datetime.utcnow()
 

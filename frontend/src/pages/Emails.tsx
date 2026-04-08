@@ -7,7 +7,7 @@ import {
   Paperclip, ChevronLeft, X, User,
   Calendar, ArrowRight,
 } from 'lucide-react'
-import { getEmails, getEmail, checkInbox } from '../services/api'
+import { getEmails, getEmail, checkInbox, getGmailStats, syncAllEmails } from '../services/api'
 import { useNavigate } from 'react-router-dom'
 
 interface EmailItem {
@@ -74,19 +74,41 @@ export default function Emails() {
     enabled: !!selectedId,
   })
 
+  const gmailStatsQ = useQuery({
+    queryKey: ['gmail-stats'],
+    queryFn: getGmailStats,
+    refetchInterval: 60000,
+    staleTime: 30000,
+  })
+
   const checkMutation = useMutation({
     mutationFn: checkInbox,
     onSuccess: (data) => {
       if (data.status === 'started') {
         toast.success('Revision de Gmail iniciada...')
-        setTimeout(() => qc.invalidateQueries({ queryKey: ['emails'] }), 5000)
-        setTimeout(() => qc.invalidateQueries({ queryKey: ['emails'] }), 15000)
-        setTimeout(() => qc.invalidateQueries({ queryKey: ['emails'] }), 30000)
+        setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 5000)
+        setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 15000)
+        setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 30000)
       } else if (data.status === 'running') {
         toast('Ya hay una revision en progreso', { icon: '\u2139\uFE0F' })
       }
     },
     onError: () => toast.error('Error al iniciar revision'),
+  })
+
+  const syncMutation = useMutation({
+    mutationFn: syncAllEmails,
+    onSuccess: (data) => {
+      if (data.status === 'started') {
+        toast.success('Sincronizacion completa iniciada...')
+        setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 10000)
+        setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 30000)
+        setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 60000)
+      } else if (data.status === 'running') {
+        toast('Ya hay una sincronizacion en progreso', { icon: '\u2139\uFE0F' })
+      }
+    },
+    onError: () => toast.error('Error al iniciar sincronizacion'),
   })
 
   const emails: EmailItem[] = emailsQ.data?.items ?? []
@@ -125,16 +147,50 @@ export default function Emails() {
       <div className="flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white flex-shrink-0">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-bold text-gray-800">Correos</h1>
-          <span className="text-xs text-gray-400">{total} correos</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-[#1A5276] bg-blue-50 px-2 py-0.5 rounded-full">
+              {total} en sistema
+            </span>
+            {gmailStatsQ.data && (
+              <>
+                <span className="text-xs text-gray-400">|</span>
+                <span className="text-xs font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">
+                  {gmailStatsQ.data.gmail_total} en Gmail
+                </span>
+                {gmailStatsQ.data.gmail_unread > 0 && (
+                  <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+                    {gmailStatsQ.data.gmail_unread} no leidos
+                  </span>
+                )}
+                {gmailStatsQ.data.faltan > 0 && (
+                  <span className="text-[10px] text-red-500">
+                    ({gmailStatsQ.data.faltan} pendientes en Gmail)
+                  </span>
+                )}
+              </>
+            )}
+          </div>
         </div>
-        <button
-          onClick={() => checkMutation.mutate()}
-          disabled={checkMutation.isPending}
-          className="flex items-center gap-2 px-3 py-2 bg-[#1A5276] text-white text-sm font-medium rounded-lg hover:bg-[#154360] disabled:opacity-50 transition-colors shadow-sm"
-        >
-          {checkMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Inbox size={14} />}
-          {checkMutation.isPending ? 'Revisando...' : 'Revisar Bandeja'}
-        </button>
+        <div className="flex items-center gap-2">
+          {gmailStatsQ.data?.faltan > 0 && (
+            <button
+              onClick={() => syncMutation.mutate()}
+              disabled={syncMutation.isPending}
+              className="flex items-center gap-2 px-3 py-2 bg-amber-500 text-white text-sm font-medium rounded-lg hover:bg-amber-600 disabled:opacity-50 transition-colors shadow-sm"
+            >
+              {syncMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              {syncMutation.isPending ? 'Sincronizando...' : `Sync ${gmailStatsQ.data.faltan} faltantes`}
+            </button>
+          )}
+          <button
+            onClick={() => checkMutation.mutate()}
+            disabled={checkMutation.isPending}
+            className="flex items-center gap-2 px-3 py-2 bg-[#1A5276] text-white text-sm font-medium rounded-lg hover:bg-[#154360] disabled:opacity-50 transition-colors shadow-sm"
+          >
+            {checkMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Inbox size={14} />}
+            {checkMutation.isPending ? 'Revisando...' : 'Revisar Bandeja'}
+          </button>
+        </div>
       </div>
 
       {/* Search bar */}

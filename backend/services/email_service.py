@@ -32,7 +32,9 @@ def list_emails(db: Session, search: str = "", status: str = "", page: int = 1, 
 
     items = []
     for r in rows:
-        # Convertir fecha UTC a Colombia (UTC-5)
+        # Convertir fecha a hora Colombia (UTC-5)
+        # Las fechas en DB pueden venir con diferentes offsets originales,
+        # pero SQLite las guarda naive. Asumimos UTC y convertimos.
         fecha = None
         if r.date_received:
             from datetime import timezone, timedelta
