@@ -105,15 +105,22 @@ def validate_extraction(case, fields: dict) -> tuple[dict, list[str]]:
         except Exception:
             pass
 
-    # 6. IDIOMA: detectar respuestas en ingles
-    obs = fields.get("observaciones", "") or fields.get("OBSERVACIONES", "")
-    if obs:
-        english_markers = ["this case", "the plaintiff", "the court", "was filed", "regarding", "the defendant"]
-        obs_lower = obs.lower()
-        english_count = sum(1 for m in english_markers if m in obs_lower)
-        if english_count >= 2:
-            corrected["observaciones"] = ""
-            warnings.append(f"OBSERVACIONES en ingles detectado ({english_count} marcadores) — eliminado")
+    # 6. IDIOMA: detectar respuestas en ingles en TODOS los campos de texto libre
+    english_markers = [
+        "this case", "the plaintiff", "the court", "was filed", "regarding",
+        "the defendant", "regarding the", "therefore", "was granted", "hereby",
+        "the ruling", "constitutional court", "filed a", "requests that",
+    ]
+    _text_fields = ["observaciones", "asunto", "pretensiones", "decision_incidente",
+                     "decision_incidente_2", "decision_incidente_3"]
+    for _tf in _text_fields:
+        _tv = fields.get(_tf, "") or fields.get(_tf.upper(), "")
+        if _tv and len(_tv) > 20:
+            _tv_lower = _tv.lower()
+            _eng_count = sum(1 for m in english_markers if m in _tv_lower)
+            if _eng_count >= 1:
+                corrected[_tf] = ""
+                warnings.append(f"{_tf.upper()} en ingles detectado ({_eng_count} marcadores) — eliminado")
 
     # 7. RADICADO 23D formato con guiones
     rad23 = fields.get("radicado_23_digitos", "") or fields.get("RADICADO_23_DIGITOS", "")

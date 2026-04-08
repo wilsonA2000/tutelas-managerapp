@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     HF_TOKEN: str = ""
     CEREBRAS_API_KEY: str = ""
 
+    # Document Normalizer
+    NORMALIZER_ENABLED: bool = True
+    NORMALIZER_USE_MARKER: bool = False  # Requiere ~2GB de modelos ML
+    NORMALIZER_USE_PADDLEOCR: bool = True  # Reemplaza Tesseract para español
+
     # CSV
     CSV_DELIMITER: str = ";"
     CSV_COLUMNS: list[str] = [

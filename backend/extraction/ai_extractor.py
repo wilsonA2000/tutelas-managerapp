@@ -582,8 +582,8 @@ def _extract_multimodal_google(
         text = doc.get("text", "").strip()
         if not text:
             continue
-        if len(text) > 10000:
-            text = text[:8000] + "\n[...]\n" + text[-2000:]
+        if len(text) > 25000:
+            text = text[:20000] + "\n[...CONTENIDO TRUNCADO...]\n" + text[-5000:]
         doc_type = doc.get("doc_type", "OTRO")
         text_parts.append(f"\n===ARCHIVO: {doc['filename']} [TIPO: {doc_type}]===\n{text}")
 
@@ -733,21 +733,23 @@ def extract_with_ai(
         folder_name: Nombre de la carpeta del caso
         pdf_file_paths: Lista de {"filename": str, "file_path": str} para multimodal (solo Google)
     """
-    # Seleccion inteligente de proveedor: Smart Router con override manual
+    # Seleccion inteligente de proveedor: SIEMPRE consultar Smart Router
     provider = _active_provider
     model = _active_model
-    _user_override = provider != "google" or model != "gemini-2.5-flash"  # Usuario cambio proveedor manualmente
+    _fallback_provider = None
+    _fallback_model = None
 
-    if not _user_override:
-        try:
-            from backend.agent.smart_router import route
-            task = "pdf_multimodal" if pdf_file_paths else "extraction"
-            decision = route(task)
-            if decision and decision.provider:
-                provider = decision.provider
-                model = decision.model
-        except Exception:
-            pass  # Si Smart Router falla, usar proveedor por defecto
+    try:
+        from backend.agent.smart_router import route
+        task = "pdf_multimodal" if pdf_file_paths else "extraction"
+        decision = route(task)
+        if decision and decision.provider:
+            provider = decision.provider
+            model = decision.model
+            _fallback_provider = getattr(decision, "fallback_provider", None)
+            _fallback_model = getattr(decision, "fallback_model", None)
+    except Exception:
+        pass  # Si Smart Router falla, usar proveedor por defecto
 
     model_config = get_model_config() if (provider == _active_provider and model == _active_model) else PROVIDERS.get(provider, {}).get("models", {}).get(model, {})
 
@@ -797,8 +799,8 @@ def extract_with_ai(
         text = doc.get("text", "").strip()
         if not text:
             continue
-        if not _is_critical_pdf(doc.get("filename", "")) and len(text) > 10000:
-            text = text[:8000] + "\n[...]\n" + text[-2000:]
+        if not _is_critical_pdf(doc.get("filename", "")) and len(text) > 25000:
+            text = text[:20000] + "\n[...CONTENIDO TRUNCADO...]\n" + text[-5000:]
         doc_type = doc.get("doc_type", "OTRO")
         doc_texts.append(f"\n===ARCHIVO: {doc['filename']} [TIPO: {doc_type}]===\n{text}")
 
@@ -811,10 +813,15 @@ def extract_with_ai(
         start_time = time.time()
         user_message = f"""CARPETA DEL CASO: {folder_name}
 
+RESTRICCION ANTI-CONTAMINACION: Este caso es EXCLUSIVAMENTE de la carpeta "{folder_name}".
+Solo extrae datos de documentos que pertenezcan a este caso.
+Si un documento menciona un radicado diferente al de esta carpeta, IGNORA ese documento.
+El radicado extraido DEBE contener el numero de caso de la carpeta.
+
 DOCUMENTOS DEL EXPEDIENTE:
 {all_text}
 
-Analiza TODOS los documentos y extrae los 28 campos. Responde SOLO con el JSON."""
+Analiza TODOS los documentos y extrae los 28 campos. Responde SOLO con el JSON. RESPONDE EN ESPAÑOL."""
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -843,26 +850,31 @@ Analiza TODOS los documentos y extrae los 28 campos. Responde SOLO con el JSON."
             provider=provider, model=model,
         )
     except Exception as e:
-        # Fallback: intentar con Smart Router si el proveedor principal fallo
+        # Fallback: usar proveedor alternativo (primero el del Smart Router, luego re-rutar)
         try:
-            from backend.agent.smart_router import route
-            fallback = route("extraction")
-            if fallback.provider != provider:
+            fb_prov = _fallback_provider
+            fb_mod = _fallback_model
+            if not fb_prov:
+                from backend.agent.smart_router import route
+                _fb_decision = route("extraction")
+                fb_prov = _fb_decision.provider
+                fb_mod = _fb_decision.model
+            if fb_prov and fb_prov != provider:
                 import logging
                 logging.getLogger("tutelas.extraction").warning(
-                    f"Proveedor {provider}/{model} fallo ({e}). Fallback a {fallback.provider}/{fallback.model}"
+                    f"Proveedor {provider}/{model} fallo ({e}). Fallback a {fb_prov}/{fb_mod}"
                 )
-                fb_caller = _CALLERS.get(fallback.provider)
+                fb_caller = _CALLERS.get(fb_prov)
                 if fb_caller:
                     start_fb = time.time()
-                    raw_fb, inp_fb, out_fb = _call_with_retry(fallback.provider, messages, fallback.model, model_config.get("max_tokens", 4096))
+                    raw_fb, inp_fb, out_fb = _call_with_retry(fb_prov, messages, fb_mod, model_config.get("max_tokens", 4096))
                     dur_fb = int((time.time() - start_fb) * 1000)
                     fb_fields = _parse_ai_json(raw_fb)
                     return AIExtractionResult(
                         fields=fb_fields, raw_response=raw_fb,
                         tokens_input=inp_fb, tokens_output=out_fb,
                         tokens_used=inp_fb + out_fb,
-                        provider=fallback.provider, model=fallback.model,
+                        provider=fb_prov, model=fb_mod,
                         duration_ms=dur_fb, chunks_used=1,
                     )
         except Exception:

@@ -329,12 +329,14 @@ def smart_extract_case(db: Session, case_id: int, base_dir: str, classify_docs: 
         _case_seq = _rad_m.group(2).lstrip('0')
         _rad23 = final_fields.get("radicado_23_digitos", "")
         if _rad23 and _case_seq not in _re.sub(r'[\s\-\.]', '', _rad23):
-            logger.warning(f"CONTAMINACION DETECTADA: rad23 '{_rad23}' no coincide con carpeta '{folder_name}'. Eliminando campo.")
+            logger.warning(f"CONTAMINACION DETECTADA: rad23 '{_rad23}' no coincide con carpeta '{folder_name}'. Limpiando campos contaminados.")
             final_fields.pop("radicado_23_digitos", None)
-            # Tambien limpiar campos que podrian estar contaminados
-            for _suspect in ("fecha_ingreso", "juzgado"):
+            # Limpiar TODOS los campos que podrian estar contaminados (no solo radicado)
+            _contam_fields = ("fecha_ingreso", "juzgado", "accionante", "accionados",
+                              "ciudad", "derecho_vulnerado", "vinculados", "asunto", "pretensiones")
+            for _suspect in _contam_fields:
                 if _suspect in final_fields and _suspect not in regex_results:
-                    logger.warning(f"Campo sospechoso '{_suspect}' removido por posible contaminacion")
+                    logger.warning(f"Campo '{_suspect}' removido por contaminacion cruzada")
                     final_fields.pop(_suspect, None)
 
     # Validacion post-extraccion unificada (compartida con Pipeline)

@@ -214,6 +214,20 @@ class ContextAssembler:
                     except Exception:
                         pass
 
+            # Normalizer: intentar extraer PDFs sin texto usando pdftext/PaddleOCR
+            if not content and doc.file_path:
+                try:
+                    from backend.core.settings import settings
+                    if settings.NORMALIZER_ENABLED:
+                        fpath = Path(doc.file_path)
+                        if fpath.exists() and fpath.suffix.lower() in (".pdf", ".png", ".jpg", ".jpeg"):
+                            from backend.extraction.document_normalizer import normalize_document
+                            norm = normalize_document(fpath)
+                            if norm.text.strip():
+                                content = norm.text
+                except Exception:
+                    pass
+
             if not content:
                 continue
 

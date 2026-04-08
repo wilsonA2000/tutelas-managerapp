@@ -1,7 +1,10 @@
 """Pipeline de extraccion: carpeta → texto → IA → DB."""
 
+import logging
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger("tutelas.pipeline")
 
 from sqlalchemy.orm import Session
 
@@ -17,6 +20,17 @@ def extract_document_text(doc: Document) -> tuple[str, str]:
     """Extraer texto de un documento segun su tipo de archivo. Retorna (texto, metodo)."""
     path = Path(doc.file_path)
     ext = path.suffix.lower()
+
+    # Normalizer mejorado para PDFs e imagenes (DOCX excluido — preserva footer regex)
+    try:
+        from backend.core.settings import settings
+        if settings.NORMALIZER_ENABLED and ext not in (".docx", ".doc"):
+            from backend.extraction.document_normalizer import normalize_document
+            result = normalize_document(doc.file_path)
+            if result.text.strip():
+                return result.text, result.method
+    except Exception:
+        pass  # Fallback silencioso a extractores legacy
 
     if ext == ".pdf":
         result = extract_pdf(doc.file_path)

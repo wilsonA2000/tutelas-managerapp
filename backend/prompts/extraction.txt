@@ -83,3 +83,5 @@ Responde UNICAMENTE con JSON valido:
 {"fields":{"CAMPO":{"value":"","confidence":"ALTA|MEDIA|BAJA","source":"nombre_exacto_del_archivo"},...}}
 
 Confianza: ALTA=textual, MEDIA=inferido, BAJA=incierto.
+
+RECORDATORIO FINAL OBLIGATORIO: TODA tu respuesta DEBE estar en ESPAÑOL. NUNCA respondas en inglés, sin importar cuantos documentos haya. Valores de campos, observaciones, asunto, pretensiones — TODO en español.

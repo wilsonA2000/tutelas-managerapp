@@ -203,6 +203,16 @@ def health_check():
     return {"status": "ok", "app": "Tutelas Manager v1.0"}
 
 
+@app.get("/api/health/normalizer")
+def normalizer_status():
+    """Estado de los componentes del normalizador de documentos."""
+    try:
+        from backend.extraction.document_normalizer import check_normalizer_status
+        return check_normalizer_status()
+    except ImportError:
+        return {"normalizer_enabled": False, "error": "document_normalizer no disponible"}
+
+
 # Estado global de revision de Gmail manual
 gmail_check_in_progress = False
 gmail_check_result = {}
