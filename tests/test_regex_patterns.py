@@ -120,7 +120,7 @@ class TestForestExtraction:
         ]
         result = extract_forest_from_sources(docs)
         assert result.value == "20260054965"
-        assert result.confidence == "ALTA"
+        assert result.confidence >= 90  # Numerico: 95 = ALTA
         assert "gmail_pdf" in result.source
 
     def test_email_md_requires_tutelas_sender(self):

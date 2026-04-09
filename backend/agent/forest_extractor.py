@@ -44,7 +44,7 @@ class ForestResult:
     """Resultado de extracción de FOREST."""
     value: str
     source: str
-    confidence: str  # ALTA, MEDIA, BAJA
+    confidence: int  # 0-100 (numerico, no string)
 
 
 def is_valid_forest(num: str) -> bool:
@@ -57,7 +57,11 @@ def is_valid_forest(num: str) -> bool:
     # Los radicados judiciales empiezan por 68 (código Santander)
     if digits.startswith('68'):
         return False
-    if digits == '0' * len(digits):
+    # Rechazar numeros con todos digitos iguales (0000000, 1111111, etc.)
+    if len(set(digits)) <= 1:
+        return False
+    # Rechazar numeros que son telefonos comunes de la Gobernacion
+    if digits in {"6076337000", "6076336100", "6076336000"}:
         return False
     return True
 
@@ -107,7 +111,7 @@ def _extract_from_gmail_pdfs(doc_texts: list[dict]) -> ForestResult | None:
             return ForestResult(
                 value=match.group(1),
                 source=f"gmail_pdf/{filename}",
-                confidence="ALTA",
+                confidence=95,
             )
     return None
 
@@ -125,7 +129,7 @@ def _extract_from_email_db(case_emails: list) -> ForestResult | None:
             return ForestResult(
                 value=match.group(1),
                 source=f"email_db/{subject or em_id}",
-                confidence="ALTA",
+                confidence=95,
             )
 
         # Fallback: números genéricos de 7-11 dígitos en body
@@ -135,7 +139,7 @@ def _extract_from_email_db(case_emails: list) -> ForestResult | None:
                 return ForestResult(
                     value=c,
                     source=f"email_db/{subject or em_id}",
-                    confidence="MEDIA",
+                    confidence=60,
                 )
 
         # Fallback 2: keyword FOREST en subject o body
@@ -147,7 +151,7 @@ def _extract_from_email_db(case_emails: list) -> ForestResult | None:
                     return ForestResult(
                         value=f,
                         source=f"email_forest_keyword/{subject or em_id}",
-                        confidence="MEDIA",
+                        confidence=60,
                     )
 
     return None
@@ -168,6 +172,6 @@ def _extract_from_email_md(doc_texts: list[dict]) -> ForestResult | None:
             return ForestResult(
                 value=match.group(1),
                 source=f"email_md/{filename}",
-                confidence="ALTA",
+                confidence=95,
             )
     return None

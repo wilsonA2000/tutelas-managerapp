@@ -163,7 +163,7 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
         forest = extract_forest_from_sources(doc_dicts, case_emails)
         if forest:
             regex_results["radicado_forest"] = ExtractionResult(
-                value=forest.value, confidence=90 if forest.confidence == "ALTA" else 60,
+                value=forest.value, confidence=forest.confidence if isinstance(forest.confidence, int) else 90,
                 source=forest.source, method="regex",
                 reasoning=f"FOREST de {forest.source}",
             )

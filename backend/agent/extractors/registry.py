@@ -68,7 +68,7 @@ def pre_extract_all(doc_texts: list[dict], case_emails: list = None) -> dict[str
     if forest:
         results["radicado_forest"] = ExtractionResult(
             value=forest.value,
-            confidence=90 if forest.confidence == "ALTA" else 60,
+            confidence=forest.confidence if isinstance(forest.confidence, int) else 90,
             source=forest.source,
             method="regex",
             reasoning=f"FOREST extraído de {forest.source} con confianza {forest.confidence}",

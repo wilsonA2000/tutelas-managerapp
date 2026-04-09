@@ -764,6 +764,54 @@ def detect_duplicate_documents(db) -> list[dict]:
                 ],
             })
 
+    # Segundo paso: duplicados por contenido (texto similar, hash diferente)
+    docs_with_text = db.query(Document).filter(
+        Document.extracted_text.isnot(None),
+        Document.extracted_text != "",
+        Document.file_hash != "",
+    ).all()
+
+    # Agrupar por caso para comparar entre casos
+    from itertools import combinations
+    case_docs = defaultdict(list)
+    for doc in docs_with_text:
+        if doc.extracted_text and len(doc.extracted_text) > 200:
+            case_docs[doc.case_id].append(doc)
+
+    # Comparar docs entre diferentes casos usando trigram overlap
+    seen_pairs = set()
+    for (cid1, docs1), (cid2, docs2) in combinations(case_docs.items(), 2):
+        if cid1 == cid2:
+            continue
+        for d1 in docs1[:10]:  # Limitar a 10 docs por caso
+            t1 = (d1.extracted_text or "")[:5000].lower()
+            if len(t1) < 200:
+                continue
+            trigrams1 = {t1[i:i+3] for i in range(len(t1) - 2)}
+            for d2 in docs2[:10]:
+                pair_key = tuple(sorted([d1.id, d2.id]))
+                if pair_key in seen_pairs or d1.file_hash == d2.file_hash:
+                    continue
+                seen_pairs.add(pair_key)
+                t2 = (d2.extracted_text or "")[:5000].lower()
+                if len(t2) < 200:
+                    continue
+                trigrams2 = {t2[i:i+3] for i in range(len(t2) - 2)}
+                overlap = len(trigrams1 & trigrams2) / max(len(trigrams1), len(trigrams2), 1)
+                if overlap > 0.90:
+                    c1 = db.query(Case).filter(Case.id == cid1).first()
+                    c2 = db.query(Case).filter(Case.id == cid2).first()
+                    duplicates.append({
+                        "hash": f"content_sim_{overlap:.0%}",
+                        "type": "content_similarity",
+                        "files": [
+                            {"doc_id": d1.id, "filename": d1.filename, "case_id": cid1,
+                             "case_name": c1.folder_name if c1 else ""},
+                            {"doc_id": d2.id, "filename": d2.filename, "case_id": cid2,
+                             "case_name": c2.folder_name if c2 else ""},
+                        ],
+                    })
+
     return duplicates
 
 
@@ -1065,7 +1113,7 @@ def verify_document_belongs(case: Case, doc: Document) -> tuple[str, str]:
 
     if case_rad23 and len(case_rad23) >= 15 and rads_23_in_doc:
         # Verificar si el radicado 23d del caso está en el documento
-        case_suffix = case_rad23[-12:]  # últimos 12 dígitos (los más específicos)
+        case_suffix = case_rad23[-17:]  # últimos 17 dígitos (incluye municipio + año + secuencia)
         doc_has_case_rad = any(case_suffix in r for r in rads_23_in_doc)
 
         # Verificar si el documento tiene un radicado 23d DIFERENTE
@@ -1199,7 +1247,7 @@ def _cross_validate_radicado(case: Case, fields: dict, db, stats: dict):
         return
 
     # Buscar el año y secuencia en el radicado extraído
-    rad_m = re.search(r'(20\d{2}).*?0*(\d{2,5})\D*\d{0,2}$', rad_extracted.replace('-', '').replace(' ', ''))
+    rad_m = re.search(r'(20\d{2})[\-\s]?0*(\d{2,5})(?:\D|$)', rad_extracted.replace('-', '').replace(' ', ''))
     if not rad_m:
         return
 
