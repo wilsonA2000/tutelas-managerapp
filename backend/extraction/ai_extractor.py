@@ -168,6 +168,16 @@ PROVIDERS = {
     "anthropic": {
         "name": "Claude (Anthropic)",
         "models": {
+            "claude-3-haiku-20240307": {
+                "label": "Claude Haiku 3 (Ultra barato)",
+                "input_price": 0.25,
+                "output_price": 1.25,
+                "max_tokens": 4096,
+                "context_window": 200000,
+                "needs_chunking": False,
+                "multimodal": False,
+                "best_for": ["extraction", "general"],
+            },
             "claude-haiku-4-5-20251001": {
                 "label": "Claude Haiku 4.5",
                 "input_price": 1.00,
@@ -819,27 +829,13 @@ def extract_with_ai(
             provider=provider, model=model,
         )
 
-    # RUTA MULTIMODAL: Si es Google y hay PDFs, enviar archivos directamente
-    if provider == "google" and pdf_file_paths:
-        result = _extract_multimodal_google(
-            documents=documents,
-            pdf_file_paths=pdf_file_paths,
-            folder_name=folder_name,
-            model=model,
-            model_config=model_config,
-        )
-        if result is not None:
-            return result
-        # Multimodal fallo: cambiar a proveedor texto (evitar Google en rate limit)
-        from backend.agent.smart_router import route as _route_fb
-        _fb = _route_fb("extraction")
-        if _fb and _fb.provider != "google":
-            provider = _fb.provider
-            model = _fb.model
-            model_config = PROVIDERS.get(provider, {}).get("models", {}).get(model, {})
-            _logger.info("Multimodal fallo, redirigiendo a %s/%s para ruta texto", provider, model)
+    # NOTA v4.7: Ruta multimodal de Gemini deshabilitada. Ver smart_router.py
+    # para el razonamiento de arquitectura. La funcion _extract_multimodal_google
+    # permanece en el modulo por si se reactiva en el futuro, pero ya no se
+    # invoca desde el flujo de extraccion normal. El texto de PDFs ahora viene
+    # del normalizer local (pdfplumber + PaddleOCR).
 
-    # RUTA TEXTO: Para otros proveedores o fallback
+    # RUTA TEXTO: Unica ruta activa para todos los proveedores
     KEY_PATTERNS = {
         "auto": 1, "admite": 1, "avoca": 1, "escrito": 1,
         "sentencia": 2, "fallo": 2,
@@ -942,3 +938,378 @@ Analiza TODOS los documentos y extrae los 28 campos. Responde SOLO con el JSON. 
             error=f"Error {provider}/{model}: {e}",
             provider=provider, model=model,
         )
+
+
+# ============================================================
+# Extraccion IA PARALELA (Gemini + DeepSeek)
+# ============================================================
+#
+# Contexto: La memoria del proyecto dice "Gemini+DeepSeek secuenciales" pero
+# esto es impreciso. Antes de v4.7, extract_with_ai() solo corria UN provider
+# (elegido por Smart Router), el otro quedaba como fallback casi nunca invocado.
+#
+# parallel_extract_with_ai() corre ambos en ThreadPoolExecutor. Beneficios:
+# - Mejor cobertura por campo (Gemini visual, DeepSeek razonamiento textual)
+# - Redundancia real: si uno falla (429/error), el otro ya entrego
+# - Cross-validation gratis: campos donde coinciden → confidence boost +15
+#
+# Activado via settings.PARALLEL_AI_EXTRACTION (opt-in en v4.7, por default
+# tras validacion de piloto).
+
+
+# Campos donde Gemini tiene ventaja (datos visuales del PDF)
+_GEMINI_PREFERRED = {
+    "radicado_23_digitos", "fecha_ingreso", "fecha_fallo_1st",
+    "fecha_fallo_2nd", "juzgado", "ciudad", "sentido_fallo_1st",
+    "sentido_fallo_2nd", "accionante",
+}
+
+# Campos donde DeepSeek tiene ventaja (razonamiento textual denso)
+_DEEPSEEK_PREFERRED = {
+    "observaciones", "pretensiones", "derecho_vulnerado", "asunto",
+    "accionados", "vinculados", "quien_impugno", "decision_incidente",
+}
+
+# Campos donde un conflicto ALTA vs ALTA es peligroso: demote a MEDIA
+# para que el merge regex/IA en Fase 5 prefiera el regex (estan en
+# REGEX_PREFERRED_FIELDS de registry.py).
+_CRITICAL_CONFLICT_DEMOTE = {
+    "radicado_23_digitos", "radicado_forest",
+    "fecha_ingreso", "fecha_fallo_1st", "fecha_fallo_2nd",
+}
+
+_CONF_RANK = {"ALTA": 3, "MEDIA": 2, "BAJA": 1}
+
+
+def _normalize_field_value(value: str) -> str:
+    """Normalizar valor para comparar si dos IAs coinciden."""
+    if not value:
+        return ""
+    # Quitar espacios, puntuacion basica, pasar a minusculas
+    return " ".join(value.strip().lower().split())
+
+
+def _run_single_provider(
+    provider: str,
+    model: str,
+    documents: list[dict],
+    folder_name: str,
+    pdf_file_paths: list[dict] | None = None,
+) -> AIExtractionResult:
+    """Ejecutar UN solo provider IA sin pasar por Smart Router.
+
+    Usado por parallel_extract_with_ai() para forzar providers especificos.
+    NUNCA propaga excepciones: las captura y devuelve AIExtractionResult con
+    error poblado, para que ThreadPoolExecutor.future.result() nunca bloquee
+    el otro thread.
+    """
+    try:
+        # Validar API key
+        env_key = PROVIDERS.get(provider, {}).get("env_key", "")
+        if not env_key or not os.getenv(env_key, ""):
+            return AIExtractionResult(
+                error=f"{env_key} no configurada", provider=provider, model=model,
+            )
+
+        model_config = PROVIDERS.get(provider, {}).get("models", {}).get(model, {})
+        max_tokens = model_config.get("max_tokens", 4096)
+
+        # NOTA v4.7: Ruta multimodal deshabilitada. Ver extract_with_ai.
+        # Todos los providers usan ruta texto sobre el IR ya extraido.
+
+        # Ruta texto: construir messages identico a extract_with_ai
+        KEY_PATTERNS = {
+            "auto": 1, "admite": 1, "avoca": 1, "escrito": 1,
+            "sentencia": 2, "fallo": 2,
+            "forest": 3, "respuesta": 3, "rta": 3,
+            "gmail": 4, "rv_": 4, "email": 4,
+            "impugn": 5,
+            "incidente": 6, "desacato": 6,
+        }
+
+        def doc_priority(d):
+            name = d.get("filename", "").lower()
+            for keyword, pri in KEY_PATTERNS.items():
+                if keyword in name:
+                    return pri
+            return 9
+
+        sorted_docs = sorted(documents, key=doc_priority)
+
+        doc_texts = []
+        for doc in sorted_docs:
+            text = doc.get("text", "").strip()
+            if not text:
+                continue
+            if not _is_critical_pdf(doc.get("filename", "")) and len(text) > 25000:
+                text = text[:20000] + "\n[...CONTENIDO TRUNCADO...]\n" + text[-5000:]
+            doc_type = doc.get("doc_type", "OTRO")
+            doc_texts.append(f"\n===ARCHIVO: {doc['filename']} [TIPO: {doc_type}]===\n{text}")
+
+        if not doc_texts:
+            return AIExtractionResult(
+                error="No hay texto para analizar", provider=provider, model=model,
+            )
+
+        all_text = "".join(doc_texts)
+        user_message = f"""CARPETA DEL CASO: {folder_name}
+
+RESTRICCION ANTI-CONTAMINACION: Este caso es EXCLUSIVAMENTE de la carpeta "{folder_name}".
+Solo extrae datos de documentos que pertenezcan a este caso.
+Si un documento menciona un radicado diferente al de esta carpeta, IGNORA ese documento.
+El radicado extraido DEBE contener el numero de caso de la carpeta.
+
+DOCUMENTOS DEL EXPEDIENTE:
+{all_text}
+
+Analiza TODOS los documentos y extrae los 28 campos. Responde SOLO con el JSON. RESPONDE EN ESPAÑOL."""
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ]
+
+        start_time = time.time()
+        # En modo paralelo usamos menos retries: el otro provider ya es nuestra
+        # redundancia real. 2 intentos cubren hiccups transitorios sin bloquear.
+        raw, total_input, total_output = _call_with_retry(
+            provider, messages, model, max_tokens, max_retries=2,
+        )
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        all_fields = _parse_ai_json(raw)
+
+        return AIExtractionResult(
+            fields=all_fields, raw_response=raw,
+            tokens_input=total_input, tokens_output=total_output,
+            tokens_used=total_input + total_output,
+            provider=provider, model=model,
+            duration_ms=duration_ms, chunks_used=1,
+        )
+
+    except Exception as e:
+        _logger.warning(
+            "_run_single_provider %s/%s fallo: %s", provider, model, str(e)[:120]
+        )
+        return AIExtractionResult(
+            error=f"Error {provider}/{model}: {e}",
+            provider=provider, model=model,
+        )
+
+
+def _merge_ai_results(
+    gemini: AIExtractionResult,
+    deepseek: AIExtractionResult,
+    case_id: int = 0,
+) -> AIExtractionResult:
+    """Fusionar resultados de dos providers IA en uno solo.
+
+    Reglas:
+    1. Ambos coinciden (normalizado) → cross-validated, ALTA, source="..._cv"
+    2. Conflicto ALTA vs ALTA en campo critico → ambos demoteados a MEDIA
+       (regex ganara en Fase 5 por REGEX_PREFERRED_FIELDS)
+    3. Conflicto con confidence distinta → mayor confidence gana
+    4. Empate de confidence → preferencia por campo (GEMINI/DEEPSEEK_PREFERRED)
+    5. Solo uno tiene el campo → ese gana
+
+    Si ambos devuelven fields={} sin error, sintetiza error para marcar REVISION.
+    """
+    g_fields = gemini.fields if gemini and gemini.fields else {}
+    d_fields = deepseek.fields if deepseek and deepseek.fields else {}
+
+    merged: dict[str, AIFieldResult] = {}
+    cv_count = 0
+
+    all_field_names = set(g_fields) | set(d_fields)
+    for field_name in all_field_names:
+        g = g_fields.get(field_name)
+        d = d_fields.get(field_name)
+
+        if g and d:
+            # 1) Cross-validation: ambos coinciden
+            if _normalize_field_value(g.value) == _normalize_field_value(d.value):
+                merged[field_name] = AIFieldResult(
+                    value=g.value,
+                    confidence="ALTA",
+                    source=f"{g.source or 'gemini'}+{d.source or 'deepseek'}_cv",
+                )
+                cv_count += 1
+                _logger.info(
+                    "cv_field case=%d field=%s value=%s",
+                    case_id, field_name, str(g.value)[:50],
+                )
+            # 2) Conflicto en campo critico ALTA vs ALTA → demote a MEDIA
+            elif (
+                field_name in _CRITICAL_CONFLICT_DEMOTE
+                and g.confidence == "ALTA"
+                and d.confidence == "ALTA"
+            ):
+                _logger.warning(
+                    "CONFLICT case=%d field=%s gemini=%s deepseek=%s",
+                    case_id, field_name, str(g.value)[:60], str(d.value)[:60],
+                )
+                merged[field_name] = AIFieldResult(
+                    value=g.value,  # Preservar gemini (visual) pero MEDIA
+                    confidence="MEDIA",
+                    source="conflict_gemini_vs_deepseek",
+                )
+            # 3) Mayor confidence gana
+            elif _CONF_RANK[g.confidence] > _CONF_RANK[d.confidence]:
+                merged[field_name] = g
+            elif _CONF_RANK[d.confidence] > _CONF_RANK[g.confidence]:
+                merged[field_name] = d
+            # 4) Empate → preferencia por campo
+            else:
+                if field_name in _GEMINI_PREFERRED:
+                    merged[field_name] = g
+                elif field_name in _DEEPSEEK_PREFERRED:
+                    merged[field_name] = d
+                else:
+                    # Sin preferencia: gemini por default
+                    merged[field_name] = g
+        elif g:
+            merged[field_name] = g
+        elif d:
+            merged[field_name] = d
+
+    # Guard: ambos devolvieron fields={} sin error → sintetizar error
+    if not merged and not gemini.error and not deepseek.error:
+        return AIExtractionResult(
+            error="parallel: both providers returned empty fields",
+            provider="parallel(google+deepseek)",
+            model=f"{gemini.model or '?'}+{deepseek.model or '?'}",
+            tokens_input=gemini.tokens_input + deepseek.tokens_input,
+            tokens_output=gemini.tokens_output + deepseek.tokens_output,
+        )
+
+    # Si ambos fallaron, propagar error combinado
+    combined_error = None
+    if gemini.error and deepseek.error:
+        combined_error = f"gemini: {gemini.error[:80]} | deepseek: {deepseek.error[:80]}"
+
+    return AIExtractionResult(
+        fields=merged,
+        tokens_input=gemini.tokens_input + deepseek.tokens_input,
+        tokens_output=gemini.tokens_output + deepseek.tokens_output,
+        tokens_used=(
+            gemini.tokens_input + gemini.tokens_output
+            + deepseek.tokens_input + deepseek.tokens_output
+        ),
+        provider="parallel(google+deepseek)",
+        model=f"{gemini.model or '?'}+{deepseek.model or '?'}",
+        duration_ms=max(gemini.duration_ms, deepseek.duration_ms),
+        chunks_used=1,
+        error=combined_error,
+    )
+
+
+def parallel_extract_with_ai(
+    documents: list[dict],
+    folder_name: str,
+    pdf_file_paths: list[dict] | None = None,
+    case_id: int = 0,
+) -> tuple[AIExtractionResult, list[AIExtractionResult]]:
+    """Ejecutar Gemini + DeepSeek en paralelo con ThreadPoolExecutor.
+
+    Returns:
+        (merged_result, raw_results)
+        - merged_result: AIExtractionResult combinado, alimenta el merge de Fase 5
+        - raw_results: lista con los 2 resultados individuales, uno por provider.
+          El caller (unified.py) debe crear 1 TokenUsage por cada uno.
+
+    Degradacion:
+    - Si algun provider esta en rate-limit cooldown o sin API key → degradar
+      a extract_with_ai() secuencial normal. Devuelve (result, [result]).
+    - Si un provider falla mid-execution → devolver el otro + error del fallido.
+    - Si ambos fallan → merged con error, raw_list con ambos errores.
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+    from backend.core.settings import settings as _settings
+    from backend.agent.smart_router import _is_rate_limited
+
+    providers = _settings.PARALLEL_AI_PROVIDERS
+    if not providers or len(providers) < 2:
+        _logger.warning(
+            "parallel: PARALLEL_AI_PROVIDERS mal configurado, degradando a secuencial"
+        )
+        result = extract_with_ai(documents, folder_name, pdf_file_paths)
+        return (result, [result])
+
+    (p1, m1), (p2, m2) = providers[0], providers[1]
+
+    # Check de viabilidad: cooldown o API key faltante
+    reasons_to_degrade = []
+    for prov, mod in ((p1, m1), (p2, m2)):
+        env_key = PROVIDERS.get(prov, {}).get("env_key", "")
+        if not env_key or not os.getenv(env_key, ""):
+            reasons_to_degrade.append(f"{prov}: sin API key")
+        elif _is_rate_limited(prov):
+            reasons_to_degrade.append(f"{prov}: rate limit cooldown")
+
+    if reasons_to_degrade:
+        _logger.warning(
+            "parallel: degraded to sequential (reason=%s)", "; ".join(reasons_to_degrade)
+        )
+        result = extract_with_ai(documents, folder_name, pdf_file_paths)
+        return (result, [result])
+
+    _logger.info(
+        "parallel: launching %s/%s + %s/%s for case %d",
+        p1, m1, p2, m2, case_id,
+    )
+
+    # Timeout total del paralelo (wall-clock). Si un provider se demora mucho
+    # con retries internos, igualmente cortamos a los PARALLEL_TIMEOUT_SECS para
+    # no dejar al otro esperando eternamente.
+    PARALLEL_TIMEOUT_SECS = 150
+
+    res1: AIExtractionResult | None = None
+    res2: AIExtractionResult | None = None
+
+    start_parallel = time.time()
+
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="parallel_ai") as executor:
+        # Provider 1 (Gemini): ruta multimodal con PDFs
+        future1 = executor.submit(
+            _run_single_provider, p1, m1, documents, folder_name, pdf_file_paths,
+        )
+        # Provider 2 (DeepSeek): ruta texto, sin PDFs multimodal
+        future2 = executor.submit(
+            _run_single_provider, p2, m2, documents, folder_name, None,
+        )
+
+        # Timeout wall-clock: descontar el tiempo transcurrido para el segundo
+        try:
+            res1 = future1.result(timeout=PARALLEL_TIMEOUT_SECS)
+        except FuturesTimeoutError:
+            _logger.warning("parallel: %s/%s timeout tras %ds", p1, m1, PARALLEL_TIMEOUT_SECS)
+            future1.cancel()
+            res1 = AIExtractionResult(
+                error=f"timeout after {PARALLEL_TIMEOUT_SECS}s", provider=p1, model=m1,
+            )
+        except Exception as e:
+            _logger.warning("parallel: %s/%s error inesperado: %s", p1, m1, str(e)[:100])
+            res1 = AIExtractionResult(error=str(e), provider=p1, model=m1)
+
+        # Para el segundo: restar el tiempo ya usado para no bloquear eternamente
+        elapsed_so_far = time.time() - start_parallel
+        remaining = max(5, PARALLEL_TIMEOUT_SECS - elapsed_so_far)
+        try:
+            res2 = future2.result(timeout=remaining)
+        except FuturesTimeoutError:
+            _logger.warning("parallel: %s/%s timeout tras %.0fs", p2, m2, remaining)
+            future2.cancel()
+            res2 = AIExtractionResult(
+                error=f"timeout after {int(remaining)}s", provider=p2, model=m2,
+            )
+        except Exception as e:
+            _logger.warning("parallel: %s/%s error inesperado: %s", p2, m2, str(e)[:100])
+            res2 = AIExtractionResult(error=str(e), provider=p2, model=m2)
+
+    _logger.info(
+        "parallel: %s=%dms %s=%dms case=%d",
+        p1, res1.duration_ms, p2, res2.duration_ms, case_id,
+    )
+
+    merged = _merge_ai_results(res1, res2, case_id=case_id)
+    return (merged, [res1, res2])

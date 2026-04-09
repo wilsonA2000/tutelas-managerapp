@@ -12,24 +12,30 @@ El router verifica qué API keys están disponibles y selecciona la mejor opció
 import os
 import time
 import logging
+import threading
 from dataclasses import dataclass
 
 logger = logging.getLogger("tutelas.router")
 
 # Rate limit tracking: provider → timestamp del ultimo 429
+# Protegido por _rate_limit_lock porque en PARALLEL_AI_EXTRACTION dos threads
+# pueden llamar report_rate_limit() / _is_rate_limited() simultaneamente.
 _rate_limit_cooldown: dict[str, float] = {}
+_rate_limit_lock = threading.Lock()
 _RATE_LIMIT_COOLDOWN_SECS = 60  # Esperar 60s antes de reintentar provider con 429
 
 
 def report_rate_limit(provider: str):
     """Reportar que un provider devolvio 429. Se llama desde ai_extractor."""
-    _rate_limit_cooldown[provider] = time.time()
+    with _rate_limit_lock:
+        _rate_limit_cooldown[provider] = time.time()
     logger.warning("Rate limit reportado para %s (cooldown %ds)", provider, _RATE_LIMIT_COOLDOWN_SECS)
 
 
 def _is_rate_limited(provider: str) -> bool:
     """Check si un provider esta en cooldown por rate limit."""
-    last_429 = _rate_limit_cooldown.get(provider, 0)
+    with _rate_limit_lock:
+        last_429 = _rate_limit_cooldown.get(provider, 0)
     return (time.time() - last_429) < _RATE_LIMIT_COOLDOWN_SECS
 
 # Tipos de tarea que el agente puede ejecutar
@@ -57,45 +63,52 @@ class RouteDecision:
 
 # Cadena de prioridad por tipo de tarea
 # Cada lista es [proveedor, modelo, env_key] en orden de preferencia
+#
+# NOTA v4.7: Gemini fue eliminado de todas las cadenas tras auditoria del
+# 9 abril 2026. Razones:
+# - 97% de los PDFs son nativos (pdfplumber extrae texto correctamente)
+# - Gemini multimodal consumia 17x mas tokens input que DeepSeek
+# - DeepSeek V3.2 produce igual o mejor calidad en campos semanticos
+# - Claude Haiku 4.5 es ahora el fallback pagado (~$8/mes)
 ROUTING_CHAINS = {
     "pdf_multimodal": [
-        ("google", "gemini-2.5-flash", "GOOGLE_API_KEY"),
-        ("google", "gemini-2.5-pro", "GOOGLE_API_KEY"),
-        ("openai", "gpt-4o", "OPENAI_API_KEY"),
+        # Ya no hay ruta multimodal: el texto viene del normalizer local
+        # (pdfplumber + PaddleOCR). La clave se deja por compat hacia atras.
+        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
+        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
     ],
     "extraction": [
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
+        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
         ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
         ("huggingface", "meta-llama/Llama-3.3-70B-Instruct", "HF_TOKEN"),
         ("cerebras", "llama-3.3-70b", "CEREBRAS_API_KEY"),
-        ("google", "gemini-2.5-flash", "GOOGLE_API_KEY"),
     ],
     "complex_reasoning": [
         ("cerebras", "qwen-3-235b-a22b-instruct-2507", "CEREBRAS_API_KEY"),
         ("huggingface", "Qwen/Qwen3-235B-A22B-Instruct-2507", "HF_TOKEN"),
         ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
+        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
         ("groq", "qwen-qwq-32b", "GROQ_API_KEY"),
-        ("google", "gemini-2.5-flash", "GOOGLE_API_KEY"),
     ],
     "legal_analysis": [
         ("cerebras", "qwen-3-235b-a22b-instruct-2507", "CEREBRAS_API_KEY"),
         ("huggingface", "Qwen/Qwen3-235B-A22B-Instruct-2507", "HF_TOKEN"),
         ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
-        ("anthropic", "claude-sonnet-4-6-20260320", "ANTHROPIC_API_KEY"),
-        ("google", "gemini-2.5-flash", "GOOGLE_API_KEY"),
+        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
     ],
     "general": [
-        ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
+        ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
         ("cerebras", "llama-3.3-70b", "CEREBRAS_API_KEY"),
+        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
         ("huggingface", "meta-llama/Llama-3.3-70B-Instruct", "HF_TOKEN"),
-        ("google", "gemini-2.5-flash", "GOOGLE_API_KEY"),
     ],
     "multilingual": [
         ("cerebras", "qwen-3-235b-a22b-instruct-2507", "CEREBRAS_API_KEY"),
         ("huggingface", "Qwen/Qwen3-235B-A22B-Instruct-2507", "HF_TOKEN"),
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-        ("google", "gemini-2.5-flash", "GOOGLE_API_KEY"),
+        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
     ],
 }
 

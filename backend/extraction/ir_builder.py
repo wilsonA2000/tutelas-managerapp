@@ -279,7 +279,7 @@ def _build_pdf_ir(file_path: str, doc_type: str) -> DocumentIR:
     # BODY: texto de paginas principales (sin duplicar header/footer)
     body_text = "\n".join(full_text_parts)
     if body_text.strip():
-        zones.append(_make_body_zone(body_text, filename=filename, page=0, confidence=1.0))
+        zones.append(_make_body_zone(body_text, filename=path.name, page=0, confidence=1.0))
 
     doc.close()
 
@@ -396,7 +396,7 @@ def _build_docx_ir(file_path: str, doc_type: str) -> DocumentIR:
             tables.append(rows)
 
     body_text = "\n".join(full_text_parts)
-    zones.append(_make_body_zone(body_text, filename=filename, confidence=1.0))
+    zones.append(_make_body_zone(body_text, filename=path.name, confidence=1.0))
 
     return DocumentIR(
         filename=path.name,

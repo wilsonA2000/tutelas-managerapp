@@ -745,3 +745,52 @@ def api_suggest_target(doc_id: int, db: Session = Depends(get_db)):
         "current_case": source_case.folder_name if source_case else None,
         "suggestions": suggestions[:5],
     }
+
+
+# ============================================================
+# v4.7 — Benchmark comparativo (metricas agregadas)
+# ============================================================
+
+@router.get("/metrics/comparison")
+def api_metrics_comparison(
+    since: str | None = None,
+    until: str | None = None,
+    provider: str | None = None,
+    version_tag: str = "v4.7",
+    db: Session = Depends(get_db),
+):
+    """Benchmark de metricas agregadas sobre TokenUsage + Case.
+
+    Query params:
+    - since: ISO timestamp (ej: '2026-04-09T11:00:00'). Default: ultimas 24h
+    - until: ISO timestamp. Default: ahora
+    - provider: filtrar por provider ('deepseek', 'anthropic', etc)
+    - version_tag: etiqueta del reporte (default 'v4.7')
+
+    Retorna JSON con: cost, latency, coverage, errors, providers_used,
+    problematic_cases, projection_1000_cases.
+
+    Reusa backend.reports.benchmark.compute_period_metrics (logica pura).
+    """
+    from datetime import datetime, timedelta
+    from backend.reports.benchmark import compute_period_metrics
+
+    def _parse_iso(s: str | None, default: datetime) -> datetime:
+        if not s:
+            return default
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+        except (ValueError, AttributeError):
+            return default
+
+    now = datetime.utcnow()
+    since_dt = _parse_iso(since, now - timedelta(hours=24))
+    until_dt = _parse_iso(until, now)
+
+    return compute_period_metrics(
+        db=db,
+        since=since_dt,
+        until=until_dt,
+        provider=provider,
+        version_tag=version_tag,
+    )

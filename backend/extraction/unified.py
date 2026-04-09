@@ -259,41 +259,46 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
                                 "file_path": doc.file_path,
                             })
 
-            # Llamar a IA
-            ai_result = extract_with_ai(
-                ia_doc_texts,
-                case.folder_name or "",
-                pdf_file_paths=pdf_file_paths[:4] if pdf_file_paths else None,
-            )
+            # Llamar a IA (paralelo o secuencial segun feature flag)
+            from backend.core.settings import settings as _ai_settings
+            if _ai_settings.PARALLEL_AI_EXTRACTION:
+                from backend.extraction.ai_extractor import parallel_extract_with_ai
+                ai_result, raw_ai_results = parallel_extract_with_ai(
+                    ia_doc_texts,
+                    case.folder_name or "",
+                    pdf_file_paths=pdf_file_paths[:4] if pdf_file_paths else None,
+                    case_id=case.id,
+                )
+            else:
+                ai_result = extract_with_ai(
+                    ia_doc_texts,
+                    case.folder_name or "",
+                    pdf_file_paths=pdf_file_paths[:4] if pdf_file_paths else None,
+                )
+                raw_ai_results = [ai_result]
 
-            # Registrar tokens
-            model_info = {}
-            try:
-                from backend.extraction.ai_extractor import PROVIDERS, get_active_provider
-                prov, mod = get_active_provider()
-                model_info = PROVIDERS.get(prov, {}).get("models", {}).get(mod, {})
-            except Exception:
-                pass
-
-            inp_price = model_info.get("input_price", 0)
-            out_price = model_info.get("output_price", 0)
-            cost_in = ai_result.tokens_input * inp_price / 1_000_000
-            cost_out = ai_result.tokens_output * out_price / 1_000_000
-
-            db.add(TokenUsage(
-                provider=ai_result.provider or "unknown",
-                model=ai_result.model or "unknown",
-                tokens_input=ai_result.tokens_input,
-                tokens_output=ai_result.tokens_output,
-                cost_input=f"{cost_in:.6f}",
-                cost_output=f"{cost_out:.6f}",
-                cost_total=f"{cost_in + cost_out:.6f}",
-                case_id=case.id,
-                fields_extracted=len(ai_result.fields),
-                duration_ms=ai_result.duration_ms,
-                error=ai_result.error,
-                chunk_index=ai_result.chunks_used,
-            ))
+            # Registrar tokens: 1 TokenUsage por provider ejecutado
+            from backend.extraction.ai_extractor import PROVIDERS
+            for r in raw_ai_results:
+                r_model_info = PROVIDERS.get(r.provider or "", {}).get("models", {}).get(r.model or "", {}) if r.provider else {}
+                r_inp_price = r_model_info.get("input_price", 0)
+                r_out_price = r_model_info.get("output_price", 0)
+                r_cost_in = r.tokens_input * r_inp_price / 1_000_000
+                r_cost_out = r.tokens_output * r_out_price / 1_000_000
+                db.add(TokenUsage(
+                    provider=r.provider or "unknown",
+                    model=r.model or "unknown",
+                    tokens_input=r.tokens_input,
+                    tokens_output=r.tokens_output,
+                    cost_input=f"{r_cost_in:.6f}",
+                    cost_output=f"{r_cost_out:.6f}",
+                    cost_total=f"{r_cost_in + r_cost_out:.6f}",
+                    case_id=case.id,
+                    fields_extracted=len(r.fields),
+                    duration_ms=r.duration_ms,
+                    error=r.error,
+                    chunk_index=r.chunks_used,
+                ))
 
             if ai_result.error:
                 logger.warning("IA fallo: %s (pero %d campos regex ya guardados)", ai_result.error, saved_regex)
@@ -312,6 +317,15 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
             stats["tokens_output"] = ai_result.tokens_output
             stats["provider"] = ai_result.provider
             stats["model"] = ai_result.model
+
+            # Observabilidad extra para modo paralelo
+            if _ai_settings.PARALLEL_AI_EXTRACTION and len(raw_ai_results) == 2:
+                stats["providers"] = [f"{r.provider}/{r.model}" for r in raw_ai_results]
+                stats["gemini_ms"] = raw_ai_results[0].duration_ms
+                stats["deepseek_ms"] = raw_ai_results[1].duration_ms
+                stats["cv_fields_count"] = sum(
+                    1 for f in ai_result.fields.values() if "_cv" in (f.source or "")
+                )
         else:
             logger.info("Fase 4: Todos los campos ya cubiertos por regex, IA no necesaria")
 
