@@ -220,6 +220,21 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
             # Construir prompt compacto con zonas IR relevantes
             compact_prompt = case_ir.to_compact_prompt(fields_needed)
 
+            # Inyectar contexto del Knowledge Base si está habilitado
+            from backend.core.settings import settings as _settings
+            if _settings.KB_ENHANCED_EXTRACTION:
+                try:
+                    from backend.knowledge.search import search_by_case
+                    kb_entries = search_by_case(db, case.id)
+                    if kb_entries:
+                        kb_context = "\n\n===CONTEXTO_KB (datos previos del caso)===\n"
+                        for entry in kb_entries[:5]:  # Top 5 entradas
+                            kb_context += f"[{entry.source_type}] {entry.source_name}: {(entry.content or '')[:500]}\n"
+                        compact_prompt += kb_context
+                        logger.info("KB: %d entradas inyectadas al prompt", min(len(kb_entries), 5))
+                except Exception as e:
+                    logger.debug("KB enhancement skipped: %s", e)
+
             # Cargar system prompt compacto
             try:
                 prompt_path = Path(__file__).parent.parent / "prompts" / "extraction_compact.txt"

@@ -46,6 +46,7 @@ class Settings(BaseSettings):
 
     # Unified Extractor (IR-based)
     UNIFIED_EXTRACTOR_ENABLED: bool = True  # True = usar extractor unificado IR
+    KB_ENHANCED_EXTRACTION: bool = True  # True = inyectar contexto KB en prompt IA
 
     # CSV
     CSV_DELIMITER: str = ";"

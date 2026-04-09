@@ -483,27 +483,68 @@ _CALLERS = {
 
 
 def _call_with_retry(provider: str, messages: list[dict], model: str,
-                     max_tokens: int = 4096, max_retries: int = 5) -> tuple[str, int, int]:
-    """Llamar al proveedor con retry para rate limits."""
+                     max_tokens: int = 4096, max_retries: int = 5,
+                     fallback_provider: str = None, fallback_model: str = None) -> tuple[str, int, int]:
+    """Llamar al proveedor con retry exponencial + jitter.
+
+    Retry strategy:
+    - Exponential backoff: 5s, 10s, 20s, 40s, 60s (capped)
+    - Jitter: +0-30% random para evitar thundering herd
+    - Retriable: rate limit (429), server errors (5xx), connection errors
+    - Non-retriable: payload too large (413), context overflow
+    - On final retry exhaustion: try fallback provider once before failing
+    """
+    import random
+
     caller = _CALLERS.get(provider)
     if not caller:
         raise ValueError(f"Proveedor '{provider}' no implementado")
 
+    # Errores que NO se deben reintentar
+    NON_RETRIABLE = ("413", "payload", "too large", "context_length", "too long", "invalid_api_key", "authentication")
+    # Errores retriable (rate limit, server errors, conexion)
+    RETRIABLE_STRINGS = ("429", "rate", "overloaded", "503", "502", "500", "unavailable", "service", "server_error")
+    RETRIABLE_TYPES = (ConnectionError, TimeoutError, OSError)
+
+    last_error = None
     for attempt in range(max_retries):
         try:
             return caller(messages, model, max_tokens)
+        except RETRIABLE_TYPES as e:
+            last_error = e
+            base_wait = min(60, 5 * (2 ** attempt))
+            jitter = random.uniform(0, base_wait * 0.3)
+            wait = base_wait + jitter
+            _logger.warning("Retry %d/%d %s/%s: %s (esperando %.1fs)", attempt + 1, max_retries, provider, model, type(e).__name__, wait)
+            time.sleep(wait)
+            continue
         except Exception as e:
             error_str = str(e).lower()
-            if "413" in error_str or "payload" in error_str or "too large" in error_str:
-                raise  # No reintentar si el payload es demasiado grande
-            if "context_length" in error_str or "too long" in error_str:
-                raise  # No reintentar si el texto excede el contexto
-            if "429" in error_str or "rate" in error_str or "overloaded" in error_str or "503" in error_str or "unavailable" in error_str or "service" in error_str:
-                wait = 10 * (attempt + 1)
+            # No reintentar errores permanentes
+            if any(s in error_str for s in NON_RETRIABLE):
+                raise
+            # Reintentar errores temporales
+            if any(s in error_str for s in RETRIABLE_STRINGS):
+                last_error = e
+                base_wait = min(60, 5 * (2 ** attempt))
+                jitter = random.uniform(0, base_wait * 0.3)
+                wait = base_wait + jitter
+                _logger.warning("Retry %d/%d %s/%s: %s (esperando %.1fs)", attempt + 1, max_retries, provider, model, str(e)[:80], wait)
                 time.sleep(wait)
                 continue
             raise
-    raise Exception(f"Rate limit de {provider}: reintentos agotados tras {max_retries} intentos.")
+
+    # Reintentos agotados — intentar fallback provider si existe
+    if fallback_provider and fallback_model:
+        fb_caller = _CALLERS.get(fallback_provider)
+        if fb_caller:
+            _logger.warning("Retries agotados en %s, intentando fallback %s/%s", provider, fallback_provider, fallback_model)
+            try:
+                return fb_caller(messages, fallback_model, max_tokens)
+            except Exception as fb_e:
+                _logger.error("Fallback %s tambien fallo: %s", fallback_provider, str(fb_e)[:100])
+
+    raise Exception(f"Rate limit de {provider}: reintentos agotados tras {max_retries} intentos. Ultimo error: {str(last_error)[:100]}")
 
 
 # ============================================================
@@ -845,7 +886,8 @@ Analiza TODOS los documentos y extrae los 28 campos. Responde SOLO con el JSON. 
         ]
 
         raw, total_input, total_output = _call_with_retry(
-            provider, messages, model, model_config.get("max_tokens", 4096)
+            provider, messages, model, model_config.get("max_tokens", 4096),
+            fallback_provider=_fallback_provider, fallback_model=_fallback_model,
         )
         duration_ms = int((time.time() - start_time) * 1000)
 

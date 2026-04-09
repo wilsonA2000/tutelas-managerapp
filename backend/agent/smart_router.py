@@ -83,8 +83,23 @@ ROUTING_CHAINS = {
 }
 
 
+def _validate_api_key(env_key: str) -> bool:
+    """Validar que una API key existe y no es placeholder."""
+    key = os.getenv(env_key, "").strip()
+    if not key or len(key) < 10:
+        return False
+    # Detectar placeholders comunes
+    placeholders = {"xxx", "your-key-here", "CHANGE_ME", "sk-xxx", "test"}
+    if key.lower() in placeholders:
+        return False
+    return True
+
+
 def route(task_type: str = "general") -> RouteDecision:
     """Seleccionar el mejor proveedor disponible para un tipo de tarea.
+
+    Itera la cadena de prioridad: el 1er provider disponible es el primary,
+    el 2do es el fallback. Valida API keys antes de seleccionar.
 
     Args:
         task_type: Tipo de tarea (pdf_multimodal, extraction, complex_reasoning, etc.)
@@ -95,43 +110,46 @@ def route(task_type: str = "general") -> RouteDecision:
     from backend.extraction.ai_extractor import PROVIDERS
 
     chain = ROUTING_CHAINS.get(task_type, ROUTING_CHAINS["general"])
-    fallback = None
 
+    # Recopilar todos los providers disponibles en orden
+    available = []
     for provider, model, env_key in chain:
-        api_key = os.getenv(env_key, "")
-        if not api_key:
+        if not _validate_api_key(env_key):
             continue
-
         model_config = PROVIDERS.get(provider, {}).get("models", {}).get(model, {})
-        decision = RouteDecision(
-            provider=provider,
-            model=model,
-            reason=f"Mejor opción para '{task_type}': {PROVIDERS.get(provider, {}).get('name', provider)} / {model_config.get('label', model)}",
-            cost_per_1m_input=model_config.get("input_price", 0),
-            cost_per_1m_output=model_config.get("output_price", 0),
-            context_window=model_config.get("context_window", 128000),
+        available.append((provider, model, model_config))
+
+    if not available:
+        logger.warning("No provider available for task '%s', using Gemini Flash", task_type)
+        return RouteDecision(
+            provider="google",
+            model="gemini-2.5-flash",
+            reason="Fallback: sin proveedores disponibles para esta tarea",
+            cost_per_1m_input=0,
+            cost_per_1m_output=0,
+            context_window=1000000,
         )
 
-        # Find fallback (next available in chain)
-        if not fallback:
-            fallback = decision
-        else:
-            decision.fallback_provider = fallback.provider
-            decision.fallback_model = fallback.model
-
-        logger.info(f"Route [{task_type}] → {provider}/{model} ({decision.reason})")
-        return decision
-
-    # Ultimate fallback: Gemini Flash (always available if key exists)
-    logger.warning(f"No provider available for task '{task_type}', using Gemini Flash")
-    return RouteDecision(
-        provider="google",
-        model="gemini-2.5-flash",
-        reason="Fallback: sin proveedores disponibles para esta tarea",
-        cost_per_1m_input=0,
-        cost_per_1m_output=0,
-        context_window=1000000,
+    # Primary = 1ro disponible, Fallback = 2do disponible
+    prov, mod, cfg = available[0]
+    decision = RouteDecision(
+        provider=prov,
+        model=mod,
+        reason=f"Mejor opción para '{task_type}': {PROVIDERS.get(prov, {}).get('name', prov)} / {cfg.get('label', mod)}",
+        cost_per_1m_input=cfg.get("input_price", 0),
+        cost_per_1m_output=cfg.get("output_price", 0),
+        context_window=cfg.get("context_window", 128000),
     )
+
+    if len(available) >= 2:
+        fb_prov, fb_mod, _ = available[1]
+        decision.fallback_provider = fb_prov
+        decision.fallback_model = fb_mod
+        logger.info("Route [%s] → %s/%s (fallback: %s/%s)", task_type, prov, mod, fb_prov, fb_mod)
+    else:
+        logger.info("Route [%s] → %s/%s (sin fallback)", task_type, prov, mod)
+
+    return decision
 
 
 def get_available_routes() -> dict[str, RouteDecision]:
