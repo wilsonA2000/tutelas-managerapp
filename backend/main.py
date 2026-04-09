@@ -219,6 +219,8 @@ from backend.routers.agent import router as agent_router
 app.include_router(agent_router)
 from backend.routers.db import router as db_router
 app.include_router(db_router)
+from backend.routers.cleanup import router as cleanup_router
+app.include_router(cleanup_router)
 
 
 # ============================================================
