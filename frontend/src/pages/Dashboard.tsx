@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
+import gsap from 'gsap'
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -10,7 +11,7 @@ import {
   Clock, User, MapPin, AlertCircle,
   Play, Loader2, Mail,
   Cpu, Download,
-  Scale, Shield, Gavel, TrendingUp,
+  Scale, Shield, Gavel, TrendingUp, Info,
 } from 'lucide-react'
 import {
   getKPIs, getCharts, getActivity,
@@ -18,6 +19,7 @@ import {
   runExtractionAll, stopExtraction, generateExcel,
   getAIProviders, setAIProvider, getTokenMetrics,
 } from '../services/api'
+import AnimatedNumber from '../components/AnimatedNumber'
 
 const FALLO_COLORS: Record<string, string> = {
   CONCEDE: '#ef4444',
@@ -33,30 +35,62 @@ const FALLO_COLORS: Record<string, string> = {
 const CHART_PRIMARY = '#1A5276'
 const CHART_SECONDARY = '#2E86C1'
 
+/* Gradient definitions for KPI cards */
+const KPI_GRADIENTS: Record<string, { from: string; to: string; accent: string }> = {
+  tutelas: { from: '#1A5276', to: '#2E86C1', accent: '#1A5276' },
+  activos: { from: '#d97706', to: '#fbbf24', accent: '#d97706' },
+  inactivos: { from: '#059669', to: '#34d399', accent: '#059669' },
+  completitud: { from: '#2E86C1', to: '#5dade2', accent: '#2E86C1' },
+  desfavorables: { from: '#dc2626', to: '#f87171', accent: '#dc2626' },
+  favorables: { from: '#059669', to: '#34d399', accent: '#059669' },
+  impugnaciones: { from: '#ea580c', to: '#fb923c', accent: '#ea580c' },
+  desacatos: { from: '#7c3aed', to: '#a78bfa', accent: '#7c3aed' },
+}
+
 function KPICard({
   icon: Icon,
   label,
   value,
-  color,
+  gradient,
   sub,
   tooltip,
 }: {
   icon: React.ElementType
   label: string
   value: string | number
-  color: string
+  gradient: { from: string; to: string; accent: string }
   sub?: string
   tooltip?: string
 }) {
+  const numericValue = typeof value === 'string' ? parseFloat(value) : value
+  const isPercent = typeof value === 'string' && value.includes('%')
+
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5 flex items-start gap-4 shadow-sm hover:shadow-md transition-shadow group relative">
-      <div className={`p-3 rounded-lg ${color}`}>
-        <Icon size={22} className="text-white" />
-      </div>
-      <div>
-        <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">{label}</p>
-        <p className="text-2xl font-bold text-gray-800 mt-0.5">{value}</p>
-        {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+    <div
+      className="kpi-card relative overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-md hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 p-5 group"
+      style={{ borderLeft: `4px solid ${gradient.accent}` }}
+    >
+      <div className="flex items-start gap-4">
+        <div
+          className="kpi-icon p-3 rounded-xl shadow-md flex-shrink-0"
+          style={{ background: `linear-gradient(135deg, ${gradient.from}, ${gradient.to})` }}
+        >
+          <Icon size={22} className="text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] text-gray-400 font-semibold uppercase tracking-widest">{label}</p>
+          {!isNaN(numericValue) ? (
+            <AnimatedNumber
+              value={numericValue}
+              suffix={isPercent ? '%' : ''}
+              decimals={isPercent ? 1 : 0}
+              className="text-3xl font-extrabold text-gray-800 mt-1 block"
+            />
+          ) : (
+            <p className="text-3xl font-extrabold text-gray-800 mt-1">{value}</p>
+          )}
+          {sub && <p className="text-[11px] text-gray-400 mt-1.5 truncate">{sub}</p>}
+        </div>
       </div>
       {tooltip && (
         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-gray-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-64 z-50 shadow-lg">
@@ -64,24 +98,47 @@ function KPICard({
           <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-800" />
         </div>
       )}
+      {/* Decorative gradient blob */}
+      <div
+        className="absolute -top-6 -right-6 w-24 h-24 rounded-full opacity-[0.04]"
+        style={{ background: gradient.accent }}
+      />
     </div>
   )
 }
 
 function SectionTitle({ title }: { title: string }) {
   return (
-    <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
-      {title}
-    </h2>
+    <div className="section-title flex items-center gap-3 mb-5">
+      <div className="w-1 h-6 rounded-full bg-gradient-to-b from-[#1A5276] to-[#2E86C1]" />
+      <h2 className="text-sm font-bold text-gray-600 uppercase tracking-widest">{title}</h2>
+      <div className="flex-1 h-px bg-gradient-to-r from-gray-200 to-transparent" />
+    </div>
   )
 }
 
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
-      <h3 className="text-sm font-semibold text-gray-700 mb-4">{title}</h3>
+    <div className="chart-card bg-white rounded-2xl border border-gray-100 shadow-md hover:shadow-lg transition-all duration-300 p-6">
+      <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-5 flex items-center gap-2">
+        <span className="w-2 h-2 rounded-full bg-[#2E86C1] flex-shrink-0" />
+        {title}
+      </h3>
       {children}
     </div>
+  )
+}
+
+function CustomYAxisTick({ x, y, payload, maxChars = 18 }: { x: number; y: number; payload: { value: string }; maxChars?: number }) {
+  const text = payload.value || ''
+  const display = text.length > maxChars ? text.slice(0, maxChars) + '...' : text
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <title>{text}</title>
+      <text x={-6} y={0} dy={4} textAnchor="end" fontSize={10} fill="#6b7280">
+        {display}
+      </text>
+    </g>
   )
 }
 
@@ -92,6 +149,7 @@ function LoadingChart() {
     </div>
   )
 }
+
 
 export default function Dashboard() {
   const qc = useQueryClient()
@@ -192,14 +250,30 @@ export default function Dashboard() {
   const aiProviders = aiProvidersQ.data
   const tokenMetrics = tokenMetricsQ.data
 
+  /* GSAP entrance animations */
+  const dashRef = useRef<HTMLDivElement>(null)
+  const animatedRef = useRef(false)
+
+  useEffect(() => {
+    if (!kpisQ.isLoading && !chartsQ.isLoading && !animatedRef.current && dashRef.current) {
+      animatedRef.current = true
+      const ctx = gsap.context(() => {
+        gsap.from('.kpi-card', { y: 16, duration: 0.4, stagger: 0.06, ease: 'power2.out' })
+        gsap.from('.kpi-icon', { scale: 0.7, duration: 0.3, stagger: 0.06, ease: 'back.out(1.7)', delay: 0.1 })
+      }, dashRef)
+      return () => ctx.revert()
+    }
+  }, [kpisQ.isLoading, chartsQ.isLoading])
+
   return (
-    <div className="p-6 space-y-8">
+    <div ref={dashRef} className="p-6 space-y-8">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-800">Dashboard</h1>
-        <p className="text-sm text-gray-500 mt-1">
+      <div className="mb-8">
+        <h1 className="text-2xl font-extrabold text-gray-800 tracking-tight">Dashboard</h1>
+        <p className="text-sm text-gray-400 mt-1">
           Gobernacion de Santander — Gestion de Tutelas 2026
         </p>
+        <div className="w-16 h-1 rounded-full bg-gradient-to-r from-[#1A5276] to-[#2E86C1] mt-3" />
       </div>
 
       {/* Control Panel */}
@@ -208,7 +282,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
 
           {/* Gmail Monitor — Solo manual */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="control-card bg-white rounded-2xl border border-gray-100 shadow-md hover:shadow-lg transition-all duration-300 p-5">
             <div className="flex items-center gap-2 mb-3">
               <Mail size={18} className="text-blue-600" />
               <h3 className="text-sm font-semibold text-gray-700">Revisar Gmail</h3>
@@ -241,7 +315,7 @@ export default function Dashboard() {
           </div>
 
           {/* Extraction Manual - All Pending */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="control-card bg-white rounded-2xl border border-gray-100 shadow-md hover:shadow-lg transition-all duration-300 p-5">
             <div className="flex items-center gap-2 mb-3">
               <Cpu size={18} className="text-purple-600" />
               <h3 className="text-sm font-semibold text-gray-700">Extraccion IA</h3>
@@ -284,7 +358,7 @@ export default function Dashboard() {
           </div>
 
           {/* Download Excel */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="control-card bg-white rounded-2xl border border-gray-100 shadow-md hover:shadow-lg transition-all duration-300 p-5">
             <div className="flex items-center gap-2 mb-3">
               <Download size={18} className="text-green-600" />
               <h3 className="text-sm font-semibold text-gray-700">Corte Excel</h3>
@@ -307,7 +381,7 @@ export default function Dashboard() {
           </div>
 
           {/* Status */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="control-card bg-white rounded-2xl border border-gray-100 shadow-md hover:shadow-lg transition-all duration-300 p-5">
             <div className="flex items-center gap-2 mb-3">
               <FileText size={18} className="text-[#1A5276]" />
               <h3 className="text-sm font-semibold text-gray-700">Flujo de Trabajo</h3>
@@ -340,7 +414,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
           {/* Provider Selector */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="control-card bg-white rounded-2xl border border-gray-100 shadow-md p-5">
             <h3 className="text-sm font-semibold text-gray-700 mb-3">Modelo de IA Activo</h3>
             <div className="space-y-2">
               {(aiProviders?.providers ?? []).map((p: {
@@ -382,7 +456,7 @@ export default function Dashboard() {
           </div>
 
           {/* Token Totals + By Provider */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="control-card bg-white rounded-2xl border border-gray-100 shadow-md p-5">
             <h3 className="text-sm font-semibold text-gray-700 mb-3">Consumo de Tokens</h3>
             {tokenMetrics?.totals && tokenMetrics.totals.total_calls > 0 ? (
               <div className="space-y-3">
@@ -438,7 +512,7 @@ export default function Dashboard() {
           </div>
 
           {/* Recent Calls */}
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="control-card bg-white rounded-2xl border border-gray-100 shadow-md p-5">
             <h3 className="text-sm font-semibold text-gray-700 mb-3">Historial de Llamadas</h3>
             {(tokenMetrics?.recent_calls ?? []).length === 0 ? (
               <p className="text-xs text-gray-400 text-center py-4">Sin llamadas registradas</p>
@@ -489,7 +563,7 @@ export default function Dashboard() {
 
       {/* Quality Panel */}
       {kpis?.calidad && (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+        <div className="chart-card bg-white rounded-2xl border border-gray-100 shadow-md p-5">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-gray-700">Confiabilidad de Datos</h3>
             <span className={`text-2xl font-bold ${
@@ -523,10 +597,10 @@ export default function Dashboard() {
       {/* KPI Cards */}
       <div>
         <SectionTitle title="Resumen General" />
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
           {kpisQ.isLoading ? (
             Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="bg-white rounded-xl border border-gray-200 p-5 animate-pulse h-24" />
+              <div key={i} className="bg-white rounded-2xl border border-gray-100 p-5 animate-pulse h-24" />
             ))
           ) : kpisQ.isError ? (
             <div className="col-span-4 flex items-center gap-2 text-red-500 text-sm">
@@ -539,7 +613,7 @@ export default function Dashboard() {
                 icon={FileText}
                 label="Tutelas Unicas"
                 value={kpis?.tutelas_unicas ?? kpis?.total ?? 0}
-                color="bg-[#1A5276]"
+                gradient={KPI_GRADIENTS.tutelas}
                 sub={`${kpis?.total ?? 0} carpetas total (${kpis?.total_incidentes ?? 0} incidentes)`}
                 tooltip="Cuenta solo tutelas base, excluyendo incidentes de desacato que tienen carpeta separada"
               />
@@ -547,7 +621,7 @@ export default function Dashboard() {
                 icon={CheckCircle}
                 label="Activos"
                 value={kpis?.activos ?? 0}
-                color="bg-amber-500"
+                gradient={KPI_GRADIENTS.activos}
                 sub="En tramite"
                 tooltip="Casos con campo ESTADO = ACTIVO. Incluye tutelas e incidentes que aun no han finalizado"
               />
@@ -555,7 +629,7 @@ export default function Dashboard() {
                 icon={XCircle}
                 label="Inactivos"
                 value={kpis?.inactivos ?? 0}
-                color="bg-green-600"
+                gradient={KPI_GRADIENTS.inactivos}
                 sub="Finalizados"
                 tooltip="Casos con campo ESTADO = INACTIVO. Tutelas con fallo ejecutoriado o proceso terminado"
               />
@@ -563,44 +637,58 @@ export default function Dashboard() {
                 icon={BarChart2}
                 label="Completitud"
                 value={`${kpis?.completitud ?? 0}%`}
-                color="bg-[#2E86C1]"
+                gradient={KPI_GRADIENTS.completitud}
                 sub={`${kpis?.campos_llenos ?? 0} campos completos`}
-                tooltip="Porcentaje de campos con datos vs total de campos posibles (36 campos x N casos)"
+                tooltip="Porcentaje de campos con datos vs total de campos posibles (36 campos x N casos). Solo incluye casos con mas del 20% de datos"
               />
               <KPICard
                 icon={Scale}
                 label="Desfavorables"
                 value={kpis?.favorabilidad?.desfavorable ?? kpis?.concede ?? 0}
-                color="bg-red-500"
+                gradient={KPI_GRADIENTS.desfavorables}
                 sub={`${kpis?.favorabilidad?.modificado ?? 0} modificados`}
-                tooltip="Fallo definitivo DESFAVORABLE para la Gobernacion. Si hay 2da instancia que REVOCA un CONCEDE, se cuenta como FAVORABLE. Incluye CONCEDE confirmados y sin impugnacion"
+                tooltip="Fallo definitivo DESFAVORABLE para la Gobernacion. Si hay 2da instancia que REVOCA un CONCEDE, se cuenta como FAVORABLE"
               />
               <KPICard
                 icon={Shield}
                 label="Favorables"
                 value={kpis?.favorabilidad?.favorable ?? kpis?.niega ?? 0}
-                color="bg-green-500"
+                gradient={KPI_GRADIENTS.favorables}
                 sub={`${kpis?.favorabilidad?.improcedente ?? 0} improcedentes`}
-                tooltip="Fallo definitivo FAVORABLE. Incluye: NIEGA + IMPROCEDENTE + REVOCADOS en 2da instancia (el juez de 2da revoco el fallo desfavorable)"
+                tooltip="Fallo definitivo FAVORABLE. Incluye: NIEGA + IMPROCEDENTE + REVOCADOS en 2da instancia"
               />
               <KPICard
                 icon={TrendingUp}
                 label="Impugnaciones"
                 value={kpis?.con_impugnacion ?? 0}
-                color="bg-orange-500"
+                gradient={KPI_GRADIENTS.impugnaciones}
                 sub={`${kpis?.impugnaciones_resueltas ?? 0} resueltas, ${kpis?.impugnaciones_pendientes ?? 0} pendientes`}
               />
               <KPICard
                 icon={Gavel}
                 label="Desacatos"
                 value={kpis?.con_incidente ?? 0}
-                color="bg-purple-600"
+                gradient={KPI_GRADIENTS.desacatos}
                 sub={`${kpis?.desacatos?.SANCIONADO ?? 0} sancionados, ${kpis?.desacatos?.PENDIENTE ?? 0} pendientes`}
                 tooltip={`Sancionados: ${kpis?.desacatos?.SANCIONADO ?? 0} | En consulta: ${kpis?.desacatos?.['EN CONSULTA'] ?? 0} | En tramite: ${kpis?.desacatos?.['EN TRÁMITE'] ?? 0} | Cumplidos: ${kpis?.desacatos?.CUMPLIDO ?? 0} | Archivados: ${kpis?.desacatos?.ARCHIVADO ?? 0} | Pendientes: ${kpis?.desacatos?.PENDIENTE ?? 0}`}
               />
             </>
           )}
         </div>
+        {/* Excluded cases info banner */}
+        {kpis?.casos_excluidos && kpis.casos_excluidos.total_excluidos > 0 && (
+          <div className="flex items-center gap-2 mt-3 px-1 text-xs text-gray-400 group relative">
+            <Info size={13} className="flex-shrink-0" />
+            <span>{kpis.casos_excluidos.total_excluidos} casos excluidos del analisis (pendientes revision, sin datos, o completitud &lt;20%)</span>
+            <div className="absolute bottom-full left-0 mb-2 px-3 py-2 bg-gray-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none w-72 z-50 shadow-lg">
+              <p>Pendiente revision: {kpis.casos_excluidos.pendiente_revision}</p>
+              <p>Pendiente identificacion: {kpis.casos_excluidos.pendiente_identificacion}</p>
+              <p>Sin datos basicos: {kpis.casos_excluidos.sin_datos_basicos}</p>
+              <p>Baja completitud (&lt;20%): {kpis.casos_excluidos.baja_completitud}</p>
+              <div className="absolute top-full left-4 border-4 border-transparent border-t-gray-800" />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Charts Row 1 */}
@@ -610,15 +698,16 @@ export default function Dashboard() {
           {/* By Month */}
           <ChartCard title="Casos por Mes">
             {chartsQ.isLoading ? <LoadingChart /> : (
-              <ResponsiveContainer width="100%" height={210}>
+              <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={charts?.by_month ?? []} margin={{ top: 0, right: 10, left: -20, bottom: 0 }}>
+
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip
-                    contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }}
+                    contentStyle={{ borderRadius: '10px', fontSize: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
                   />
-                  <Bar dataKey="count" fill={CHART_PRIMARY} radius={[4, 4, 0, 0]} name="Casos" />
+                  <Bar dataKey="count" fill="#1A5276" radius={[6, 6, 0, 0]} name="Casos" />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -627,21 +716,29 @@ export default function Dashboard() {
           {/* By Favorabilidad Real */}
           <ChartCard title="Favorabilidad Real (con 2da instancia)">
             {chartsQ.isLoading ? <LoadingChart /> : (
-              <ResponsiveContainer width="100%" height={210}>
+              <ResponsiveContainer width="100%" height={260}>
                 <PieChart>
                   <Pie
                     data={charts?.by_favorabilidad ?? charts?.by_fallo ?? []}
                     cx="50%"
-                    cy="50%"
+                    cy="45%"
                     innerRadius={55}
-                    outerRadius={85}
+                    outerRadius={90}
                     paddingAngle={3}
                     dataKey="count"
                     nameKey="fallo"
-                    label={({ fallo, percent }) =>
-                      `${fallo} ${(percent * 100).toFixed(0)}%`
-                    }
-                    labelLine={false}
+                    label={({ fallo, percent, cx, midAngle, outerRadius: or }) => {
+                      const RADIAN = Math.PI / 180
+                      const radius = or + 22
+                      const x = cx + radius * Math.cos(-midAngle * RADIAN)
+                      const y = cx + radius * Math.sin(-midAngle * RADIAN)
+                      return (
+                        <text x={x} y={y} textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={10} fill="#4b5563">
+                          {fallo} {(percent * 100).toFixed(0)}%
+                        </text>
+                      )
+                    }}
+                    labelLine={true}
                   >
                     {(charts?.by_favorabilidad ?? charts?.by_fallo ?? []).map((entry: { fallo: string }) => (
                       <Cell
@@ -651,12 +748,12 @@ export default function Dashboard() {
                     ))}
                   </Pie>
                   <Tooltip
-                    contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }}
-                    formatter={(val, name) => [val, name]}
+                    contentStyle={{ borderRadius: '10px', fontSize: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
+                    formatter={(val: number, name: string) => [val, name]}
                   />
                   <Legend
-                    formatter={(value) => (
-                      <span style={{ fontSize: '12px', color: '#374151' }}>{value}</span>
+                    formatter={(value: string) => (
+                      <span style={{ fontSize: '11px', color: '#374151' }}>{value}</span>
                     )}
                   />
                 </PieChart>
@@ -671,24 +768,23 @@ export default function Dashboard() {
         {/* By City */}
         <ChartCard title="Top 10 Ciudades">
           {chartsQ.isLoading ? <LoadingChart /> : (
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveContainer width="100%" height={340}>
               <BarChart
                 data={charts?.by_city ?? []}
                 layout="vertical"
-                margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                margin={{ top: 5, right: 30, left: 5, bottom: 5 }}
               >
+
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis type="number" tick={{ fontSize: 11 }} />
                 <YAxis
                   type="category"
                   dataKey="ciudad"
-                  tick={{ fontSize: 9 }}
-                  width={120}
+                  tick={<CustomYAxisTick maxChars={18} x={0} y={0} payload={{ value: '' }} />}
+                  width={140}
                 />
-                <Tooltip
-                  contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }}
-                />
-                <Bar dataKey="count" fill={CHART_SECONDARY} radius={[0, 4, 4, 0]} name="Casos" />
+                <Tooltip contentStyle={{ borderRadius: '10px', fontSize: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }} />
+                <Bar dataKey="count" fill="#2E86C1" radius={[0, 6, 6, 0]} name="Casos" />
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -697,24 +793,23 @@ export default function Dashboard() {
         {/* By Lawyer */}
         <ChartCard title="Top 10 Abogados">
           {chartsQ.isLoading ? <LoadingChart /> : (
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveContainer width="100%" height={340}>
               <BarChart
                 data={charts?.by_lawyer ?? []}
                 layout="vertical"
-                margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                margin={{ top: 5, right: 30, left: 5, bottom: 5 }}
               >
+
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis type="number" tick={{ fontSize: 11 }} />
                 <YAxis
                   type="category"
                   dataKey="abogado"
-                  tick={{ fontSize: 9 }}
-                  width={140}
+                  tick={<CustomYAxisTick maxChars={22} x={0} y={0} payload={{ value: '' }} />}
+                  width={160}
                 />
-                <Tooltip
-                  contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }}
-                />
-                <Bar dataKey="count" fill={CHART_PRIMARY} radius={[0, 4, 4, 0]} name="Casos" />
+                <Tooltip contentStyle={{ borderRadius: '10px', fontSize: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }} />
+                <Bar dataKey="count" fill="#1A5276" radius={[0, 6, 6, 0]} name="Casos" />
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -728,17 +823,18 @@ export default function Dashboard() {
           {/* Derechos Vulnerados */}
           <ChartCard title="Top 10 Derechos Vulnerados">
             {chartsQ.isLoading ? <LoadingChart /> : (
-              <ResponsiveContainer width="100%" height={300}>
+              <ResponsiveContainer width="100%" height={340}>
                 <BarChart
                   data={charts?.by_derecho ?? []}
                   layout="vertical"
-                  margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                  margin={{ top: 5, right: 30, left: 5, bottom: 5 }}
                 >
+
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis type="number" tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="derecho" tick={{ fontSize: 9 }} width={120} />
-                  <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }} />
-                  <Bar dataKey="count" fill="#6366f1" radius={[0, 4, 4, 0]} name="Casos" />
+                  <YAxis type="category" dataKey="derecho" tick={<CustomYAxisTick maxChars={20} x={0} y={0} payload={{ value: '' }} />} width={150} />
+                  <Tooltip contentStyle={{ borderRadius: '10px', fontSize: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }} />
+                  <Bar dataKey="count" fill="#6366f1" radius={[0, 6, 6, 0]} name="Casos" />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -747,17 +843,18 @@ export default function Dashboard() {
           {/* Fallos Desfavorables por Derecho */}
           <ChartCard title="Fallos Desfavorables por Materia (CONCEDE)">
             {chartsQ.isLoading ? <LoadingChart /> : (
-              <ResponsiveContainer width="100%" height={300}>
+              <ResponsiveContainer width="100%" height={340}>
                 <BarChart
                   data={charts?.by_desfavorable ?? []}
                   layout="vertical"
-                  margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                  margin={{ top: 5, right: 30, left: 5, bottom: 5 }}
                 >
+
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis type="number" tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="derecho" tick={{ fontSize: 9 }} width={120} />
-                  <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }} />
-                  <Bar dataKey="count" fill="#ef4444" radius={[0, 4, 4, 0]} name="Fallos desfavorables" />
+                  <YAxis type="category" dataKey="derecho" tick={<CustomYAxisTick maxChars={20} x={0} y={0} payload={{ value: '' }} />} width={150} />
+                  <Tooltip contentStyle={{ borderRadius: '10px', fontSize: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }} />
+                  <Bar dataKey="count" fill="#ef4444" radius={[0, 6, 6, 0]} name="Fallos desfavorables" />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -769,17 +866,18 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <ChartCard title="Casos por Oficina Responsable">
           {chartsQ.isLoading ? <LoadingChart /> : (
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveContainer width="100%" height={340}>
               <BarChart
                 data={charts?.by_oficina ?? []}
                 layout="vertical"
-                margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                margin={{ top: 5, right: 30, left: 5, bottom: 5 }}
               >
+
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis type="number" tick={{ fontSize: 11 }} />
-                <YAxis type="category" dataKey="oficina" tick={{ fontSize: 8 }} width={160} />
-                <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }} />
-                <Bar dataKey="count" fill="#10b981" radius={[0, 4, 4, 0]} name="Casos" />
+                <YAxis type="category" dataKey="oficina" tick={<CustomYAxisTick maxChars={24} x={0} y={0} payload={{ value: '' }} />} width={180} />
+                <Tooltip contentStyle={{ borderRadius: '10px', fontSize: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }} />
+                <Bar dataKey="count" fill="#10b981" radius={[0, 6, 6, 0]} name="Casos" />
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -788,17 +886,18 @@ export default function Dashboard() {
         {/* Desacatos categorizados */}
         <ChartCard title="Estado de Incidentes de Desacato">
           {chartsQ.isLoading ? <LoadingChart /> : (
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveContainer width="100%" height={340}>
               <BarChart
                 data={charts?.by_desacato ?? []}
                 layout="vertical"
-                margin={{ top: 5, right: 20, left: 10, bottom: 5 }}
+                margin={{ top: 5, right: 30, left: 5, bottom: 5 }}
               >
+
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis type="number" tick={{ fontSize: 11 }} />
-                <YAxis type="category" dataKey="estado" tick={{ fontSize: 10 }} width={100} />
-                <Tooltip contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }} />
-                <Bar dataKey="count" fill="#8b5cf6" radius={[0, 4, 4, 0]} name="Incidentes" />
+                <YAxis type="category" dataKey="estado" tick={<CustomYAxisTick maxChars={16} x={0} y={0} payload={{ value: '' }} />} width={120} />
+                <Tooltip contentStyle={{ borderRadius: '10px', fontSize: '12px', border: '1px solid #e5e7eb', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }} />
+                <Bar dataKey="count" fill="#8b5cf6" radius={[0, 6, 6, 0]} name="Incidentes" />
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -808,7 +907,7 @@ export default function Dashboard() {
       {/* Recent Activity */}
       <div>
         <SectionTitle title="Actividad Reciente" />
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-md overflow-hidden">
           {activityQ.isLoading ? (
             <div className="divide-y divide-gray-100">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -854,7 +953,7 @@ export default function Dashboard() {
                   'bg-gray-100 text-gray-500'
 
                 return (
-                  <div key={item.id} className="flex items-start gap-4 px-5 py-3 hover:bg-gray-50 transition-colors">
+                  <div key={item.id} className="activity-item flex items-start gap-4 px-5 py-3 hover:bg-gray-50/80 transition-colors even:bg-gray-50/40">
                     <div className={`mt-0.5 p-1.5 rounded-full flex-shrink-0 ${typeColor}`}>
                       {typeIcon}
                     </div>

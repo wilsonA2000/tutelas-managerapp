@@ -204,7 +204,7 @@ export default function SettingsPage() {
           {[
             { label: 'Entidad', value: 'Gobernacion de Santander' },
             { label: 'Modulo', value: 'Gestion de Tutelas 2026' },
-            { label: 'Version', value: '2.0.0' },
+            { label: 'Version', value: '4.0' },
             { label: 'Backend', value: 'FastAPI + Python 3.10 + SQLAlchemy' },
             { label: 'Frontend', value: 'React 19 + Vite + Tailwind CSS v4' },
             { label: 'Base de datos', value: 'SQLite (local)' },

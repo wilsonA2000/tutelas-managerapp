@@ -105,7 +105,7 @@ export default function AgentChat() {
   }
 
   return (
-    <div className="fixed bottom-0 right-0 z-50 w-full sm:w-[480px] sm:bottom-4 sm:right-4 flex flex-col bg-white border border-gray-200 rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden" style={{ height: '560px' }}>
+    <div data-testid="agent-chat-panel" className="fixed bottom-0 right-0 z-50 w-full sm:w-[480px] sm:bottom-4 sm:right-4 flex flex-col bg-white border border-gray-200 rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden" style={{ height: '560px' }}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-[#1A5276] to-[#154360] text-white flex-shrink-0">
         <div className="flex items-center gap-2">
@@ -114,7 +114,7 @@ export default function AgentChat() {
           </div>
           <div>
             <span className="font-semibold text-sm">Agente Juridico IA</span>
-            <span className="text-[10px] text-white/60 ml-2">14 herramientas</span>
+            <span className="text-[10px] text-white/60 ml-2">15 herramientas</span>
           </div>
         </div>
         <div className="flex items-center gap-1">

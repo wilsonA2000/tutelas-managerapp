@@ -2,6 +2,11 @@
 
 from backend.agent.extractors.base import FieldExtractor, ExtractionResult
 from backend.agent.extractors.radicado import RadicadoExtractor, RadicadoCortoExtractor
+from backend.agent.extractors.campos import (
+    FechaExtractor, JuzgadoExtractor, CiudadExtractor,
+    ImpugnacionExtractor, IncidenteExtractor,
+    SentidoFalloExtractor, AccionanteExtractor,
+)
 from backend.agent.forest_extractor import extract_forest_from_sources, ForestResult
 
 
@@ -9,6 +14,18 @@ from backend.agent.forest_extractor import extract_forest_from_sources, ForestRe
 _EXTRACTORS: dict[str, FieldExtractor] = {
     "radicado_23_digitos": RadicadoExtractor(),
     "radicado_corto": RadicadoCortoExtractor(),
+    # --- Extractores IR (Fase 2) ---
+    "accionante": AccionanteExtractor(),
+    "juzgado": JuzgadoExtractor(),
+    "ciudad": CiudadExtractor(),
+    "fecha_ingreso": FechaExtractor("fecha_ingreso", ["PDF_AUTO_ADMISORIO"]),
+    "fecha_fallo_1st": FechaExtractor("fecha_fallo_1st", ["PDF_SENTENCIA"]),
+    "fecha_fallo_2nd": FechaExtractor("fecha_fallo_2nd", ["PDF_IMPUGNACION"]),
+    "fecha_respuesta": FechaExtractor("fecha_respuesta", ["DOCX_RESPUESTA", "DOCX_CONTESTACION"]),
+    "impugnacion": ImpugnacionExtractor(),
+    "incidente": IncidenteExtractor(),
+    "sentido_fallo_1st": SentidoFalloExtractor("sentido_fallo_1st", ["PDF_SENTENCIA"]),
+    "sentido_fallo_2nd": SentidoFalloExtractor("sentido_fallo_2nd", ["PDF_IMPUGNACION"]),
 }
 
 # Fields where AI is preferred over regex

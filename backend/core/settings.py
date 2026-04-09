@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     NORMALIZER_USE_MARKER: bool = False  # Requiere ~2GB de modelos ML
     NORMALIZER_USE_PADDLEOCR: bool = True  # Reemplaza Tesseract para español
 
+    # Unified Extractor (IR-based)
+    UNIFIED_EXTRACTOR_ENABLED: bool = True  # True = usar extractor unificado IR
+
     # CSV
     CSV_DELIMITER: str = ";"
     CSV_COLUMNS: list[str] = [

@@ -101,7 +101,7 @@ export default function Login() {
           </form>
 
           <p className="text-center text-xs text-gray-400 mt-6">
-            Agente Juridico IA v3.0
+            Agente Juridico IA v4.0
           </p>
         </div>
       </div>

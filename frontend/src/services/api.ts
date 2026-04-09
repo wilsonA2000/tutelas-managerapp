@@ -146,6 +146,9 @@ export const syncFolders = () =>
 export const getSyncStatus = () =>
   api.get('/sync/status').then(r => r.data);
 
+export const cancelSync = () =>
+  api.post('/sync/cancel').then(r => r.data);
+
 // Seguimiento
 export const getSeguimiento = (params?: Record<string, string>) =>
   api.get('/seguimiento', { params }).then(r => r.data);

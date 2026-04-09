@@ -230,7 +230,19 @@ export default function Seguimiento() {
                           )}
                         </div>
                       ) : (
-                        <span className="text-xs text-gray-400">Sin plazo</span>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[10px] text-gray-400 italic">Pendiente de extraccion</span>
+                          {!item.orden_judicial && (
+                            <button
+                              onClick={() => extractMut.mutate(item.id)}
+                              disabled={extractMut.isPending}
+                              className="flex items-center gap-1 text-[10px] text-purple-600 hover:text-purple-800 font-medium"
+                            >
+                              <Cpu size={10} />
+                              Extraer plazo
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
 

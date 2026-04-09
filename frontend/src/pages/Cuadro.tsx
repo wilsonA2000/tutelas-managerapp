@@ -278,10 +278,10 @@ export default function Cuadro() {
                   return (
                     <td key={col.key}
                       onClick={() => col.editable !== false && startEdit(row.id as number, col.key, val)}
-                      className={`px-1 py-1 truncate cursor-pointer border-r border-gray-100 ${isEmpty ? 'bg-red-50' : ''}`}
+                      className={`px-1 py-1 truncate cursor-pointer border-r border-gray-100 ${isEmpty ? 'bg-gray-50/50' : ''}`}
                       style={{ width: col.width, maxWidth: col.width }}
                       title={val || 'Vacío — click para editar'}>
-                      {val || <span className="text-red-300 text-[8px]">---</span>}
+                      {val || <span className="text-gray-300 text-[8px]">---</span>}
                     </td>
                   )
                 })}

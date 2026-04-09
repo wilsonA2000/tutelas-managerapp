@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, X, CheckCircle, AlertTriangle } from 'lucide-react'
 import {
   getSyncStatus, getCheckInboxStatus, getExtractionProgress,
-  stopExtraction, cancelCheckInbox,
+  stopExtraction, cancelCheckInbox, cancelSync,
 } from '../services/api'
 
 interface ProcessInfo {
@@ -14,7 +14,7 @@ interface ProcessInfo {
 }
 
 const PROCESSES: ProcessInfo[] = [
-  { key: 'sync', label: 'Sincronizando Carpetas', statusFn: getSyncStatus },
+  { key: 'sync', label: 'Sincronizando Carpetas', statusFn: getSyncStatus, cancelFn: cancelSync },
   { key: 'gmail', label: 'Revisando Gmail', statusFn: getCheckInboxStatus, cancelFn: cancelCheckInbox },
   { key: 'extraction', label: 'Extraccion IA', statusFn: getExtractionProgress, cancelFn: stopExtraction },
 ]
@@ -43,7 +43,11 @@ function ProcessTracker({ process }: { process: ProcessInfo }) {
   const total = (data.total as number) || 0
   const success = (data.success as number) || (data.emails_found as number) || 0
   const errors = (data.errors as number) || 0
-  const pct = total > 0 ? Math.round((current / total) * 100) : 0
+  const docsVerified = (data.docs_verified as number) || 0
+  const docsTotal = (data.docs_total as number) || 0
+  // Usar progress_pct del backend si disponible (sync v4), sino calcular de current/total
+  const backendPct = data.progress_pct as number | undefined
+  const pct = backendPct != null ? backendPct : (total > 0 ? Math.round((current / total) * 100) : 0)
 
   return (
     <div className="mb-4 last:mb-0">
@@ -68,10 +72,11 @@ function ProcessTracker({ process }: { process: ProcessInfo }) {
             <span>{current} de {total}</span>
             <span className="font-bold text-white text-sm">{pct}%</span>
           </div>
-          {(success > 0 || errors > 0) && (
+          {(success > 0 || errors > 0 || docsVerified > 0) && (
             <div className="flex gap-3 mt-1 text-xs text-white/50">
               {success > 0 && <span className="text-green-300">{success} exitosos</span>}
               {errors > 0 && <span className="text-red-300">{errors} errores</span>}
+              {docsVerified > 0 && <span className="text-blue-300">{docsVerified}{docsTotal > 0 ? `/${docsTotal}` : ''} docs</span>}
             </div>
           )}
         </>

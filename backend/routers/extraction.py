@@ -11,6 +11,7 @@ from backend.database.database import get_db, SessionLocal
 from backend.database.models import Case
 from backend.services.extraction_service import get_review_queue
 from backend.extraction.pipeline import process_folder
+from backend.core.settings import settings
 
 router = APIRouter(prefix="/api/extraction", tags=["extraction"])
 
@@ -88,10 +89,13 @@ def _run_extraction_cases(case_ids: list[int]):
             _main.extraction_progress["case_name"] = case.folder_name or f"ID {cid}"
 
             try:
-                stats = process_folder(db, case)
-                if stats.get("ai_error"):
+                if settings.UNIFIED_EXTRACTOR_ENABLED:
+                    from backend.extraction.unified import unified_extract
+                    stats = unified_extract(db, case, settings.BASE_DIR)
+                else:
+                    stats = process_folder(db, case)
+                if stats.get("ai_error") and case.processing_status != "COMPLETO":
                     _main.extraction_progress["errors"] += 1
-                    # Recovery: forzar status REVISION para que sea reintentable
                     case.processing_status = "REVISION"
                     db.commit()
                 else:
@@ -143,7 +147,11 @@ def api_extract_single(case_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     try:
-        stats = process_folder(db, case)
+        if settings.UNIFIED_EXTRACTOR_ENABLED:
+            from backend.extraction.unified import unified_extract
+            stats = unified_extract(db, case, settings.BASE_DIR)
+        else:
+            stats = process_folder(db, case)
         elapsed = int(time.time() - start)
         db.refresh(case)
 
@@ -164,6 +172,7 @@ def api_extract_single(case_id: int, db: Session = Depends(get_db)):
             "corrections_injected": stats.get("corrections_injected", 0),
             "elapsed_seconds": elapsed,
             "tokens": _get_token_usage(db, case_id),
+            "method": stats.get("method", "pipeline"),
         }
     except Exception as e:
         return {
@@ -285,27 +294,25 @@ def api_review_queue(db: Session = Depends(get_db)):
 
 @router.get("/mismatched-docs")
 def api_mismatched_docs(db: Session = Depends(get_db)):
-    """Documentos que no corresponden al caso (detectados por verificacion de dos pasos).
-    Solo muestra alertas de documentos que AÚN EXISTEN en la DB."""
+    """Documentos que no corresponden al caso. Optimizado v4.0: 1 JOIN query."""
     from backend.database.models import AuditLog, Document
-    from pathlib import Path
 
-    logs = db.query(AuditLog).filter(AuditLog.action == "DOC_NO_CORRESPONDE").all()
+    # UNA query con JOIN — en vez de N+1
+    results = db.query(AuditLog, Document, Case).outerjoin(
+        Document, (Document.case_id == AuditLog.case_id) & (Document.filename == AuditLog.old_value),
+    ).join(
+        Case, Case.id == AuditLog.case_id,
+    ).filter(
+        AuditLog.action == "DOC_NO_CORRESPONDE",
+    ).all()
+
     items = []
     resolved = 0
-    for log in logs:
-        # Verificar si el documento aún existe en la DB y en disco
-        doc = db.query(Document).filter(
-            Document.case_id == log.case_id,
-            Document.filename == log.old_value,
-        ).first()
-        if not doc or (doc.file_path and not Path(doc.file_path).exists()):
-            # Documento eliminado o ya no existe — resolver automáticamente
+    for log, doc, case in results:
+        if not doc:
             log.action = "DOC_NO_CORRESPONDE_RESUELTO"
             resolved += 1
             continue
-
-        case = db.query(Case).filter(Case.id == log.case_id).first()
         items.append({
             "id": log.id,
             "case_id": log.case_id,
@@ -384,15 +391,17 @@ def api_full_audit(db: Session = Depends(get_db)):
     # 3. Carpetas vacías
     vacias = [fn for fn, info in disk_folders.items() if info["count"] == 0]
 
-    # 4. Sin accionante
-    sin_acc = [{"id": c.id, "folder": c.folder_name} for c in db.query(Case).filter(
+    # 4. Sin accionante — query directa con filtro SQL (no cargar todos)
+    sin_acc = [{"id": c.id, "folder": c.folder_name} for c in db.query(Case.id, Case.folder_name).filter(
         Case.folder_name.isnot(None), Case.folder_name != "None",
-    ).all() if not (c.accionante or "").strip() or c.accionante == "None"]
+        or_(Case.accionante.is_(None), Case.accionante == "", Case.accionante == "None"),
+    ).all()]
 
-    # 5. Sin radicado 23
-    sin_rad = [{"id": c.id, "folder": c.folder_name} for c in db.query(Case).filter(
+    # 5. Sin radicado 23 — query directa con filtro SQL
+    sin_rad = [{"id": c.id, "folder": c.folder_name} for c in db.query(Case.id, Case.folder_name).filter(
         Case.folder_name.isnot(None), Case.folder_name != "None",
-    ).all() if not (c.radicado_23_digitos or "").strip() or c.radicado_23_digitos == "None"]
+        or_(Case.radicado_23_digitos.is_(None), Case.radicado_23_digitos == "", Case.radicado_23_digitos == "None"),
+    ).all()]
 
     # 6. Emails sin caso
     emails_sin_caso = db.query(Email).filter(Email.case_id.is_(None)).count()
@@ -436,23 +445,18 @@ def api_duplicate_docs(db: Session = Depends(get_db)):
 
 @router.get("/suspicious-docs")
 def api_suspicious_docs(db: Session = Depends(get_db)):
-    """Documentos sospechosos o que no pertenecen a su carpeta.
-    Auto-resuelve los que ya fueron eliminados del disco."""
+    """Documentos sospechosos o que no pertenecen. Optimizado v4.0: 1 JOIN query."""
     from backend.database.models import Document
-    from pathlib import Path
-    docs = db.query(Document).filter(
-        Document.verificacion.in_(["SOSPECHOSO", "NO_PERTENECE"])
+
+    # UNA query con JOIN — en vez de N+1
+    results = db.query(Document, Case).join(
+        Case, Case.id == Document.case_id,
+    ).filter(
+        Document.verificacion.in_(["SOSPECHOSO", "NO_PERTENECE"]),
     ).all()
+
     items = []
-    cleaned = 0
-    for doc in docs:
-        # Si el archivo ya no existe en disco, resolver automáticamente
-        if doc.file_path and not Path(doc.file_path).exists():
-            doc.verificacion = "OK"
-            doc.verificacion_detalle = "Auto-resuelto: archivo eliminado del disco"
-            cleaned += 1
-            continue
-        case = db.query(Case).filter(Case.id == doc.case_id).first()
+    for doc, case in results:
         items.append({
             "doc_id": doc.id,
             "case_id": doc.case_id,
@@ -461,8 +465,6 @@ def api_suspicious_docs(db: Session = Depends(get_db)):
             "verificacion": doc.verificacion,
             "detalle": doc.verificacion_detalle,
         })
-    if cleaned > 0:
-        db.commit()
     return items
 
 

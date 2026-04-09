@@ -24,16 +24,16 @@ class Case(Base):
     vinculados = Column(Text)
     derecho_vulnerado = Column(String)
     juzgado = Column(String)
-    ciudad = Column(String)
+    ciudad = Column(String, index=True)
     fecha_ingreso = Column(String)
     asunto = Column(Text)
     pretensiones = Column(Text)
     oficina_responsable = Column(String)
     estado = Column(String, index=True)  # ACTIVO / INACTIVO
     fecha_respuesta = Column(String)
-    sentido_fallo_1st = Column(String)  # CONCEDE / NIEGA / IMPROCEDENTE
+    sentido_fallo_1st = Column(String, index=True)  # CONCEDE / NIEGA / IMPROCEDENTE
     fecha_fallo_1st = Column(String)
-    impugnacion = Column(String)  # SI / NO
+    impugnacion = Column(String, index=True)  # SI / NO
     quien_impugno = Column(String)
     forest_impugnacion = Column(String)
     juzgado_2nd = Column(String)
@@ -59,7 +59,7 @@ class Case(Base):
     # --- Metadata ---
     folder_name = Column(String, unique=True, index=True)
     folder_path = Column(String)
-    processing_status = Column(String, default="PENDIENTE")  # PENDIENTE / EXTRAYENDO / REVISION / COMPLETO
+    processing_status = Column(String, default="PENDIENTE", index=True)  # PENDIENTE / EXTRAYENDO / REVISION / COMPLETO
     tipo_actuacion = Column(String, default="TUTELA")  # TUTELA / INCIDENTE
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -142,7 +142,7 @@ class Document(Base):
     file_size = Column(Integer)
     extraction_date = Column(DateTime)
 
-    verificacion = Column(String, default="")  # '' / OK / SOSPECHOSO / NO_PERTENECE
+    verificacion = Column(String, default="", index=True)  # '' / OK / SOSPECHOSO / NO_PERTENECE
     verificacion_detalle = Column(String, default="")
     file_hash = Column(String, default="")  # MD5 hash para detectar duplicados
 
@@ -176,7 +176,7 @@ class Extraction(Base):
     case_id = Column(Integer, ForeignKey("cases.id"), nullable=False, index=True)
     field_name = Column(String, nullable=False)  # Nombre del campo (ej: RADICADO_23_DIGITOS)
     extracted_value = Column(Text)
-    confidence = Column(String, default="MEDIA")  # ALTA / MEDIA / BAJA
+    confidence = Column(String, default="MEDIA", index=True)  # ALTA / MEDIA / BAJA
     source_page = Column(Integer)
     raw_context = Column(Text)  # Texto circundante para verificacion
     extraction_method = Column(String)  # regex / ai_groq / manual
@@ -226,7 +226,7 @@ class AuditLog(Base):
     field_name = Column(String)
     old_value = Column(Text)
     new_value = Column(Text)
-    action = Column(String)  # CREAR / ACTUALIZAR / AI_EXTRAER / EDICION_MANUAL / IMPORT_EMAIL / IMPORT_CSV
+    action = Column(String, index=True)  # CREAR / ACTUALIZAR / AI_EXTRAER / EDICION_MANUAL / IMPORT_EMAIL / IMPORT_CSV
     source = Column(String)  # Quien/que hizo el cambio
     timestamp = Column(DateTime, default=datetime.utcnow)
 

@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 # Cargar .env para que os.getenv() funcione en todos los contextos
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
+import logging
+_logger = logging.getLogger("tutelas.extraction")
+
 
 # ============================================================
 # Configuracion de proveedores
@@ -376,6 +379,12 @@ def _call_google(messages: list[dict], model: str, max_tokens: int = 4096) -> tu
             response_mime_type="application/json",
             temperature=0.1,
             max_output_tokens=max_tokens,
+            safety_settings=[
+                genai.types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"),
+                genai.types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
+                genai.types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"),
+                genai.types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"),
+            ],
         ),
     )
     text = response.text
@@ -660,6 +669,12 @@ Analiza TODOS los documentos (PDFs adjuntos + texto) y extrae los 28 campos. Res
                         response_mime_type="application/json",
                         temperature=0.1,
                         max_output_tokens=model_config.get("max_tokens", 16384),
+                        safety_settings=[
+                            genai.types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"),
+                            genai.types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
+                            genai.types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"),
+                            genai.types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"),
+                        ],
                     ),
                 )
                 raw = response.text
@@ -691,18 +706,12 @@ Analiza TODOS los documentos (PDFs adjuntos + texto) y extrae los 28 campos. Res
         )
 
     except json.JSONDecodeError as e:
-        return AIExtractionResult(
-            raw_response=raw if raw else "",
-            error=f"Error parseando JSON de IA: {e}",
-            provider=provider, model=model,
-            tokens_input=total_input,
-            tokens_output=total_output,
-        )
+        _logger.warning("Multimodal JSON vacio/invalido (%d chars): %s. Fallback a ruta texto.",
+                        len(raw) if raw else 0, e)
+        return None  # extract_with_ai() hace fallback a ruta texto (DeepSeek/Groq)
     except Exception as e:
-        return AIExtractionResult(
-            error=f"Error multimodal {provider}/{model}: {e}",
-            provider=provider, model=model,
-        )
+        _logger.warning("Error multimodal %s/%s: %s. Fallback a ruta texto.", provider, model, e)
+        return None  # Misma estrategia: fallback a texto
     finally:
         # Limpiar archivos temporales y uploads de Gemini
         for tmp in temp_files:
@@ -773,7 +782,14 @@ def extract_with_ai(
         )
         if result is not None:
             return result
-        # Si retorna None, fallback a texto
+        # Multimodal fallo: cambiar a proveedor texto (evitar Google en rate limit)
+        from backend.agent.smart_router import route as _route_fb
+        _fb = _route_fb("extraction")
+        if _fb and _fb.provider != "google":
+            provider = _fb.provider
+            model = _fb.model
+            model_config = PROVIDERS.get(provider, {}).get("models", {}).get(model, {})
+            _logger.info("Multimodal fallo, redirigiendo a %s/%s para ruta texto", provider, model)
 
     # RUTA TEXTO: Para otros proveedores o fallback
     KEY_PATTERNS = {
@@ -843,14 +859,9 @@ Analiza TODOS los documentos y extrae los 28 campos. Responde SOLO con el JSON. 
             duration_ms=duration_ms, chunks_used=1,
         )
 
-    except json.JSONDecodeError as e:
-        return AIExtractionResult(
-            raw_response=raw if 'raw' in dir() else "",
-            error=f"Error parseando JSON de IA: {e}",
-            provider=provider, model=model,
-        )
     except Exception as e:
         # Fallback: usar proveedor alternativo (primero el del Smart Router, luego re-rutar)
+        _logger.warning("Extraccion texto fallo con %s/%s: %s. Intentando fallback...", provider, model, str(e)[:100])
         try:
             fb_prov = _fallback_provider
             fb_mod = _fallback_model
@@ -860,14 +871,13 @@ Analiza TODOS los documentos y extrae los 28 campos. Responde SOLO con el JSON. 
                 fb_prov = _fb_decision.provider
                 fb_mod = _fb_decision.model
             if fb_prov and fb_prov != provider:
-                import logging
-                logging.getLogger("tutelas.extraction").warning(
-                    f"Proveedor {provider}/{model} fallo ({e}). Fallback a {fb_prov}/{fb_mod}"
-                )
+                _logger.warning("Fallback: %s/%s → %s/%s", provider, model, fb_prov, fb_mod)
                 fb_caller = _CALLERS.get(fb_prov)
                 if fb_caller:
                     start_fb = time.time()
-                    raw_fb, inp_fb, out_fb = _call_with_retry(fb_prov, messages, fb_mod, model_config.get("max_tokens", 4096))
+                    fb_config = PROVIDERS.get(fb_prov, {}).get("models", {}).get(fb_mod, {})
+                    fb_max_tokens = fb_config.get("max_tokens", 4096)
+                    raw_fb, inp_fb, out_fb = _call_with_retry(fb_prov, messages, fb_mod, fb_max_tokens)
                     dur_fb = int((time.time() - start_fb) * 1000)
                     fb_fields = _parse_ai_json(raw_fb)
                     return AIExtractionResult(

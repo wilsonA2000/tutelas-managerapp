@@ -23,37 +23,47 @@ def extract_single(db: Session, case_id: int) -> dict:
 
 
 def get_review_queue(db: Session) -> list[dict]:
-    """Obtener casos que necesitan revision (pendientes, baja confianza o campos vacios)."""
+    """Obtener casos que necesitan revision. Optimizado v4.0: 3 queries en vez de 1+2N."""
+    from sqlalchemy.orm import selectinload
+    from sqlalchemy import func
+
+    # QUERY 1: Casos con eager load de documentos (evita N lazy loads)
     cases = db.query(Case).filter(
         Case.processing_status.in_(["REVISION", "PENDIENTE"]),
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+    ).options(selectinload(Case.documents)).all()
+
+    if not cases:
+        return []
+
+    # QUERY 2: Batch — todas las extractions BAJA de estos casos en 1 query
+    case_ids = [c.id for c in cases]
+    low_conf_rows = db.query(
+        Extraction.case_id, Extraction.field_name,
+    ).filter(
+        Extraction.case_id.in_(case_ids),
+        Extraction.confidence == "BAJA",
     ).all()
 
+    # Agrupar por case_id
+    low_conf_map: dict[int, list[str]] = {}
+    for row in low_conf_rows:
+        low_conf_map.setdefault(row.case_id, []).append(row.field_name)
+
+    # Construir respuesta sin queries adicionales
     queue = []
     for case in cases:
-        low_confidence = db.query(Extraction).filter(
-            Extraction.case_id == case.id,
-            Extraction.confidence == "BAJA",
-        ).all()
-
-        empty_fields = []
-        for csv_col, attr in Case.CSV_FIELD_MAP.items():
-            if not getattr(case, attr):
-                empty_fields.append(csv_col)
-
-        # Contar docs con alertas de verificacion
-        docs_no_pertenece = sum(1 for d in case.documents if d.verificacion == "NO_PERTENECE")
-        docs_sospechosos = sum(1 for d in case.documents if d.verificacion == "SOSPECHOSO")
-
+        empty_fields = [csv_col for csv_col, attr in Case.CSV_FIELD_MAP.items() if not getattr(case, attr)]
+        docs = case.documents  # Ya cargados por selectinload
         queue.append({
             "case_id": case.id,
             "folder_name": case.folder_name,
             "accionante": case.accionante or "",
-            "low_confidence_fields": [e.field_name for e in low_confidence],
+            "low_confidence_fields": low_conf_map.get(case.id, []),
             "empty_fields": empty_fields,
-            "document_count": len(case.documents),
-            "docs_no_pertenece": docs_no_pertenece,
-            "docs_sospechosos": docs_sospechosos,
+            "document_count": len(docs),
+            "docs_no_pertenece": sum(1 for d in docs if d.verificacion == "NO_PERTENECE"),
+            "docs_sospechosos": sum(1 for d in docs if d.verificacion == "SOSPECHOSO"),
         })
 
     return queue

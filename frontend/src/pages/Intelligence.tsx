@@ -280,7 +280,7 @@ export default function Intelligence() {
 
           {prediction && (
             <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-              <div className="flex items-center gap-3 mb-2">
+              <div className="flex items-center gap-3 mb-3">
                 <span className={`text-2xl font-bold ${
                   prediction.prediction === 'CONCEDE' ? 'text-red-600' :
                   prediction.prediction === 'NIEGA' ? 'text-green-600' :
@@ -288,9 +288,24 @@ export default function Intelligence() {
                 }`}>
                   {prediction.prediction}
                 </span>
-                <span className="text-sm text-gray-500">
-                  ({prediction.confidence}% confianza, {prediction.sample_size} casos)
-                </span>
+                <div className="flex-1 max-w-[200px]">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-gray-500">Confianza</span>
+                    <span className={`text-xs font-bold ${
+                      prediction.confidence >= 60 ? 'text-green-600' :
+                      prediction.confidence >= 35 ? 'text-amber-600' :
+                      'text-red-500'
+                    }`}>{prediction.confidence}%</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div className={`h-2 rounded-full transition-all ${
+                      prediction.confidence >= 60 ? 'bg-green-500' :
+                      prediction.confidence >= 35 ? 'bg-amber-500' :
+                      'bg-red-400'
+                    }`} style={{ width: `${Math.min(prediction.confidence, 100)}%` }} />
+                  </div>
+                </div>
+                <span className="text-xs text-gray-400">{prediction.sample_size} casos</span>
               </div>
               <p className="text-sm text-gray-600">{prediction.message}</p>
               {prediction.breakdown && (

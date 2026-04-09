@@ -473,8 +473,44 @@ def api_sync_status():
     return {"in_progress": sync_in_progress, **sync_result}
 
 
-def _run_sync_background():
-    """Ejecutar sincronizacion en background."""
+def _run_sync_background(force: bool = False):
+    """Ejecutar sincronizacion en background usando sync_service optimizado."""
+    global sync_in_progress, sync_result
+    from pathlib import Path
+    from backend.config import BASE_DIR
+    from backend.services.sync_service import run_sync
+
+    try:
+        db = SessionLocal()
+        sync_result = {
+            "step": "Iniciando...", "current": 0, "total": 7,
+            "docs_added": 0, "cases_fixed": 0, "paths_fixed": 0,
+            "new_cases": 0, "docs_verified": 0, "docs_moved": 0,
+            "docs_suspicious": 0, "progress_pct": 0, "docs_total": 0,
+        }
+
+        run_sync(
+            db=db,
+            base_dir=BASE_DIR,
+            result=sync_result,
+            is_running_fn=lambda: sync_in_progress,
+            force=force,
+        )
+
+        add_monitor_log(sync_result.get("step", "Sync completa"))
+    except Exception as e:
+        sync_result["step"] = f"Error: {str(e)[:80]}"
+    finally:
+        sync_in_progress = False
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+def _run_sync_background_LEGACY():
+    """[DEPRECATED] Sync anterior — mantener para rollback.
+    Usar _run_sync_background() con sync_service.py."""
     global sync_in_progress, sync_result
     from pathlib import Path
     from backend.config import BASE_DIR
@@ -483,7 +519,6 @@ def _run_sync_background():
     from backend.services.backup_service import auto_backup
 
     try:
-        # Backup automatico antes de sync
         auto_backup("pre_sync")
 
         db = SessionLocal()
@@ -679,8 +714,8 @@ def _run_sync_background():
 
 
 @app.post("/api/sync")
-def api_sync_folders():
-    """Lanzar sincronizacion en background."""
+def api_sync_folders(force: bool = False):
+    """Lanzar sincronizacion en background. force=true ignora fingerprint."""
     global sync_in_progress, sync_result
     import threading
 
@@ -688,9 +723,19 @@ def api_sync_folders():
         return {"status": "running", "message": "Sincronizacion en progreso"}
 
     sync_in_progress = True
-    sync_result = {"step": "Iniciando...", "docs_added": 0, "cases_fixed": 0, "paths_fixed": 0, "new_cases": 0}
-    threading.Thread(target=_run_sync_background, daemon=True).start()
+    sync_result = {"step": "Iniciando...", "docs_added": 0, "cases_fixed": 0, "paths_fixed": 0, "new_cases": 0, "progress_pct": 0}
+    threading.Thread(target=_run_sync_background, args=(force,), daemon=True).start()
     return {"status": "started", "message": "Sincronizacion iniciada"}
+
+
+@app.post("/api/sync/cancel")
+def api_sync_cancel():
+    """Cancelar sincronizacion en progreso."""
+    global sync_in_progress
+    if sync_in_progress:
+        sync_in_progress = False
+        return {"status": "cancelling", "message": "Cancelando sincronizacion..."}
+    return {"status": "not_running", "message": "No hay sincronizacion en progreso"}
 
 
 @app.get("/api/settings/status")

@@ -1,14 +1,19 @@
 """Logica de negocio para casos de tutela."""
 
+import time
 from datetime import datetime
 from sqlalchemy.orm import Session, subqueryload
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, case as sql_case
 
 from backend.database.models import Case, Document, AuditLog
 from backend.services.normalizer import (
     normalize_abogado, normalize_ciudad, categorize_decision_incidente,
     get_fallo_definitivo, group_by_normalized,
 )
+
+# Cache de KPIs (60 segundos)
+_kpi_cache: dict = {"data": None, "ts": 0}
+KPI_CACHE_TTL = 60
 
 
 def list_cases(
@@ -122,78 +127,152 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
     return get_case(db, case_id)
 
 
-def _real_cases_filter():
-    """Filtro para excluir casos fantasma (sin carpeta real)."""
-    return [Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != ""]
+MIN_COMPLETITUD_PERCENT = 20.0
+
+
+def _real_cases_filter(valid_ids: set | None = None):
+    """Filtro para excluir casos fantasma (sin carpeta real) y opcionalmente por IDs validos."""
+    filters = [Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != ""]
+    if valid_ids is not None:
+        filters.append(Case.id.in_(valid_ids))
+    return filters
+
+
+def _get_case_completitud(case: Case) -> float:
+    """Calcular completitud de un caso individual."""
+    filled = 0
+    for attr in Case.CSV_FIELD_MAP.values():
+        val = getattr(case, attr) or ""
+        if str(val).strip():
+            filled += 1
+    return round(filled / len(Case.CSV_FIELD_MAP) * 100, 1)
+
+
+def _get_valid_case_ids(db: Session, min_completitud: float = MIN_COMPLETITUD_PERCENT):
+    """Obtener IDs de casos confiables para metricas del dashboard.
+
+    Excluye: carpetas PENDIENTE REVISION/IDENTIFICACION, sin accionante+radicado,
+    y casos con completitud menor al umbral.
+    """
+    base_filters = [Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != ""]
+    all_cases = db.query(Case).filter(*base_filters).all()
+
+    valid_ids = set()
+    exclusions = {
+        "pendiente_revision": 0,
+        "pendiente_identificacion": 0,
+        "sin_datos_basicos": 0,
+        "baja_completitud": 0,
+    }
+
+    for c in all_cases:
+        fname = c.folder_name or ""
+
+        if "[PENDIENTE REVISION]" in fname:
+            exclusions["pendiente_revision"] += 1
+            continue
+        if "[PENDIENTE IDENTIFICACION]" in fname:
+            exclusions["pendiente_identificacion"] += 1
+            continue
+
+        accionante = (c.accionante or "").strip()
+        radicado = (c.radicado_23_digitos or "").strip()
+        if not accionante and not radicado:
+            exclusions["sin_datos_basicos"] += 1
+            continue
+
+        compl = _get_case_completitud(c)
+        if compl < min_completitud:
+            exclusions["baja_completitud"] += 1
+            continue
+
+        valid_ids.add(c.id)
+
+    exclusions["total_excluidos"] = sum(v for k, v in exclusions.items() if k != "total_excluidos")
+    return valid_ids, exclusions
 
 
 def get_dashboard_kpis(db: Session) -> dict:
-    """Calcular KPIs para el dashboard (excluye casos fantasma, métricas inteligentes)."""
-    base = db.query(Case).filter(*_real_cases_filter())
-    all_cases = base.all()
-    total = len(all_cases)
+    """Calcular KPIs para el dashboard con SQL aggregation + cache 60s.
 
-    activos = sum(1 for c in all_cases if (c.estado or "").upper() == "ACTIVO")
-    inactivos = sum(1 for c in all_cases if (c.estado or "").upper() == "INACTIVO")
+    Optimizado v4.0: de ~40 queries a 3 queries + 1 iteracion.
+    """
+    # Cache check
+    if _kpi_cache["data"] and time.time() - _kpi_cache["ts"] < KPI_CACHE_TTL:
+        return _kpi_cache["data"]
 
-    # Favorabilidad REAL considerando 2da instancia
-    fallos = {"DESFAVORABLE": 0, "FAVORABLE": 0, "IMPROCEDENTE": 0, "MODIFICADO": 0,
-              "SIN FALLO": 0, "DESISTIMIENTO": 0, "OTRO": 0}
-    for c in all_cases:
-        fallo_def, _ = get_fallo_definitivo(c.sentido_fallo_1st, c.sentido_fallo_2nd)
-        fallos[fallo_def] = fallos.get(fallo_def, 0) + 1
+    valid_ids, exclusions = _get_valid_case_ids(db)
+    gf = _real_cases_filter(valid_ids)
 
-    # Impugnaciones: resueltas vs pendientes
-    con_impugnacion = sum(1 for c in all_cases if (c.impugnacion or "").upper() == "SI")
-    imp_con_fallo_2nd = sum(1 for c in all_cases
-                            if (c.impugnacion or "").upper() == "SI"
-                            and (c.sentido_fallo_2nd or "").strip())
-    imp_pendientes = con_impugnacion - imp_con_fallo_2nd
+    # QUERY 1: Aggregates principales en UNA sola query SQL
+    stats = db.query(
+        func.count(Case.id).label("total"),
+        func.sum(sql_case((func.upper(Case.estado) == "ACTIVO", 1), else_=0)).label("activos"),
+        func.sum(sql_case((func.upper(Case.estado) == "INACTIVO", 1), else_=0)).label("inactivos"),
+        func.sum(sql_case((func.upper(Case.impugnacion) == "SI", 1), else_=0)).label("con_impugnacion"),
+        func.sum(sql_case((func.upper(Case.incidente) == "SI", 1), else_=0)).label("con_incidente"),
+        func.sum(sql_case((Case.processing_status == "PENDIENTE", 1), else_=0)).label("pendientes"),
+        func.sum(sql_case((Case.processing_status == "COMPLETO", 1), else_=0)).label("completos"),
+        func.sum(sql_case((Case.tipo_actuacion == "INCIDENTE", 1), else_=0)).label("total_incidentes"),
+        # Fallo 1ra instancia
+        func.sum(sql_case((Case.sentido_fallo_1st.contains("CONCEDE"), 1), else_=0)).label("concede"),
+        func.sum(sql_case((Case.sentido_fallo_1st.contains("NIEGA"), 1), else_=0)).label("niega"),
+        func.sum(sql_case((Case.sentido_fallo_1st.contains("IMPROCEDENTE"), 1), else_=0)).label("improcedente"),
+        # Impugnaciones resueltas
+        func.sum(sql_case(
+            (func.upper(Case.impugnacion) == "SI", sql_case((Case.sentido_fallo_2nd.isnot(None), 1), else_=0)),
+            else_=0,
+        )).label("imp_resueltas"),
+    ).filter(*gf).first()
 
-    # Incidentes/desacatos categorizados
-    con_incidente = sum(1 for c in all_cases if (c.incidente or "").upper() == "SI")
-    desacatos_cat = {"SANCIONADO": 0, "EN CONSULTA": 0, "EN TRÁMITE": 0,
-                     "CUMPLIDO": 0, "ARCHIVADO": 0, "PENDIENTE": 0, "OTRO": 0}
-    for c in all_cases:
-        if (c.incidente or "").upper() == "SI":
-            cat = categorize_decision_incidente(c.decision_incidente, c.observaciones)
-            desacatos_cat[cat] = desacatos_cat.get(cat, 0) + 1
+    total = stats.total or 0
 
-    # Completitud
-    n_fields = len(Case.CSV_FIELD_MAP)
-    total_fields = total * n_fields
-    filled_fields = 0
-    gf = _real_cases_filter()
+    # QUERY 2: Completitud — contar campos llenos con CASE expressions en UNA query
+    field_counts = []
     for attr in Case.CSV_FIELD_MAP.values():
         col = getattr(Case, attr)
-        filled_fields += db.query(func.count(Case.id)).filter(
-            *gf, col.isnot(None), col != ""
-        ).scalar()
+        field_counts.append(func.sum(sql_case((col.isnot(None), sql_case((col != "", 1), else_=0)), else_=0)))
+
+    completitud_row = db.query(*field_counts).filter(*gf).first()
+    filled_fields = sum(v or 0 for v in completitud_row) if completitud_row else 0
+    n_fields = len(Case.CSV_FIELD_MAP)
+    total_fields = total * n_fields
     completitud = round(filled_fields / total_fields * 100, 1) if total_fields > 0 else 0
 
-    # Tipo de actuación
-    tutelas_unicas = sum(1 for c in all_cases if (c.tipo_actuacion or "TUTELA") == "TUTELA")
-    total_incidentes = sum(1 for c in all_cases if (c.tipo_actuacion or "") == "INCIDENTE")
+    # QUERY 3: Solo para favorabilidad real + desacatos (necesita logica Python)
+    # Cargar solo las columnas necesarias, no la fila completa
+    fallo_data = db.query(
+        Case.sentido_fallo_1st, Case.sentido_fallo_2nd,
+        Case.incidente, Case.decision_incidente, Case.observaciones,
+    ).filter(*gf).all()
 
-    # Fallo 1ra instancia (para compatibilidad)
-    concede = sum(1 for c in all_cases if "CONCEDE" in (c.sentido_fallo_1st or "").upper())
-    niega = sum(1 for c in all_cases if "NIEGA" in (c.sentido_fallo_1st or "").upper())
-    improcedente_count = sum(1 for c in all_cases if "IMPROCEDENTE" in (c.sentido_fallo_1st or "").upper())
+    fallos = {"DESFAVORABLE": 0, "FAVORABLE": 0, "IMPROCEDENTE": 0, "MODIFICADO": 0,
+              "SIN FALLO": 0, "DESISTIMIENTO": 0, "OTRO": 0}
+    desacatos_cat = {"SANCIONADO": 0, "EN CONSULTA": 0, "EN TRÁMITE": 0,
+                     "CUMPLIDO": 0, "ARCHIVADO": 0, "PENDIENTE": 0, "OTRO": 0}
+    for row in fallo_data:
+        fallo_def, _ = get_fallo_definitivo(row.sentido_fallo_1st, row.sentido_fallo_2nd)
+        fallos[fallo_def] = fallos.get(fallo_def, 0) + 1
+        if (row.incidente or "").upper() == "SI":
+            cat = categorize_decision_incidente(row.decision_incidente, row.observaciones)
+            desacatos_cat[cat] = desacatos_cat.get(cat, 0) + 1
 
-    return {
+    con_impugnacion = stats.con_impugnacion or 0
+    imp_resueltas = stats.imp_resueltas or 0
+    tutelas_unicas = total - (stats.total_incidentes or 0)
+
+    result = {
         "total": total,
         "total_casos": total,
         "tutelas_unicas": tutelas_unicas,
-        "total_incidentes": total_incidentes,
-        "activos": activos,
-        "inactivos": inactivos,
-        "sin_estado": total - activos - inactivos,
-        # Fallo 1ra instancia (simple)
-        "concede": concede,
-        "niega": niega,
-        "improcedente": improcedente_count,
+        "total_incidentes": stats.total_incidentes or 0,
+        "activos": stats.activos or 0,
+        "inactivos": stats.inactivos or 0,
+        "sin_estado": total - (stats.activos or 0) - (stats.inactivos or 0),
+        "concede": stats.concede or 0,
+        "niega": stats.niega or 0,
+        "improcedente": stats.improcedente or 0,
         "sin_fallo": fallos.get("SIN FALLO", 0),
-        # Favorabilidad REAL (considerando 2da instancia)
         "favorabilidad": {
             "desfavorable": fallos.get("DESFAVORABLE", 0),
             "favorable": fallos.get("FAVORABLE", 0),
@@ -203,29 +282,30 @@ def get_dashboard_kpis(db: Session) -> dict:
             "desistimiento": fallos.get("DESISTIMIENTO", 0),
             "tooltip": "Fallo definitivo: si hay 2da instancia que REVOCA, se considera favorable aunque en 1ra fue desfavorable",
         },
-        # Impugnaciones detalladas
         "con_impugnacion": con_impugnacion,
-        "impugnaciones_resueltas": imp_con_fallo_2nd,
-        "impugnaciones_pendientes": imp_pendientes,
-        # Incidentes detallados
-        "con_incidente": con_incidente,
+        "impugnaciones_resueltas": imp_resueltas,
+        "impugnaciones_pendientes": con_impugnacion - imp_resueltas,
+        "con_incidente": stats.con_incidente or 0,
         "desacatos": desacatos_cat,
-        # Procesamiento
-        "pendientes_extraccion": sum(1 for c in all_cases if c.processing_status == "PENDIENTE"),
-        "completos": sum(1 for c in all_cases if c.processing_status == "COMPLETO"),
+        "pendientes_extraccion": stats.pendientes or 0,
+        "completos": stats.completos or 0,
         "completitud": completitud,
         "completitud_campos": completitud,
         "campos_llenos": filled_fields,
-        # Calidad
-        "calidad": _get_quality_metrics(db),
+        "calidad": _get_quality_metrics(db, valid_ids),
+        "casos_excluidos": exclusions,
     }
 
+    _kpi_cache["data"] = result
+    _kpi_cache["ts"] = time.time()
+    return result
 
-def _get_quality_metrics(db: Session) -> dict:
+
+def _get_quality_metrics(db: Session, valid_ids: set | None = None) -> dict:
     """Calcular métricas de calidad y confiabilidad de datos."""
     from backend.database.models import Document, Extraction
 
-    gf = _real_cases_filter()
+    gf = _real_cases_filter(valid_ids)
 
     # Documentos verificados
     total_docs = db.query(func.count(Document.id)).join(Case).filter(*gf).scalar()
@@ -272,8 +352,9 @@ def _get_quality_metrics(db: Session) -> dict:
 
 
 def get_chart_data(db: Session) -> dict:
-    """Datos para graficos del dashboard (queries SQL optimizadas, excluye fantasma)."""
-    gf = _real_cases_filter()
+    """Datos para graficos del dashboard (excluye fantasma, pendientes y baja completitud)."""
+    valid_ids, _ = _get_valid_case_ids(db)
+    gf = _real_cases_filter(valid_ids)
 
     # Por ciudad — normalizar con normalize_ciudad()
     raw_cities = db.query(Case.ciudad, func.count(Case.id)).filter(
