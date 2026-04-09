@@ -530,6 +530,21 @@ def process_folder(db: Session, case: Case) -> dict:
     return stats
 
 
+def _sanitize_folder_name(name: str) -> str:
+    """Sanitizar nombre de carpeta para Windows/Linux."""
+    import re
+    # Quitar caracteres invalidos en Windows
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', name)
+    # Normalizar espacios
+    name = re.sub(r'\s+', ' ', name).strip()
+    # Quitar puntos/espacios al final (Windows los rechaza)
+    name = name.rstrip('. ')
+    # Limitar longitud a 200 chars
+    if len(name) > 200:
+        name = name[:200].rstrip('. ')
+    return name
+
+
 def _rename_folder_if_needed(db, case: Case, stats: dict):
     """Renombrar carpeta física si la IA encontró accionante y la carpeta no lo tiene."""
     import re
@@ -568,8 +583,7 @@ def _rename_folder_if_needed(db, case: Case, stats: dict):
     accionante = re.sub(r'[\n\r]', ' ', accionante)
     accionante = re.sub(r'\s+', ' ', accionante)
 
-    new_name = f"{rad_part} {accionante}"
-    new_name = re.sub(r'[<>:"/\\|?*]', '', new_name).strip()
+    new_name = _sanitize_folder_name(f"{rad_part} {accionante}")
 
     if new_name == current_name:
         return
@@ -578,7 +592,7 @@ def _rename_folder_if_needed(db, case: Case, stats: dict):
     from backend.config import BASE_DIR
     new_path = BASE_DIR / new_name
 
-    if new_path.exists() or not old_path.exists():
+    if not old_path.exists():
         return
 
     try:
@@ -592,8 +606,10 @@ def _rename_folder_if_needed(db, case: Case, stats: dict):
                 doc.file_path = doc.file_path.replace(str(old_path), str(new_path))
 
         stats["folder_renamed"] = new_name
-    except Exception:
-        pass  # Si falla el rename, no es crítico
+    except FileExistsError:
+        logger.warning("Rename abortado: ya existe '%s'", new_name)
+    except Exception as e:
+        logger.warning("Rename fallo: %s", str(e)[:80])
 
 
 def reextract_document(db: Session, doc: Document) -> tuple[str, str]:
@@ -943,7 +959,7 @@ def _auto_reassign_document(db, source_case: Case, doc: Document, detalle: str, 
 
     # 2. Si no encontró por rad23, buscar por radicado corto + accionante
     if not target_case:
-        m = re.search(r'Radicado\s+(20\d{2})[-\s]?0*(\d{2,5})', detalle)
+        m = re.search(r'(?:Radicado|RAD|Rad\.?\s*(?:No\.?)?)\s*:?\s*(20\d{2})[-\s]?0*(\d{2,5})', detalle)
         if m:
             target_year = m.group(1)
             target_seq = m.group(2).lstrip('0') or '0'
@@ -967,7 +983,9 @@ def _auto_reassign_document(db, source_case: Case, doc: Document, detalle: str, 
                         continue
                     acc_words = [w for w in _norm(c.accionante).split() if len(w) >= 4]
                     matches = sum(1 for w in acc_words[:4] if w in text_norm)
-                    if matches >= 2:
+                    # Threshold adaptivo: 1 match si nombre corto (<=2 palabras), 2 si largo
+                    threshold = 1 if len(acc_words) <= 2 else 2
+                    if matches >= threshold:
                         target_case = c
                         break
 
@@ -1076,8 +1094,18 @@ def verify_document_belongs(case: Case, doc: Document) -> tuple[str, str]:
     if filename.startswith("Email_") and filename.endswith(".md"):
         return "OK", "Email clasificado por Gmail"
 
-    # Sin texto = no se puede verificar, asumir OK
+    # Sin texto = verificar si es PDF encriptado
     if len(text) < 100:
+        if doc.file_path and doc.file_path.lower().endswith(".pdf"):
+            try:
+                import fitz
+                pdf = fitz.open(doc.file_path)
+                if pdf.is_encrypted:
+                    pdf.close()
+                    return "REVISAR", "PDF encriptado - no se puede verificar pertenencia"
+                pdf.close()
+            except Exception:
+                pass
         return "OK", "Documento sin texto suficiente"
 
     def _norm(s):
@@ -1146,10 +1174,11 @@ def verify_document_belongs(case: Case, doc: Document) -> tuple[str, str]:
     # === CRITERIO 5: RADICADO CORTO en texto ===
     rad_pattern = rf'{case_year}[-\s]?0*{case_seq}(?:\D|$)'
     if re.search(rad_pattern, text[:5000]):
-        # Tiene radicado corto → pero si hay radicado 23d diferente, no es confiable
         if not rads_23_in_doc:
+            # Radicado corto sin confirmación 23d — ambiguo
+            if case_rad23:
+                return "REVISAR", f"Solo radicado corto {case_year}-{case_seq} (sin confirmacion 23d)"
             return "OK", f"Radicado {case_year}-{case_seq} en texto"
-        # Si tiene rad23 diferente ya se catcheó arriba
 
     # === Si llegamos aquí, NO encontramos referencia directa al caso ===
     # Buscar si tiene radicados cortos de OTRO caso

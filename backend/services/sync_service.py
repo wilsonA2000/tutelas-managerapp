@@ -389,4 +389,20 @@ def run_sync(db: Session, base_dir: Path, result: dict, is_running_fn, force: bo
 
     result["step"] = f"Listo: {', '.join(parts)}" if parts else "Listo: sin cambios"
     result["progress_pct"] = 100
+
+    # Indexar nuevos docs en Knowledge Base (incremental)
+    if docs_added > 0:
+        try:
+            from backend.knowledge.indexer import index_document
+            for case in all_cases:
+                for doc in case.documents:
+                    if doc.extracted_text and len(doc.extracted_text) > 100:
+                        try:
+                            index_document(db, case.id, doc.filename, doc.extracted_text)
+                        except Exception:
+                            pass  # KB indexing no es critico
+            logger.info("KB: indexacion incremental post-sync completada")
+        except Exception as e:
+            logger.debug("KB indexing skipped: %s", e)
+
     logger.info("Sync completa: %s", result["step"])

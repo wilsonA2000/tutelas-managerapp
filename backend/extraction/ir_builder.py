@@ -365,14 +365,18 @@ def _build_docx_ir(file_path: str, doc_type: str) -> DocumentIR:
                 zone_type="PARTIES", text=text, spans=[span], confidence=0.80,
             ))
 
-    # Footers — aqui esta el abogado
+    # Footers — aqui esta el abogado (regular + first_page + even_page)
+    footer_texts = set()
     for section in doc.sections:
-        if section.footer and section.footer.paragraphs:
-            footer_text = " ".join(p.text for p in section.footer.paragraphs if p.text.strip())
-            if footer_text.strip():
-                zones.append(DocumentZone(
-                    zone_type="FOOTER", text=footer_text, confidence=0.95,
-                ))
+        for footer_attr in ("footer", "first_page_footer", "even_page_footer"):
+            footer = getattr(section, footer_attr, None)
+            if footer and hasattr(footer, "paragraphs"):
+                ft = " ".join(p.text for p in footer.paragraphs if p.text.strip())
+                if ft.strip() and ft not in footer_texts:
+                    footer_texts.add(ft)
+                    zones.append(DocumentZone(
+                        zone_type="FOOTER", text=ft, confidence=0.95,
+                    ))
 
     # Tablas
     tables = []
