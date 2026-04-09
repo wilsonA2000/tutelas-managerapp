@@ -146,7 +146,14 @@ class Document(Base):
     verificacion_detalle = Column(String, default="")
     file_hash = Column(String, default="")  # MD5 hash para detectar duplicados
 
+    # v4.8 Provenance: vinculo inmutable al email de origen (si viene de Gmail).
+    # Garantiza que hermanos (mismo email_id) viajen juntos al mover entre casos.
+    # NULL = doc legacy o ingestado por sync de carpeta (no vino por Gmail).
+    email_id = Column(Integer, ForeignKey("emails.id"), nullable=True, index=True)
+    email_message_id = Column(String, nullable=True, index=True)  # gmail message_id para backfill/debug
+
     case = relationship("Case", back_populates="documents")
+    email = relationship("Email", back_populates="documents")
     extractions = relationship("Extraction", back_populates="document", cascade="all, delete-orphan")
 
     def to_dict(self):
@@ -202,6 +209,9 @@ class Email(Base):
     processed_at = Column(DateTime)
 
     case = relationship("Case", back_populates="emails")
+    # v4.8 Provenance: reverso del vinculo inmutable. Un Email tiene N Documents hijos
+    # (body.md + adjuntos) que siempre viajan juntos al reasignar a otro caso.
+    documents = relationship("Document", back_populates="email")
 
     def to_dict(self):
         return {

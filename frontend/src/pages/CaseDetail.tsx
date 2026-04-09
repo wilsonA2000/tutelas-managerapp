@@ -4,9 +4,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import {
   ArrowLeft, Save, FileText, ExternalLink, Loader2,
-  AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2,
+  AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package,
 } from 'lucide-react'
-import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk } from '../services/api'
+import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages } from '../services/api'
 
 // ─── Field Definitions ──────────────────────────────────────────────────────
 
@@ -584,20 +584,137 @@ function ResizablePanels({
         }`} />
       </div>
 
-      {/* RIGHT — Documentos */}
+      {/* RIGHT — Documentos / Correos (v4.8 Provenance) */}
       <div className="flex flex-col min-h-0 min-w-0 border-l border-gray-200" style={{ width: `${100 - dividerX}%` }}>
-        <div className="flex-shrink-0 px-4 py-3 bg-gray-50 border-b border-gray-200">
-          <div className="flex items-center gap-2">
-            <FileText size={15} className="text-[#1A5276]" />
-            <h2 className="text-sm font-semibold text-gray-700">
-              Documentos ({docs.length})
-            </h2>
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          <DocumentPanel docs={docs} onDeleteDoc={onDeleteDoc} />
+        <RightPanelWithTabs caseId={caseData.id} docs={docs} onDeleteDoc={onDeleteDoc} />
+      </div>
+    </div>
+  )
+}
+
+// ─── Right Panel con tabs: Documentos / Correos (v4.8) ─────────────────────
+
+function RightPanelWithTabs({ caseId, docs, onDeleteDoc }: {
+  caseId: number
+  docs: Array<{ id: number; filename: string; doc_type: string; verificacion?: string; verificacion_detalle?: string }>
+  onDeleteDoc: (docId: number, filename: string) => void
+}) {
+  const [tab, setTab] = useState<'docs' | 'emails'>('docs')
+
+  const packagesQ = useQuery({
+    queryKey: ['case-email-packages', caseId],
+    queryFn: () => getCaseEmailPackages(caseId),
+    enabled: tab === 'emails',
+  })
+
+  return (
+    <>
+      <div className="flex-shrink-0 bg-gray-50 border-b border-gray-200">
+        <div className="flex">
+          <button
+            onClick={() => setTab('docs')}
+            className={`flex-1 px-4 py-3 text-sm font-semibold flex items-center justify-center gap-2 border-b-2 transition-colors ${
+              tab === 'docs'
+                ? 'border-[#1A5276] text-[#1A5276] bg-white'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <FileText size={15} />
+            Documentos ({docs.length})
+          </button>
+          <button
+            onClick={() => setTab('emails')}
+            className={`flex-1 px-4 py-3 text-sm font-semibold flex items-center justify-center gap-2 border-b-2 transition-colors ${
+              tab === 'emails'
+                ? 'border-indigo-600 text-indigo-700 bg-white'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Mail size={15} />
+            Correos
+            {packagesQ.data && packagesQ.data.packages_count > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                {packagesQ.data.packages_count}
+              </span>
+            )}
+          </button>
         </div>
       </div>
+      <div className="flex-1 overflow-y-auto">
+        {tab === 'docs' ? (
+          <DocumentPanel docs={docs} onDeleteDoc={onDeleteDoc} />
+        ) : (
+          <EmailPackagesTimeline query={packagesQ} />
+        )}
+      </div>
+    </>
+  )
+}
+
+function EmailPackagesTimeline({ query }: { query: any }) {
+  if (query.isLoading) {
+    return (
+      <div className="p-6 flex items-center justify-center text-gray-400">
+        <Loader2 className="animate-spin" size={16} />
+        <span className="ml-2 text-xs">Cargando paquetes...</span>
+      </div>
+    )
+  }
+  if (query.isError) {
+    return (
+      <div className="p-4 text-xs text-red-600">Error al cargar paquetes email</div>
+    )
+  }
+  const data = query.data
+  if (!data || data.packages_count === 0) {
+    return (
+      <div className="p-6 text-center text-gray-400">
+        <Mail size={32} className="mx-auto mb-2 text-gray-300" />
+        <p className="text-xs">Sin paquetes email vinculados</p>
+        <p className="text-[10px] mt-1 text-gray-400">
+          Este caso no tiene correos con documents vinculados (v4.8 Provenance).
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-4 space-y-3">
+      <p className="text-[11px] text-gray-500 mb-2">
+        {data.packages_count} {data.packages_count === 1 ? 'correo vinculado' : 'correos vinculados'} — cada uno es un paquete inmutable (body + adjuntos).
+      </p>
+      {data.packages.map((pkg: any) => (
+        <div key={pkg.email_id} className="bg-white border border-indigo-100 rounded-lg shadow-sm hover:border-indigo-300 transition-colors">
+          <div className="px-3 py-2 bg-indigo-50 border-b border-indigo-100 rounded-t-lg">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <Package size={13} className="text-indigo-600 shrink-0" />
+                <div className="text-xs font-semibold text-indigo-900 truncate">
+                  {pkg.subject || '(Sin asunto)'}
+                </div>
+              </div>
+              <span className="text-[10px] text-indigo-600 shrink-0 font-medium">
+                {pkg.document_count} {pkg.document_count === 1 ? 'doc' : 'docs'}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center gap-2 text-[10px] text-gray-500">
+              <span className="truncate max-w-[160px]">{pkg.sender}</span>
+              {pkg.date_received && (
+                <span>· {new Date(pkg.date_received).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' })}</span>
+              )}
+            </div>
+          </div>
+          <div className="p-2 space-y-1">
+            {pkg.documents.map((doc: any) => (
+              <div key={doc.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50">
+                <FileText size={11} className="text-gray-400 shrink-0" />
+                <span className="text-[11px] text-gray-700 truncate flex-1">{doc.filename}</span>
+                <span className="text-[9px] text-gray-400 shrink-0">{doc.doc_type}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

@@ -95,6 +95,16 @@ export const getEmails = (params: Record<string, string | number>) =>
 export const getEmail = (id: number) =>
   api.get(`/emails/detail/${id}`).then(r => r.data);
 
+// v4.8 Provenance: paquete email inmutable (email + documents hijos)
+export const getEmailPackage = (id: number) =>
+  api.get(`/emails/${id}/package`).then(r => r.data);
+
+export const getCaseEmailPackages = (caseId: number) =>
+  api.get(`/cases/${caseId}/email-packages`).then(r => r.data);
+
+export const previewMoveDoc = (docId: number) =>
+  api.get(`/extraction/docs/${docId}/move-preview`).then(r => r.data);
+
 export const checkInbox = () =>
   api.post('/emails/check', {}, { timeout: 10000 }).then(r => r.data);
 

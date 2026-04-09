@@ -647,9 +647,17 @@ def api_mark_doc_ok(doc_id: int, db: Session = Depends(get_db)):
 
 @router.post("/docs/{doc_id}/move/{target_case_id}")
 def api_move_doc(doc_id: int, target_case_id: int, db: Session = Depends(get_db)):
-    """Mover un documento a otro caso (cambia case_id y mueve archivo en disco)."""
+    """Mover un documento a otro caso.
+
+    v4.8 Provenance: si el doc tiene email_id (vino por Gmail), se mueven
+    TAMBIEN todos sus hermanos del mismo paquete email. Regla "hermanos
+    viajan juntos" es absoluta — es imposible por diseño separar el cuerpo
+    de un correo de sus adjuntos.
+
+    Para docs legacy (sin email_id), solo se mueve el doc individual.
+    """
     from backend.database.models import Document
-    from pathlib import Path
+    from backend.services.sibling_mover import move_document_or_package
 
     doc = db.query(Document).filter(Document.id == doc_id).first()
     target = db.query(Case).filter(Case.id == target_case_id).first()
@@ -657,20 +665,38 @@ def api_move_doc(doc_id: int, target_case_id: int, db: Session = Depends(get_db)
         from fastapi import HTTPException
         raise HTTPException(status_code=404)
 
-    # Mover archivo en disco
-    if doc.file_path and target.folder_path:
-        old_path = Path(doc.file_path)
-        new_path = Path(target.folder_path) / doc.filename
-        if old_path.exists() and Path(target.folder_path).exists():
-            old_path.rename(new_path)
-            doc.file_path = str(new_path)
+    result = move_document_or_package(db, doc_id, target_case_id, reason="manual_ui_move")
+    if result.get("errors"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail="; ".join(result["errors"]))
 
-    old_case_id = doc.case_id
-    doc.case_id = target_case_id
-    doc.verificacion = "OK"
-    doc.verificacion_detalle = f"Movido desde caso {old_case_id}"
     db.commit()
-    return {"message": f"Documento movido a {target.folder_name}"}
+
+    if result["package_mode"]:
+        n = len(result["moved_ids"])
+        return {
+            "message": f"Paquete movido a {target.folder_name}: {n} documentos hermanos (email_id={result['email_id']})",
+            "package_mode": True,
+            "moved_ids": result["moved_ids"],
+        }
+    else:
+        return {
+            "message": f"Documento movido a {target.folder_name}",
+            "package_mode": False,
+            "moved_ids": result["moved_ids"],
+        }
+
+
+@router.get("/docs/{doc_id}/move-preview")
+def api_preview_move(doc_id: int, db: Session = Depends(get_db)):
+    """Preview de que pasaria al mover un doc (cuantos hermanos lo acompañan)."""
+    from backend.services.sibling_mover import preview_package_move
+
+    result = preview_package_move(db, doc_id)
+    if "error" in result:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
 
 @router.get("/docs/{doc_id}/suggest-target")

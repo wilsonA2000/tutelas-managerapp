@@ -64,6 +64,36 @@ def api_get_email(email_id: int, db: Session = Depends(get_db)):
     return data
 
 
+@router.get("/{email_id}/package")
+def api_get_email_package(email_id: int, db: Session = Depends(get_db)):
+    """v4.8 Provenance: obtener el paquete completo (email + todos sus documents hijos).
+
+    Devuelve la unidad atomica: email_body + adjuntos + .md generado,
+    todos vinculados por el mismo email_id.
+    """
+    from backend.services.provenance_service import get_package_by_email
+
+    pkg = get_package_by_email(db, email_id)
+    if pkg is None:
+        raise HTTPException(status_code=404, detail="Email no encontrado")
+
+    email = pkg["email"]
+    return {
+        "email": {
+            "id": email.id,
+            "message_id": email.message_id,
+            "subject": email.subject,
+            "sender": email.sender,
+            "date_received": email.date_received.isoformat() if email.date_received else None,
+            "body": email.body_preview or "",
+            "case_id": email.case_id,
+            "status": email.status,
+        },
+        "documents": [d.to_dict() for d in pkg["documents"]],
+        "count": pkg["count"],
+    }
+
+
 @router.post("/generate-md")
 def api_generate_email_md(db: Session = Depends(get_db)):
     """Generar archivos .md de todos los emails existentes en sus carpetas de caso.

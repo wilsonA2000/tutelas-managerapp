@@ -5,9 +5,9 @@ import {
   Mail, RefreshCw, Loader2, Inbox,
   AlertCircle, ExternalLink, Search,
   Paperclip, ChevronLeft, X, User,
-  Calendar, ArrowRight,
+  Calendar, ArrowRight, FileText, Package,
 } from 'lucide-react'
-import { getEmails, getEmail, checkInbox, getGmailStats, syncAllEmails } from '../services/api'
+import { getEmails, getEmail, checkInbox, getGmailStats, syncAllEmails, getEmailPackage } from '../services/api'
 import { useNavigate } from 'react-router-dom'
 
 interface EmailItem {
@@ -71,6 +71,13 @@ export default function Emails() {
   const detailQ = useQuery({
     queryKey: ['email-detail', selectedId],
     queryFn: () => getEmail(selectedId!),
+    enabled: !!selectedId,
+  })
+
+  // v4.8 Provenance: paquete completo (email + documents hijos vinculados)
+  const packageQ = useQuery({
+    queryKey: ['email-package', selectedId],
+    queryFn: () => getEmailPackage(selectedId!),
     enabled: !!selectedId,
   })
 
@@ -371,11 +378,58 @@ export default function Emails() {
 
               {/* Body */}
               <div className="flex-1 overflow-y-auto p-6">
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 max-w-3xl">
+                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 max-w-3xl mb-4">
                   <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">
                     {detail.body || '(Sin contenido)'}
                   </pre>
                 </div>
+
+                {/* v4.8 Provenance: Paquete vinculado (documents con mismo email_id) */}
+                {packageQ.data && packageQ.data.count > 0 && (
+                  <div className="bg-white rounded-xl border border-indigo-200 shadow-sm p-5 max-w-3xl">
+                    <div className="flex items-center gap-2 mb-3 text-indigo-700">
+                      <Package size={18} />
+                      <h3 className="text-sm font-semibold">
+                        Paquete inmutable ({packageQ.data.count} {packageQ.data.count === 1 ? 'documento' : 'documentos'})
+                      </h3>
+                    </div>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Estos documentos estan vinculados a este correo de origen. Al mover cualquiera a otro caso, todos viajan juntos automaticamente.
+                    </p>
+                    <div className="space-y-2">
+                      {packageQ.data.documents.map((doc: any) => (
+                        <div
+                          key={doc.id}
+                          className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-gray-100 hover:border-indigo-300 hover:bg-indigo-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <FileText size={14} className="text-indigo-500 shrink-0" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium text-gray-800 truncate">{doc.filename}</div>
+                              <div className="text-[10px] text-gray-500 mt-0.5">
+                                {doc.doc_type} · {doc.text_length ? `${doc.text_length} chars` : 'sin texto'} · {doc.verificacion || 'sin verificar'}
+                              </div>
+                            </div>
+                          </div>
+                          <a
+                            href={`/api/documents/${doc.id}/preview`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[10px] text-indigo-600 hover:text-indigo-800 shrink-0 px-2 py-1 rounded hover:bg-indigo-100"
+                          >
+                            Ver
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {packageQ.data && packageQ.data.count === 0 && (
+                  <div className="bg-amber-50 rounded-xl border border-amber-200 p-3 max-w-3xl text-xs text-amber-700">
+                    Este correo no tiene documentos vinculados (posible legacy pre-v4.8).
+                  </div>
+                )}
               </div>
             </>
           ) : (

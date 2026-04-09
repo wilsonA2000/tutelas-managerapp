@@ -406,7 +406,10 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
 # 12-14. FUNCIONES DE DESCARGA Y GUARDADO
 # ═══════════════════════════════════════════════════════════
 
-def download_attachments(service, msg_id: str, case: Case | None, db: Session) -> tuple[list, list]:
+def download_attachments(
+    service, msg_id: str, case: Case | None, db: Session,
+    email_id: int | None = None, email_message_id: str | None = None,
+) -> tuple[list, list]:
     """Descargar adjuntos del email y registrar en DB.
     Returns: (guardados: list[dict], ignorados: list[str])"""
     msg = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
@@ -440,20 +443,27 @@ def download_attachments(service, msg_id: str, case: Case | None, db: Session) -
         guardados.append({"filename": save_path.name, "saved_path": str(save_path)})
 
         if case:
+            # v4.8 Provenance: vincular al email de origen (si lo conocemos).
+            # Garantiza que los hermanos del mismo email viajen juntos.
             db.add(Document(
                 case_id=case.id, filename=save_path.name, file_path=str(save_path),
                 doc_type=classify_document(save_path.name), file_size=len(file_data),
+                email_id=email_id,
+                email_message_id=email_message_id or msg_id,
             ))
 
     return guardados, ignorados
 
 
 def save_email_md(save_dir: Path, metadata: dict, body: str, adjuntos: list,
-                   db: Session = None, case_id: int = None) -> str | None:
+                   db: Session = None, case_id: int = None,
+                   email_id: int | None = None, email_message_id: str | None = None) -> str | None:
     """Guardar email como .md en la carpeta del caso y registrar como Document.
 
     Args: save_dir, metadata={subject, sender, date, folder_name}, body, adjuntos,
-          db (optional): Session para registrar como Document, case_id (optional)
+          db (optional): Session para registrar como Document, case_id (optional),
+          email_id (optional): FK al Email de origen (v4.8 Provenance),
+          email_message_id (optional): gmail message_id string
     Returns: filename si se creó, None si ya existía o falló.
     """
     if not save_dir.exists():
@@ -518,10 +528,13 @@ def save_email_md(save_dir: Path, metadata: dict, body: str, adjuntos: list,
                     verificacion="OK",
                     verificacion_detalle="Email del caso (generado automaticamente)",
                     file_size=len(content.encode("utf-8")),
+                    # v4.8 Provenance: el .md es parte del paquete del email origen
+                    email_id=email_id,
+                    email_message_id=email_message_id,
                 )
                 db.add(doc)
                 db.commit()
-                logger.info("Document registrado para email .md: %s (case_id=%d)", filename, case_id)
+                logger.info("Document registrado para email .md: %s (case_id=%d, email_id=%s)", filename, case_id, email_id)
         except Exception as e:
             logger.error("Error registrando email .md como Document: %s", e)
 
@@ -791,16 +804,40 @@ def check_inbox(db: Session) -> list[dict]:
                         created_new = True
                         accion = "CASO_NUEVO"
 
-                # ── DESCARGAR ADJUNTOS ──
-                guardados, ignorados = download_attachments(service, msg_ref["id"], case, db)
+                # ── REGISTRAR EMAIL EN DB PRIMERO (v4.8 Provenance) ──
+                # Creamos el Email antes que los Documents para tener email_id
+                # disponible al crear los hijos (adjuntos + .md). Esto garantiza
+                # que todos los docs del mismo email queden vinculados y viajen
+                # juntos al reasignar entre casos.
+                email_record = Email(
+                    message_id=message_id, subject=subject, sender=sender,
+                    date_received=date_received, body_preview=body or "",
+                    case_id=case.id if case else None,
+                    attachments=[],  # se actualiza despues de download
+                    status="ASIGNADO" if case else "PENDIENTE",
+                    processed_at=datetime.utcnow(),
+                )
+                db.add(email_record)
+                db.flush()  # obtener email_record.id sin commit
 
-                # ── GUARDAR .md (+ registrar como Document) ──
+                # ── DESCARGAR ADJUNTOS (con email_id propagado) ──
+                guardados, ignorados = download_attachments(
+                    service, msg_ref["id"], case, db,
+                    email_id=email_record.id,
+                    email_message_id=message_id,
+                )
+                # Actualizar attachments en el Email ahora que ya descargamos
+                email_record.attachments = guardados
+
+                # ── GUARDAR .md (+ registrar como Document con email_id) ──
                 if case and case.folder_path and body:
                     save_email_md(
                         Path(case.folder_path),
                         {"subject": subject, "sender": sender, "date": date_str, "folder_name": case.folder_name},
                         body, guardados,
                         db=db, case_id=case.id,
+                        email_id=email_record.id,
+                        email_message_id=message_id,
                     )
 
                 # ── ACTUALIZAR CAMPOS DEL CASO ──
@@ -808,16 +845,6 @@ def check_inbox(db: Session) -> list[dict]:
                 if case:
                     data = {**radicado_data, "forest": forest, "accionante": accionante}
                     campos_actualizados = update_case_fields(db, case, tipo, data)
-
-                # ── REGISTRAR EMAIL EN DB ──
-                email_record = Email(
-                    message_id=message_id, subject=subject, sender=sender,
-                    date_received=date_received, body_preview=body or "",
-                    case_id=case.id if case else None,
-                    attachments=guardados, status="ASIGNADO" if case else "PENDIENTE",
-                    processed_at=datetime.utcnow(),
-                )
-                db.add(email_record)
 
                 if case:
                     db.add(AuditLog(
@@ -884,6 +911,9 @@ def save_existing_emails_as_md(db: Session) -> int:
             {"subject": em.subject or "", "sender": em.sender or "", "date": date_str, "folder_name": case.folder_name},
             em.body_preview, em.attachments or [],
             db=db, case_id=case.id,
+            # v4.8 Provenance: el .md generado retroactivamente tambien hereda el email_id
+            email_id=em.id,
+            email_message_id=em.message_id,
         )
         if result:
             saved += 1

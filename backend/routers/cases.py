@@ -60,6 +60,33 @@ def api_get_case(case_id: int, db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/{case_id}/email-packages")
+def api_get_case_email_packages(case_id: int, db: Session = Depends(get_db)):
+    """v4.8 Provenance: lista los paquetes email de un caso para timeline cronologico.
+
+    Devuelve los emails que tienen al menos 1 Document hijo vinculado,
+    ordenados por fecha de recepcion descendente. Cada paquete es una unidad
+    atomica (email body + adjuntos + .md).
+    """
+    from backend.services.provenance_service import list_packages_in_case
+
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Caso no encontrado")
+
+    packages = list_packages_in_case(db, case_id)
+    # Serializar datetimes
+    for pkg in packages:
+        if pkg.get("date_received"):
+            pkg["date_received"] = pkg["date_received"].isoformat()
+    return {
+        "case_id": case_id,
+        "case_folder": case.folder_name,
+        "packages_count": len(packages),
+        "packages": packages,
+    }
+
+
 @router.put("/{case_id}")
 def api_update_case(case_id: int, fields: dict, db: Session = Depends(get_db)):
     result = update_case(db, case_id, fields)
