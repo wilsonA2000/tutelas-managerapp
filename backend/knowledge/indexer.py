@@ -106,6 +106,37 @@ def index_md_file(db: Session, case_id: int | None, filename: str, content: str,
     db.commit()
 
 
+def index_case_incremental(db: Session, case_id: int):
+    """Indexar todos los documentos de un caso que no estan en KB (incremental)."""
+    from backend.database.models import Case, Document
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        return 0
+    indexed = 0
+    for doc in case.documents:
+        if doc.extracted_text and len(doc.extracted_text) > 100:
+            ext = (doc.filename or "").rsplit(".", 1)[-1].lower() if doc.filename else ""
+            source_type = "email_md" if doc.filename and doc.filename.startswith("Email_") else ext or "pdf"
+            h = _content_hash(doc.extracted_text)
+            existing = db.query(KnowledgeEntry).filter(
+                KnowledgeEntry.case_id == case_id,
+                KnowledgeEntry.content_hash == h,
+            ).first()
+            if not existing:
+                entry = KnowledgeEntry(
+                    case_id=case_id,
+                    source_type=source_type,
+                    source_name=doc.filename,
+                    content=doc.extracted_text[:50000],
+                    content_hash=h,
+                )
+                db.add(entry)
+                indexed += 1
+    if indexed > 0:
+        db.commit()
+    return indexed
+
+
 def rebuild_index(db: Session, base_dir: str):
     """Reconstruir todo el índice desde cero.
     Lee documentos extraídos de la DB, emails, y archivos .md del disco."""

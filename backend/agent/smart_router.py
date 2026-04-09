@@ -10,10 +10,27 @@ El router verifica qué API keys están disponibles y selecciona la mejor opció
 """
 
 import os
+import time
 import logging
 from dataclasses import dataclass
 
 logger = logging.getLogger("tutelas.router")
+
+# Rate limit tracking: provider → timestamp del ultimo 429
+_rate_limit_cooldown: dict[str, float] = {}
+_RATE_LIMIT_COOLDOWN_SECS = 60  # Esperar 60s antes de reintentar provider con 429
+
+
+def report_rate_limit(provider: str):
+    """Reportar que un provider devolvio 429. Se llama desde ai_extractor."""
+    _rate_limit_cooldown[provider] = time.time()
+    logger.warning("Rate limit reportado para %s (cooldown %ds)", provider, _RATE_LIMIT_COOLDOWN_SECS)
+
+
+def _is_rate_limited(provider: str) -> bool:
+    """Check si un provider esta en cooldown por rate limit."""
+    last_429 = _rate_limit_cooldown.get(provider, 0)
+    return (time.time() - last_429) < _RATE_LIMIT_COOLDOWN_SECS
 
 # Tipos de tarea que el agente puede ejecutar
 TASK_TYPES = {
@@ -111,10 +128,13 @@ def route(task_type: str = "general") -> RouteDecision:
 
     chain = ROUTING_CHAINS.get(task_type, ROUTING_CHAINS["general"])
 
-    # Recopilar todos los providers disponibles en orden
+    # Recopilar todos los providers disponibles en orden (skip rate-limited)
     available = []
     for provider, model, env_key in chain:
         if not _validate_api_key(env_key):
+            continue
+        if _is_rate_limited(provider):
+            logger.info("Skip %s/%s (rate limit cooldown)", provider, model)
             continue
         model_config = PROVIDERS.get(provider, {}).get("models", {}).get(model, {})
         available.append((provider, model, model_config))

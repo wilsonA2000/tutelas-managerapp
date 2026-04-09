@@ -128,7 +128,7 @@ def _build_pdf_ir(file_path: str, doc_type: str) -> DocumentIR:
                         text=text,
                         font_name=span.get("font", ""),
                         font_size=span.get("size", 0),
-                        is_bold="Bold" in span.get("font", "") or "bold" in span.get("font", ""),
+                        is_bold="Bold" in span.get("font", "") or "bold" in span.get("font", "") or bool(span.get("flags", 0) & 16),
                         is_italic="Italic" in span.get("font", "") or "italic" in span.get("font", ""),
                         page=page_num + 1,
                     )
@@ -256,16 +256,23 @@ def _build_pdf_ir(file_path: str, doc_type: str) -> DocumentIR:
                     spans=footer_spans, page=page_num + 1,
                 ))
 
-    # Extraer tablas
+    # Extraer tablas (max 5 tablas utiles por documento)
     tables = []
     try:
         for page_num in range(min(page_count, 10)):
+            if len(tables) >= 5:
+                break
             page = doc[page_num]
             page_tables = page.find_tables()
             for t in page_tables.tables:
                 rows = t.extract()
-                if rows and len(rows) > 1:
-                    tables.append(rows)
+                if not rows or len(rows) < 2:
+                    continue
+                # Validar que la tabla tiene contenido real
+                all_text = " ".join(str(c or "") for r in rows for c in r)
+                if len(all_text.strip()) < 20:
+                    continue  # Tabla vacia o solo formato
+                tables.append(rows)
     except Exception:
         pass
 

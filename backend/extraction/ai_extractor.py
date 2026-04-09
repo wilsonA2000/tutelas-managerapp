@@ -525,6 +525,13 @@ def _call_with_retry(provider: str, messages: list[dict], model: str,
                 raise
             # Reintentar errores temporales
             if any(s in error_str for s in RETRIABLE_STRINGS):
+                # Reportar rate limit al Smart Router
+                if "429" in error_str or "rate" in error_str:
+                    try:
+                        from backend.agent.smart_router import report_rate_limit
+                        report_rate_limit(provider)
+                    except Exception:
+                        pass
                 last_error = e
                 base_wait = min(60, 5 * (2 ** attempt))
                 jitter = random.uniform(0, base_wait * 0.3)
