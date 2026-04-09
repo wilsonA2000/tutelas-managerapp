@@ -292,7 +292,22 @@ export default function Dashboard() {
               {monitor?.last_check && `. Ultima: ${new Date(monitor.last_check).toLocaleTimeString('es-CO')}`}
             </p>
             {gmailChecking && (
-              <p className="text-xs text-blue-600 mb-2 truncate">{gmailStep}</p>
+              <div className="mb-2">
+                <p className="text-xs text-blue-600 mb-1.5 truncate">{gmailStep}</p>
+                {(gmailStatusQ.data?.progress_pct as number) > 0 && (
+                  <div className="w-full bg-gray-200 rounded-full h-1.5 mb-1">
+                    <div
+                      className="bg-blue-600 h-1.5 rounded-full transition-all duration-500"
+                      style={{ width: `${gmailStatusQ.data?.progress_pct ?? 0}%` }}
+                    />
+                  </div>
+                )}
+                {(gmailStatusQ.data?.elapsed_seconds as number) > 0 && (
+                  <p className="text-[10px] text-gray-400">
+                    {Math.floor((gmailStatusQ.data?.elapsed_seconds as number) / 60)}:{String((gmailStatusQ.data?.elapsed_seconds as number) % 60).padStart(2, '0')} transcurrido
+                  </p>
+                )}
+              </div>
             )}
             {!gmailChecking && gmailStep && gmailStep.startsWith('Completado') && (
               <p className="text-xs text-green-600 mb-2 truncate">{gmailStep}</p>

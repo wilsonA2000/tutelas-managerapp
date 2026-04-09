@@ -358,11 +358,17 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
         except Exception:
             pass
 
-        # Anti-contaminación
+        # Anti-contaminación: adaptar final_fields a formato esperado
         try:
-            _cross_validate_radicado(case, final_fields, db, stats)
-        except Exception:
-            pass
+            # _cross_validate_radicado espera dict[str, ExtractionResult]
+            # final_fields es dict[str, str] — crear wrapper
+            from types import SimpleNamespace
+            cross_fields = {}
+            for k, v in final_fields.items():
+                cross_fields[k.upper()] = SimpleNamespace(value=v)
+            _cross_validate_radicado(case, cross_fields, db, stats)
+        except Exception as e:
+            logger.debug("Anti-contaminación: %s", e)
 
         # Defaults
         if not case.incidente:

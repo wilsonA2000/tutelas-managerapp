@@ -143,18 +143,24 @@ def seed_data(_create_tables, TestSessionFactory, tmp_base_dir):
         db.add(c1)
         db.flush()
 
-        # Caso 2: PENDIENTE
+        # Caso 2: PENDIENTE (>20% completitud = 8+ campos de 36)
         c2 = Case(
             folder_name="2026-00002 MARIA GARCIA LOPEZ",
             folder_path=str(base / "2026-00002 MARIA GARCIA LOPEZ"),
             processing_status="PENDIENTE",
             accionante="MARIA GARCIA LOPEZ",
+            radicado_23_digitos="68001400300120260000200",
             estado="ACTIVO",
+            juzgado="JUZGADO SEGUNDO CIVIL MUNICIPAL",
+            ciudad="FLORIDABLANCA",
+            derecho_vulnerado="SALUD",
+            fecha_ingreso="05/03/2026",
+            oficina_responsable="SECRETARIA DE SALUD",
         )
         db.add(c2)
         db.flush()
 
-        # Caso 3: REVISION
+        # Caso 3: REVISION (>20% completitud = 8+ campos de 36)
         c3 = Case(
             folder_name="2026-00003 PEDRO MARTINEZ",
             folder_path=str(base / "2026-00003 PEDRO MARTINEZ"),
@@ -162,6 +168,11 @@ def seed_data(_create_tables, TestSessionFactory, tmp_base_dir):
             accionante="PEDRO MARTINEZ",
             radicado_23_digitos="68001400300120260000300",
             estado="ACTIVO",
+            juzgado="JUZGADO TERCERO CIVIL MUNICIPAL",
+            ciudad="BUCARAMANGA",
+            derecho_vulnerado="PETICION",
+            fecha_ingreso="10/03/2026",
+            oficina_responsable="SECRETARIA GENERAL",
         )
         db.add(c3)
         db.flush()

@@ -67,11 +67,33 @@ def _run_extraction_cases(case_ids: list[int]):
     import time
     from backend.services.backup_service import auto_backup
 
+    _start = time.time()
     _main.extraction_in_progress = True
-    _main.extraction_progress = {"current": 0, "total": len(case_ids), "case_name": "Iniciando...", "success": 0, "errors": 0}
+    _main.extraction_progress = {
+        "current": 0, "total": len(case_ids), "case_name": "Iniciando...",
+        "success": 0, "errors": 0, "progress_pct": 0, "elapsed_seconds": 0,
+        "step": "Preparando extraccion...",
+    }
+
+    def _update_pct():
+        total = _main.extraction_progress["total"]
+        current = _main.extraction_progress["current"]
+        _main.extraction_progress["progress_pct"] = round((current / total) * 100) if total > 0 else 0
+        _main.extraction_progress["elapsed_seconds"] = round(time.time() - _start)
+
+    # Thread para actualizar elapsed_seconds cada segundo
+    import threading
+    _elapsed_stop = threading.Event()
+    def _update_elapsed():
+        while not _elapsed_stop.is_set():
+            _main.extraction_progress["elapsed_seconds"] = round(time.time() - _start)
+            _elapsed_stop.wait(1)
+    elapsed_thread = threading.Thread(target=_update_elapsed, daemon=True)
+    elapsed_thread.start()
 
     try:
         # Backup automatico antes de extraccion batch
+        _main.extraction_progress["step"] = "Creando backup automatico..."
         auto_backup("pre_extraction")
 
         db = SessionLocal()
@@ -87,6 +109,8 @@ def _run_extraction_cases(case_ids: list[int]):
 
             _main.extraction_progress["current"] = i + 1
             _main.extraction_progress["case_name"] = case.folder_name or f"ID {cid}"
+            _main.extraction_progress["step"] = f"Extrayendo ({i+1}/{len(case_ids)}): {(case.folder_name or '')[:40]}..."
+            _update_pct()
 
             try:
                 if settings.UNIFIED_EXTRACTOR_ENABLED:
@@ -110,18 +134,23 @@ def _run_extraction_cases(case_ids: list[int]):
                     pass
                 _main.add_monitor_log(f"Error caso {cid}: {str(e)[:100]}", level="error")
 
+            _update_pct()
             if i < len(case_ids) - 1:
                 time.sleep(2)
 
         ok = _main.extraction_progress["success"]
         total = _main.extraction_progress["total"]
         _main.extraction_progress["case_name"] = f"Completado: {ok}/{total} exitosos"
+        _main.extraction_progress["step"] = f"Completado: {ok}/{total} exitosos, {_main.extraction_progress['errors']} errores"
+        _main.extraction_progress["progress_pct"] = 100
+        _update_pct()
         _main.add_monitor_log(f"Extraccion terminada: {ok}/{total} exitosos")
 
     except Exception as e:
         _main.add_monitor_log(f"Error en extraccion: {e}", level="error")
     finally:
         _main.extraction_in_progress = False
+        _elapsed_stop.set()
         try:
             db.close()
         except Exception:
@@ -434,6 +463,140 @@ def api_full_audit(db: Session = Depends(get_db)):
     }
 
 
+
+
+@router.get("/benchmark")
+def api_benchmark(limit: int = 20, db: Session = Depends(get_db)):
+    """Benchmark: comparar regex IR vs datos actuales en DB para N casos COMPLETO.
+
+    No modifica datos — solo analiza y compara.
+    Retorna cobertura campo por campo + resumen.
+    """
+    import re
+    import time
+    from backend.extraction.ir_builder import build_case_ir
+    from backend.agent.extractors.registry import _EXTRACTORS
+    from backend.agent.extractors.base import ExtractionResult
+    from backend.agent.forest_extractor import extract_forest_from_sources
+    from backend.database.models import Email, AuditLog, TokenUsage
+    from backend.extraction.pipeline import classify_doc_type
+
+    # Tomar N casos COMPLETO con mas campos
+    cases = db.query(Case).filter(
+        Case.processing_status == "COMPLETO",
+        Case.folder_path.isnot(None),
+    ).order_by(Case.updated_at.desc()).limit(limit).all()
+
+    FIELDS = [
+        "radicado_23_digitos", "radicado_forest", "accionante", "accionados",
+        "juzgado", "ciudad", "fecha_ingreso", "derecho_vulnerado",
+        "sentido_fallo_1st", "fecha_fallo_1st", "impugnacion", "asunto",
+        "pretensiones", "observaciones", "abogado_responsable",
+    ]
+
+    results = []
+    field_stats = {f: {"db_filled": 0, "regex_filled": 0, "match": 0, "mismatch": 0, "regex_only": 0, "db_only": 0} for f in FIELDS}
+    total_time = 0
+
+    for case in cases:
+        start = time.time()
+        case_result = {"id": case.id, "folder": case.folder_name, "fields": {}}
+
+        # Construir IR
+        try:
+            case_ir = build_case_ir(db, case)
+        except Exception as e:
+            case_result["error"] = f"IR failed: {str(e)[:80]}"
+            results.append(case_result)
+            continue
+
+        # Preparar doc_dicts
+        doc_dicts = []
+        for doc_ir in case_ir.documents:
+            doc_dicts.append({
+                "filename": doc_ir.filename, "doc_type": doc_ir.doc_type,
+                "text": doc_ir.full_text, "full_text": doc_ir.full_text,
+                "content": doc_ir.full_text, "priority": doc_ir.priority,
+                "zones": [{"zone_type": z.zone_type, "text": z.text, "metadata": z.metadata,
+                           "page": z.page, "confidence": z.confidence} for z in doc_ir.zones],
+            })
+
+        # Ejecutar extractores regex
+        case_emails = db.query(Email).filter(Email.case_id == case.id).all()
+        regex_results = {}
+
+        for field_name, extractor in _EXTRACTORS.items():
+            try:
+                result = extractor.extract_regex(doc_dicts, case_emails)
+                if result:
+                    is_valid, _ = extractor.validate(result.value)
+                    if is_valid:
+                        regex_results[field_name] = result.value
+            except Exception:
+                pass
+
+        # FOREST
+        forest = extract_forest_from_sources(doc_dicts, case_emails)
+        if forest:
+            regex_results["radicado_forest"] = forest.value
+
+        elapsed = round(time.time() - start, 2)
+        total_time += elapsed
+        case_result["elapsed_s"] = elapsed
+        case_result["ir_docs"] = len(case_ir.documents)
+        case_result["ir_zones"] = sum(len(d.zones) for d in case_ir.documents)
+
+        # Comparar campo por campo
+        for f in FIELDS:
+            attr = Case.CSV_FIELD_MAP.get(f, f)
+            db_val = (getattr(case, attr, None) or "").strip()
+            regex_val = (regex_results.get(f, "") or "").strip()
+
+            status = "empty"
+            if db_val and regex_val:
+                # Normalizar para comparacion: quitar guiones, puntos, espacios
+                db_norm = re.sub(r'[\s\-\.\,]', '', db_val.upper())
+                regex_norm = re.sub(r'[\s\-\.\,]', '', regex_val.upper())
+                if db_norm == regex_norm:
+                    status = "match"
+                    field_stats[f]["match"] += 1
+                else:
+                    status = "mismatch"
+                    field_stats[f]["mismatch"] += 1
+                field_stats[f]["db_filled"] += 1
+                field_stats[f]["regex_filled"] += 1
+            elif db_val:
+                status = "db_only"
+                field_stats[f]["db_only"] += 1
+                field_stats[f]["db_filled"] += 1
+            elif regex_val:
+                status = "regex_only"
+                field_stats[f]["regex_only"] += 1
+                field_stats[f]["regex_filled"] += 1
+
+            case_result["fields"][f] = {
+                "status": status,
+                "db": db_val[:80] if db_val else "",
+                "regex": regex_val[:80] if regex_val else "",
+            }
+
+        results.append(case_result)
+
+    # Token usage comparison: pipeline vs unified
+    token_stats = {"pipeline": {"count": 0, "tokens": 0}, "unified": {"count": 0, "tokens": 0}}
+    for tu in db.query(TokenUsage).order_by(TokenUsage.timestamp.desc()).limit(500).all():
+        key = "unified" if "unified" in (tu.model or "").lower() or "compact" in (tu.model or "").lower() else "pipeline"
+        token_stats[key]["count"] += 1
+        token_stats[key]["tokens"] += (tu.tokens_input or 0) + (tu.tokens_output or 0)
+
+    return {
+        "total_cases": len(cases),
+        "total_time_s": round(total_time, 1),
+        "avg_time_per_case_s": round(total_time / len(cases), 2) if cases else 0,
+        "field_coverage": field_stats,
+        "token_comparison": token_stats,
+        "cases": results,
+    }
 
 
 @router.get("/duplicate-docs")

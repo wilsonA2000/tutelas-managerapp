@@ -45,9 +45,12 @@ function ProcessTracker({ process }: { process: ProcessInfo }) {
   const errors = (data.errors as number) || 0
   const docsVerified = (data.docs_verified as number) || 0
   const docsTotal = (data.docs_total as number) || 0
-  // Usar progress_pct del backend si disponible (sync v4), sino calcular de current/total
+  const elapsed = (data.elapsed_seconds as number) || 0
+  // Usar progress_pct del backend si disponible, sino calcular de current/total
   const backendPct = data.progress_pct as number | undefined
   const pct = backendPct != null ? backendPct : (total > 0 ? Math.round((current / total) * 100) : 0)
+  // Formato de tiempo transcurrido
+  const elapsedStr = elapsed > 0 ? `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}` : ''
 
   return (
     <div className="mb-4 last:mb-0">
@@ -69,7 +72,7 @@ function ProcessTracker({ process }: { process: ProcessInfo }) {
             </div>
           </div>
           <div className="flex justify-between text-xs text-white/70">
-            <span>{current} de {total}</span>
+            <span>{current} de {total}{elapsedStr ? ` · ${elapsedStr}` : ''}</span>
             <span className="font-bold text-white text-sm">{pct}%</span>
           </div>
           {(success > 0 || errors > 0 || docsVerified > 0) && (

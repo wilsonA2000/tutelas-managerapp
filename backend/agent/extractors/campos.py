@@ -142,6 +142,11 @@ class JuzgadoExtractor(FieldExtractor):
                 if m:
                     juzgado = m.group(1).strip()
                     juzgado = re.sub(r"\s+", " ", juzgado).strip(" ,.")
+                    # Truncar en frases que ya no son parte del nombre del juzgado
+                    juzgado = re.split(
+                        r"\s+(?:le\s+ha|ha\s+compartido|Cod|C[oó]d|NIT|Despacho|Auto|RADICACI|quien)",
+                        juzgado, flags=re.IGNORECASE
+                    )[0].strip(" ,.")
                     return ExtractionResult(
                         value=juzgado, confidence=90,
                         source=doc.get("filename", ""),
@@ -156,6 +161,10 @@ class JuzgadoExtractor(FieldExtractor):
                 m = self._RE_JUZGADO.search(text[:3000])
                 if m:
                     juzgado = re.sub(r"\s+", " ", m.group(1)).strip(" ,.")
+                    juzgado = re.split(
+                        r"\s+(?:le\s+ha|ha\s+compartido|Cod|C[oó]d|NIT|Despacho|Auto|RADICACI|quien)",
+                        juzgado, flags=re.IGNORECASE
+                    )[0].strip(" ,.")
                     return ExtractionResult(
                         value=juzgado, confidence=70,
                         source=doc.get("filename", ""),
@@ -183,6 +192,11 @@ class CiudadExtractor(FieldExtractor):
             if m:
                 ciudad = m.group(1).strip()
                 ciudad = CITY_CLEANUP.sub("", ciudad).strip()
+                # Truncar en palabras que no son parte del nombre de la ciudad
+                ciudad = re.split(
+                    r"\s+(?:en\s+|quien|para|por|como|a\s+trav|contra|accionante|demandante)",
+                    ciudad, flags=re.IGNORECASE
+                )[0].strip(" ,.-")
                 if len(ciudad) >= 3:
                     return ExtractionResult(
                         value=ciudad, confidence=85,
@@ -284,9 +298,11 @@ _RE_CONCEDE = re.compile(
     r"(?i)(conceder|se\s+concede|amparar|se\s+ampara|tutelar|se\s+tutela"
     r"|concede\s+parcialmente|ampara\s+parcialmente)"
 )
+_RE_IMPROCEDENTE = re.compile(
+    r"(?i)(declarar\s+improcedente|improcedente|rechazar\s+por\s+improcedente)"
+)
 _RE_NIEGA = re.compile(
-    r"(?i)(negar|se\s+niega|declarar\s+improcedente|improcedente"
-    r"|no\s+(?:ha\s+)?lugar|desestimar)"
+    r"(?i)(negar|se\s+niega|no\s+(?:ha\s+)?lugar|desestimar)"
 )
 
 
@@ -321,12 +337,19 @@ class SentidoFalloExtractor(FieldExtractor):
                         method="ir_resolution",
                         reasoning="Concede/Ampara en zona RESUELVE",
                     )
+                if _RE_IMPROCEDENTE.search(text):
+                    return ExtractionResult(
+                        value="IMPROCEDENTE", confidence=85,
+                        source=doc.get("filename", ""),
+                        method="ir_resolution",
+                        reasoning="Improcedente en zona RESUELVE",
+                    )
                 if _RE_NIEGA.search(text):
                     return ExtractionResult(
                         value="NIEGA", confidence=85,
                         source=doc.get("filename", ""),
                         method="ir_resolution",
-                        reasoning="Niega/Improcedente en zona RESUELVE",
+                        reasoning="Niega en zona RESUELVE",
                     )
 
         # Fallback: buscar en nombre del archivo
@@ -381,6 +404,11 @@ class AccionanteExtractor(FieldExtractor):
                     if m:
                         nombre = m.group(1).strip()
                         nombre = re.sub(r"\s+", " ", nombre).strip(" ,.-")
+                        # Truncar en palabras clave que indican fin del nombre
+                        nombre = re.split(
+                            r"\s+(?:Accionad[oa]s?|Contra|Demandad[oa]|VS\.?|Vinculad[oa]s?|Vs|contra|en\s+calidad)\b",
+                            nombre, flags=re.IGNORECASE
+                        )[0].strip(" ,.-")
                         if len(nombre) >= 5:
                             return ExtractionResult(
                                 value=nombre, confidence=85,

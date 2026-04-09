@@ -448,11 +448,16 @@ def download_attachments(service, msg_id: str, case: Case | None, db: Session) -
     return guardados, ignorados
 
 
-def save_email_md(save_dir: Path, metadata: dict, body: str, adjuntos: list) -> None:
-    """Guardar email como .md en la carpeta del caso. NO sobreescribe si ya existe.
-    Args: save_dir, metadata={subject, sender, date, folder_name}, body, adjuntos"""
+def save_email_md(save_dir: Path, metadata: dict, body: str, adjuntos: list,
+                   db: Session = None, case_id: int = None) -> str | None:
+    """Guardar email como .md en la carpeta del caso y registrar como Document.
+
+    Args: save_dir, metadata={subject, sender, date, folder_name}, body, adjuntos,
+          db (optional): Session para registrar como Document, case_id (optional)
+    Returns: filename si se creó, None si ya existía o falló.
+    """
     if not save_dir.exists():
-        return
+        return None
 
     date_part = datetime.utcnow().strftime("%Y%m%d")
     try:
@@ -468,7 +473,7 @@ def save_email_md(save_dir: Path, metadata: dict, body: str, adjuntos: list) -> 
 
     save_path = save_dir / filename
     if save_path.exists():
-        return  # NO sobreescribir
+        return None  # NO sobreescribir
 
     att_list = ""
     if adjuntos:
@@ -487,8 +492,40 @@ def save_email_md(save_dir: Path, metadata: dict, body: str, adjuntos: list) -> 
 """
     try:
         save_path.write_text(content, encoding="utf-8")
-    except Exception:
-        pass
+        logger.info("Email .md guardado: %s", filename)
+    except Exception as e:
+        logger.error("Error guardando email .md %s: %s", filename, e)
+        return None
+
+    # Registrar como Document en DB si tenemos session y case_id
+    if db and case_id:
+        try:
+            from backend.database.models import Document
+            # Verificar que no existe ya
+            existing = db.query(Document).filter(
+                Document.case_id == case_id,
+                Document.filename == filename,
+            ).first()
+            if not existing:
+                doc = Document(
+                    case_id=case_id,
+                    filename=filename,
+                    file_path=str(save_path),
+                    doc_type="EMAIL_MD",
+                    extracted_text=content,
+                    extraction_method="email_md",
+                    extraction_date=datetime.utcnow(),
+                    verificacion="OK",
+                    verificacion_detalle="Email del caso (generado automaticamente)",
+                    file_size=len(content.encode("utf-8")),
+                )
+                db.add(doc)
+                db.commit()
+                logger.info("Document registrado para email .md: %s (case_id=%d)", filename, case_id)
+        except Exception as e:
+            logger.error("Error registrando email .md como Document: %s", e)
+
+    return filename
 
 
 def update_case_fields(db: Session, case: Case, tipo: str, data: dict) -> list[str]:
@@ -757,12 +794,13 @@ def check_inbox(db: Session) -> list[dict]:
                 # ── DESCARGAR ADJUNTOS ──
                 guardados, ignorados = download_attachments(service, msg_ref["id"], case, db)
 
-                # ── GUARDAR .md ──
+                # ── GUARDAR .md (+ registrar como Document) ──
                 if case and case.folder_path and body:
                     save_email_md(
                         Path(case.folder_path),
                         {"subject": subject, "sender": sender, "date": date_str, "folder_name": case.folder_name},
                         body, guardados,
+                        db=db, case_id=case.id,
                     )
 
                 # ── ACTUALIZAR CAMPOS DEL CASO ──
@@ -841,10 +879,12 @@ def save_existing_emails_as_md(db: Session) -> int:
         if not case or not case.folder_path:
             continue
         date_str = em.date_received.strftime("%a, %d %b %Y %H:%M") if em.date_received else ""
-        save_email_md(
+        result = save_email_md(
             Path(case.folder_path),
             {"subject": em.subject or "", "sender": em.sender or "", "date": date_str, "folder_name": case.folder_name},
             em.body_preview, em.attachments or [],
+            db=db, case_id=case.id,
         )
-        saved += 1
+        if result:
+            saved += 1
     return saved

@@ -1,1 +1,11 @@
 @import "tailwindcss";
+
+:root {
+  --primary: #1A5276;
+  --primary-light: #2E86C1;
+}
+
+body {
+  background: linear-gradient(135deg, #f8fafc 0%, #eef2f7 50%, #f0f4f8 100%);
+  min-height: 100vh;
+}

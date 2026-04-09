@@ -34,7 +34,7 @@ last_gmail_check = None
 gmail_monitor_log: list[dict] = []  # Ultimas 50 entradas del log
 
 extraction_in_progress = False
-extraction_progress = {"current": 0, "total": 0, "case_name": "", "results": []}
+extraction_progress = {"current": 0, "total": 0, "case_name": "", "results": [], "progress_pct": 0}
 
 
 def add_monitor_log(message: str, level: str = "info", details: dict | None = None):
@@ -248,7 +248,17 @@ gmail_check_result = {}
 def _run_gmail_check_background():
     """Ejecutar revision de Gmail en background (thread)."""
     global gmail_check_in_progress, gmail_check_result, last_gmail_check
+    import time as _time
     from backend.services.backup_service import auto_backup
+
+    _start = _time.time()
+
+    def _update_pct():
+        """Recalcular progress_pct y elapsed_seconds."""
+        total = gmail_check_result.get("total", 0)
+        current = gmail_check_result.get("current", 0)
+        gmail_check_result["progress_pct"] = round((current / total) * 100) if total > 0 else 0
+        gmail_check_result["elapsed_seconds"] = round(_time.time() - _start)
 
     try:
         # Backup automatico antes de revision Gmail
@@ -257,8 +267,13 @@ def _run_gmail_check_background():
         db = SessionLocal()
         add_monitor_log("Revision manual de Gmail iniciada...")
 
-        # Paso 1: Revisar bandeja (con timeout de 45s)
-        gmail_check_result = {"step": "Conectando a Gmail...", "current": 0, "total": 3, "emails_found": 0, "cases_processed": 0}
+        # Paso 1: Conectar a Gmail y descargar emails
+        gmail_check_result = {
+            "step": "Paso 1/3: Conectando a Gmail...",
+            "current": 0, "total": 3,
+            "emails_found": 0, "cases_processed": 0, "total_fields": 0,
+            "progress_pct": 0, "elapsed_seconds": 0,
+        }
 
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -268,32 +283,38 @@ def _run_gmail_check_background():
             except concurrent.futures.TimeoutError:
                 gmail_check_result["step"] = "Error: Gmail no responde (timeout 10min). Intente mas tarde."
                 gmail_check_result["error"] = "timeout"
+                _update_pct()
                 add_monitor_log("Gmail timeout: no responde en 10min", level="error")
                 return
 
         gmail_check_result["current"] = 1
+        _update_pct()
         last_gmail_check = datetime.now().isoformat()
 
         new_emails = [r for r in results if "error" not in r]
         errors = [r for r in results if "error" in r]
         gmail_check_result["emails_found"] = len(new_emails)
-        gmail_check_result["step"] = f"{len(new_emails)} emails encontrados"
+        gmail_check_result["step"] = f"Paso 1/3: {len(new_emails)} emails descargados"
 
         if errors:
             gmail_check_result["step"] = f"Error: {errors[0].get('error', '')}"
             gmail_check_result["error"] = errors[0].get("error", "")
+            _update_pct()
             add_monitor_log(f"Error Gmail: {errors[0].get('error', '')}", level="error")
             return
 
         if not new_emails:
             gmail_check_result["current"] = 3
-            gmail_check_result["step"] = "No hay emails nuevos"
+            gmail_check_result["total"] = 3
+            gmail_check_result["step"] = "Completado: No hay emails nuevos"
+            _update_pct()
             add_monitor_log("No hay emails nuevos")
             return
 
-        # Paso 2: Clasificar emails
-        gmail_check_result["step"] = f"Clasificando {len(new_emails)} emails..."
+        # Paso 2: Clasificar emails y asociar a casos
+        gmail_check_result["step"] = f"Paso 2/3: Clasificando {len(new_emails)} emails..."
         gmail_check_result["current"] = 2
+        _update_pct()
 
         # Paso 3: Extraccion con contexto completo
         cases_to_process = []
@@ -310,11 +331,13 @@ def _run_gmail_check_background():
 
         total_fields = 0
         cases_processed = 0
+        # Expandir total: 2 pasos base + N casos
         gmail_check_result["total"] = 2 + len(cases_to_process)
 
         for i, case in enumerate(cases_to_process):
             gmail_check_result["current"] = 2 + i
-            gmail_check_result["step"] = f"Analizando ({i+1}/{len(cases_to_process)}): {case.folder_name[:40]}..."
+            gmail_check_result["step"] = f"Paso 3/3: Analizando ({i+1}/{len(cases_to_process)}): {case.folder_name[:40]}..."
+            _update_pct()
 
             try:
                 stats = process_folder(db, case)
@@ -328,6 +351,7 @@ def _run_gmail_check_background():
         gmail_check_result["cases_processed"] = cases_processed
         gmail_check_result["total_fields"] = total_fields
         gmail_check_result["step"] = f"Completado: {len(new_emails)} emails, {cases_processed} casos, {total_fields} campos"
+        _update_pct()
 
         add_monitor_log(
             f"Revision manual: {len(new_emails)} emails, {cases_processed} casos, {total_fields} campos actualizados",
@@ -336,6 +360,7 @@ def _run_gmail_check_background():
     except Exception as e:
         gmail_check_result["step"] = f"Error: {str(e)[:100]}"
         gmail_check_result["error"] = str(e)
+        _update_pct()
         add_monitor_log(f"Error en revision manual: {e}", level="error")
     finally:
         gmail_check_in_progress = False
@@ -412,7 +437,7 @@ def api_check_emails_manual():
         return {"status": "running", "message": "Ya hay una revision en progreso. Espere a que termine.", "progress": gmail_check_result}
 
     gmail_check_in_progress = True
-    gmail_check_result = {"step": "Iniciando...", "emails_found": 0, "cases_processed": 0}
+    gmail_check_result = {"step": "Iniciando...", "emails_found": 0, "cases_processed": 0, "progress_pct": 0, "elapsed_seconds": 0}
 
     thread = threading.Thread(target=_run_gmail_check_background, daemon=True)
     thread.start()
@@ -439,6 +464,59 @@ def api_cancel_gmail_check():
         add_monitor_log("Revision de Gmail cancelada por usuario")
         return {"message": "Cancelado"}
     return {"message": "No hay revision en curso"}
+
+
+@app.post("/api/emails/register-md")
+def api_register_email_md():
+    """Registrar Email_*.md existentes en disco como Documents (retroactivo)."""
+    import os
+    from backend.database.models import Document
+    from backend.config import BASE_DIR
+
+    db = SessionLocal()
+    registered = 0
+    skipped = 0
+    try:
+        for case in db.query(Case).filter(Case.folder_path.isnot(None)).all():
+            folder = case.folder_path
+            if not os.path.isdir(folder):
+                continue
+            for fname in os.listdir(folder):
+                if not fname.startswith("Email_") or not fname.endswith(".md"):
+                    continue
+                # Verificar si ya está registrado
+                existing = db.query(Document).filter(
+                    Document.case_id == case.id,
+                    Document.filename == fname,
+                ).first()
+                if existing:
+                    skipped += 1
+                    continue
+                fpath = os.path.join(folder, fname)
+                try:
+                    content = open(fpath, "r", encoding="utf-8", errors="replace").read()
+                except Exception:
+                    content = ""
+                doc = Document(
+                    case_id=case.id,
+                    filename=fname,
+                    file_path=fpath,
+                    doc_type="EMAIL_MD",
+                    extracted_text=content,
+                    extraction_method="email_md",
+                    extraction_date=datetime.utcnow(),
+                    verificacion="OK",
+                    verificacion_detalle="Email del caso (registrado retroactivamente)",
+                    file_size=os.path.getsize(fpath) if os.path.exists(fpath) else 0,
+                )
+                db.add(doc)
+                registered += 1
+            if registered % 50 == 0 and registered > 0:
+                db.commit()
+        db.commit()
+    finally:
+        db.close()
+    return {"registered": registered, "skipped": skipped, "message": f"{registered} archivos Email .md registrados como Documents"}
 
 
 @app.get("/api/monitor/status")
@@ -476,9 +554,12 @@ def api_sync_status():
 def _run_sync_background(force: bool = False):
     """Ejecutar sincronizacion en background usando sync_service optimizado."""
     global sync_in_progress, sync_result
+    import time as _time
     from pathlib import Path
     from backend.config import BASE_DIR
     from backend.services.sync_service import run_sync
+
+    _start = _time.time()
 
     try:
         db = SessionLocal()
@@ -487,7 +568,18 @@ def _run_sync_background(force: bool = False):
             "docs_added": 0, "cases_fixed": 0, "paths_fixed": 0,
             "new_cases": 0, "docs_verified": 0, "docs_moved": 0,
             "docs_suspicious": 0, "progress_pct": 0, "docs_total": 0,
+            "elapsed_seconds": 0,
         }
+
+        # Thread para actualizar elapsed_seconds cada segundo
+        import threading
+        _elapsed_stop = threading.Event()
+        def _update_elapsed():
+            while not _elapsed_stop.is_set():
+                sync_result["elapsed_seconds"] = round(_time.time() - _start)
+                _elapsed_stop.wait(1)
+        elapsed_thread = threading.Thread(target=_update_elapsed, daemon=True)
+        elapsed_thread.start()
 
         run_sync(
             db=db,
@@ -497,11 +589,14 @@ def _run_sync_background(force: bool = False):
             force=force,
         )
 
+        _elapsed_stop.set()
+        sync_result["elapsed_seconds"] = round(_time.time() - _start)
         add_monitor_log(sync_result.get("step", "Sync completa"))
     except Exception as e:
         sync_result["step"] = f"Error: {str(e)[:80]}"
     finally:
         sync_in_progress = False
+        _elapsed_stop.set()
         try:
             db.close()
         except Exception:

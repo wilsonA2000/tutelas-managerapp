@@ -21,8 +21,12 @@ FOREST_BLACKLIST = {"3634740"}
 FOREST_PATTERN = re.compile(
     r'(?:El\s+n[uú]mero\s+de\s+radicado\s+es'
     r'|[Cc]on\s+n[uú]mero\s+de\s+radicado'
-    r'|radicado\s+(?:y\s+enviado|es))'
-    r'\s+(\d{7,13})',
+    r'|radicado\s+(?:y\s+enviado|es)'
+    r'|[Ee]l\s+radicado\s+es'
+    r'|[Rr]adicado\s+interno:?\s*'
+    r'|[Nn][uú]mero\s+de\s+radicaci[oó]n:?\s*'
+    r'|[Rr]ef\.?\s*:?\s*#?\s*)'
+    r'\s*(\d{7,13})',
     re.IGNORECASE,
 )
 
