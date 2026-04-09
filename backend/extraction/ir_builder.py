@@ -18,6 +18,20 @@ from backend.extraction.pipeline import classify_doc_type
 
 logger = logging.getLogger("tutelas.ir_builder")
 
+_IR_BODY_MAX = 30000  # Limite de caracteres para zona BODY
+
+
+def _make_body_zone(text: str, filename: str = "", **kwargs) -> DocumentZone:
+    """Crear zona BODY con truncation warning si excede limite."""
+    truncated = len(text) > _IR_BODY_MAX
+    if truncated:
+        logger.warning("BODY truncado de %d a %d chars para %s", len(text), _IR_BODY_MAX, filename)
+    return DocumentZone(
+        zone_type="BODY", text=text[:_IR_BODY_MAX],
+        truncated=truncated, **kwargs,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Patrones para deteccion de zonas
 # ---------------------------------------------------------------------------
@@ -258,10 +272,7 @@ def _build_pdf_ir(file_path: str, doc_type: str) -> DocumentIR:
     # BODY: texto de paginas principales (sin duplicar header/footer)
     body_text = "\n".join(full_text_parts)
     if body_text.strip():
-        zones.append(DocumentZone(
-            zone_type="BODY", text=body_text[:30000],
-            page=0, confidence=1.0,
-        ))
+        zones.append(_make_body_zone(body_text, filename=filename, page=0, confidence=1.0))
 
     doc.close()
 
@@ -374,9 +385,7 @@ def _build_docx_ir(file_path: str, doc_type: str) -> DocumentIR:
             tables.append(rows)
 
     body_text = "\n".join(full_text_parts)
-    zones.append(DocumentZone(
-        zone_type="BODY", text=body_text[:30000], confidence=1.0,
-    ))
+    zones.append(_make_body_zone(body_text, filename=filename, confidence=1.0))
 
     return DocumentIR(
         filename=path.name,
@@ -435,7 +444,7 @@ def build_case_ir(db: Session, case: Case) -> CaseIR:
                     filename=doc.filename, doc_type=doc_type,
                     priority=_DOC_PRIORITY.get(doc_type, 9),
                     full_text=text,
-                    zones=[DocumentZone(zone_type="BODY", text=text[:30000])],
+                    zones=[_make_body_zone(text, filename=doc.filename)],
                     extraction_method="markdown",
                 )
             except Exception:
@@ -447,7 +456,7 @@ def build_case_ir(db: Session, case: Case) -> CaseIR:
                     filename=doc.filename, doc_type=doc_type,
                     priority=_DOC_PRIORITY.get(doc_type, 9),
                     full_text=doc.extracted_text,
-                    zones=[DocumentZone(zone_type="BODY", text=doc.extracted_text[:30000])],
+                    zones=[_make_body_zone(doc.extracted_text, filename=doc.filename)],
                     extraction_method="existing",
                 )
             else:

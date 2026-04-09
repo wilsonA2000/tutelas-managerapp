@@ -44,6 +44,7 @@ class DocumentZone:
     page: int = 0
     confidence: float = 1.0
     metadata: dict = field(default_factory=dict)  # Datos estructurados de la zona
+    truncated: bool = False  # True si el texto fue recortado por limite de caracteres
 
 
 @dataclass

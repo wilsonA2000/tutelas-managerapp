@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, X, CheckCircle, AlertTriangle } from 'lucide-react'
 import {
   getSyncStatus, getCheckInboxStatus, getExtractionProgress,
   stopExtraction, cancelCheckInbox, cancelSync,
 } from '../services/api'
+import { useSyncProgress, useGmailProgress, useExtractionProgress } from '../hooks/useProgressPolling'
 
 interface ProcessInfo {
   key: string
@@ -103,9 +104,9 @@ interface CompletedResult {
 
 export default function ProgressModal() {
   const qc = useQueryClient()
-  const syncQ = useQuery({ queryKey: ['progress-sync'], queryFn: getSyncStatus, refetchInterval: 2000 })
-  const gmailQ = useQuery({ queryKey: ['progress-gmail'], queryFn: getCheckInboxStatus, refetchInterval: 2000 })
-  const extractQ = useQuery({ queryKey: ['progress-extraction'], queryFn: getExtractionProgress, refetchInterval: 2000 })
+  const syncQ = useSyncProgress()
+  const gmailQ = useGmailProgress()
+  const extractQ = useExtractionProgress()
 
   const [completedResults, setCompletedResults] = useState<CompletedResult[]>([])
   const [showCompleted, setShowCompleted] = useState(false)

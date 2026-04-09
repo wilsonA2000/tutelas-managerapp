@@ -13,9 +13,10 @@ import {
   Cpu, Download,
   Scale, Shield, Gavel, TrendingUp, Info,
 } from 'lucide-react'
+import { useExtractionProgress, useGmailProgress } from '../hooks/useProgressPolling'
 import {
   getKPIs, getCharts, getActivity,
-  getExtractionProgress, checkInbox, getCheckInboxStatus, getMonitorStatus,
+  checkInbox, getMonitorStatus,
   runExtractionAll, stopExtraction, generateExcel,
   getAIProviders, setAIProvider, getTokenMetrics,
 } from '../services/api'
@@ -161,17 +162,9 @@ export default function Dashboard() {
     queryFn: getMonitorStatus,
     refetchInterval: 10000,
   })
-  const progressQ = useQuery({
-    queryKey: ['extraction-progress'],
-    queryFn: getExtractionProgress,
-    refetchInterval: 3000,
-  })
-
-  const gmailStatusQ = useQuery({
-    queryKey: ['gmail-check-status'],
-    queryFn: getCheckInboxStatus,
-    refetchInterval: 2000,
-  })
+  // Usar hooks compartidos para evitar polling duplicado con ProgressModal
+  const progressQ = useExtractionProgress()
+  const gmailStatusQ = useGmailProgress()
   const gmailChecking = gmailStatusQ.data?.in_progress ?? false
   const gmailStep = gmailStatusQ.data?.step ?? ''
 
