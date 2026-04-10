@@ -243,6 +243,144 @@ def backfill_emails_md(db: Session, dry_run: bool = False) -> dict[str, Any]:
 
 
 # ============================================================
+# F3b: batch_move_no_pertenece (reasignacion individual con sibling rule)
+# ============================================================
+
+def batch_move_no_pertenece(
+    db: Session,
+    dry_run: bool = True,
+    min_confidence: str = "ALTA",
+) -> dict[str, Any]:
+    """Mueve documentos NO_PERTENECE a su caso correcto sugerido.
+
+    Reusa api_suggest_target logic inline para evitar dependencia del router.
+    Solo mueve si hay sugerencia con confidence >= min_confidence.
+    La regla "hermanos viajan juntos" aplica automaticamente via sibling_mover.
+
+    Args:
+        db: sesion SQLAlchemy
+        dry_run: si True, solo cuenta sin mover
+        min_confidence: 'ALTA' | 'MEDIA' | 'BAJA'
+
+    Returns:
+        dict con estadisticas + lista de moves ejecutados/propuestos
+    """
+    import re
+    from backend.services.sibling_mover import move_document_or_package
+
+    start = datetime.utcnow()
+    stats: dict[str, Any] = {
+        "dry_run": dry_run,
+        "total_no_pertenece": 0,
+        "moved": 0,
+        "skipped_no_suggestion": 0,
+        "skipped_low_confidence": 0,
+        "errors": 0,
+        "actions": [],
+    }
+
+    CONFIDENCE_RANK = {"ALTA": 3, "MEDIA": 2, "BAJA": 1}
+    min_rank = CONFIDENCE_RANK.get(min_confidence, 3)
+
+    candidates = db.query(Document).filter(Document.verificacion == "NO_PERTENECE").all()
+    stats["total_no_pertenece"] = len(candidates)
+
+    # Precargar todos los casos para reusar
+    all_cases = db.query(Case).all()
+    cases_by_id = {c.id: c for c in all_cases}
+
+    already_moved_ids: set[int] = set()  # evita mover hermanos 2 veces
+
+    for doc in candidates:
+        if doc.id in already_moved_ids:
+            continue
+
+        try:
+            text = (doc.extracted_text or "")[:10000].upper()
+            detalle = doc.verificacion_detalle or ""
+            source_case = cases_by_id.get(doc.case_id)
+            if not source_case:
+                stats["errors"] += 1
+                continue
+
+            source_rad23 = re.sub(r'[\s\-\.]', '', (source_case.radicado_23_digitos or ''))
+
+            # Estrategia A: radicado 23d en texto
+            rad23_matches = re.findall(r'(68[\d]{17,21})', re.sub(r'[\s\-\.]', '', text))
+            suggestion = None
+            for rad23 in rad23_matches:
+                if len(rad23) >= 20 and rad23 != source_rad23:
+                    for c in all_cases:
+                        if c.id == doc.case_id:
+                            continue
+                        c_rad = re.sub(r'[\s\-\.]', '', c.radicado_23_digitos or '')
+                        if c_rad and len(c_rad) >= 15 and c_rad[-12:] == rad23[-12:]:
+                            suggestion = {"case_id": c.id, "confidence": "ALTA", "reason": f"rad23={rad23}"}
+                            break
+                    if suggestion:
+                        break
+
+            # Estrategia B: radicado corto en verificacion_detalle
+            if not suggestion:
+                m = re.search(r'Radicado\s+(20\d{2})[-\s]?0*(\d{2,5})', detalle)
+                if m:
+                    target_seq = m.group(2).zfill(5)
+                    pattern = f"{m.group(1)}-{target_seq}"
+                    for c in all_cases:
+                        if c.id == doc.case_id:
+                            continue
+                        if c.folder_name and pattern in c.folder_name:
+                            suggestion = {"case_id": c.id, "confidence": "MEDIA", "reason": f"rad_corto={pattern}"}
+                            break
+
+            if not suggestion:
+                stats["skipped_no_suggestion"] += 1
+                continue
+
+            if CONFIDENCE_RANK.get(suggestion["confidence"], 0) < min_rank:
+                stats["skipped_low_confidence"] += 1
+                continue
+
+            target_id = suggestion["case_id"]
+
+            if dry_run:
+                stats["moved"] += 1
+                stats["actions"].append({
+                    "doc_id": doc.id,
+                    "filename": (doc.filename or "")[:60],
+                    "source_case_id": doc.case_id,
+                    "target_case_id": target_id,
+                    "confidence": suggestion["confidence"],
+                    "reason": suggestion["reason"],
+                })
+            else:
+                result = move_document_or_package(db, doc.id, target_id, reason="cleanup_no_pertenece")
+                if result.get("errors"):
+                    stats["errors"] += 1
+                else:
+                    moved_ids = result.get("moved_ids", [])
+                    stats["moved"] += len(moved_ids)
+                    already_moved_ids.update(moved_ids)
+                    stats["actions"].append({
+                        "doc_id": doc.id,
+                        "moved_ids": moved_ids,
+                        "package_mode": result.get("package_mode", False),
+                        "target_case_id": target_id,
+                        "confidence": suggestion["confidence"],
+                    })
+
+        except Exception as e:
+            logger.error("batch_move_no_pertenece error doc_id=%d: %s", doc.id, e)
+            stats["errors"] += 1
+
+    if not dry_run:
+        db.commit()
+
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
+    return stats
+
+
+# ============================================================
 # F3: merge_identity_groups (usa la regla de identidad)
 # ============================================================
 

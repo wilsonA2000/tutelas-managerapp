@@ -148,13 +148,59 @@ curl http://localhost:8000/api/extraction/docs/1383/move-preview | jq
 
 ---
 
-## 8. Proximos pasos (no en esta sesion)
+## 8. Iteracion extendida (F3b + F5 + legacy backfill)
 
-1. **F5 Re-extraccion**: correr `unified_extract` sobre los 8 casos canonicos post-merge para capturar el texto de los docs nuevos que llegaron via F3. Esperado: los canonicos crezcan en campos/caso >13 gracias a la fusion.
-2. **Vincular los 217 EMAIL_MD legacy** sin email_id (archivos .md pre-v4.8 que no siguen el patron `Email_YYYYMMDD_*.md`). Requiere heuristica extra por case_id + fecha extraida del contenido.
-3. **Limpiar los 191 docs NO_PERTENECE restantes**: requiere F3 modo move individual (no merge) con regla de hermanos.
-4. **Typos de carpeta** (`20222-`, `2026 -0055`, etc): renombrar en disco + actualizar folder_path. 12 folders afectadas.
-5. **UI CleanupPanel**: componente frontend que expone F1-F5 al usuario con confirmaciones visuales. Hoy solo backend + CLI.
+Tras el commit inicial v4.8 F2-F4, continuamos con 3 acciones adicionales:
+
+### 8.1 Backfill EMAIL_MD legacy (+106 docs vinculados)
+
+`backend/database/migrations/v48_backfill_email_md_legacy.py` — 2 estrategias:
+- D) hash hex en filename → match con emails.message_id (0 matches, message_ids en formato Outlook)
+- E) `Email_YYYYMMDD_<subject>.md` → match por case_id + fecha (+/- 3 dias) + first_words_key
+
+Resultado: **106/217 EMAIL_MD legacy vinculados** (48.8%). Los 111 restantes son formatos muy antiguos.
+
+### 8.2 F3b Reasignacion individual de NO_PERTENECE (+70 docs movidos)
+
+`backend/services/cleanup_actions.py::batch_move_no_pertenece` — solo confidence ALTA:
+- Extrae radicado 23d del texto, busca caso con mismo sufijo
+- Reusa `move_document_or_package` (regla hermanos aplica)
+
+Resultado: **63 docs movidos directos + 7 hermanos arrastrados = 70 total**. NO_PERTENECE bajo de 192 → 141 (-51, algunos hermanos ya estaban en destino correcto). Duracion: 2.4s. 0 errores.
+
+### 8.3 F5 Re-extraccion de 8 canonicos fusionados
+
+Re-corrimos `unified_extract` sobre los 8 canonicos post-merge para capturar campos que podrian estar en los docs movidos desde los fragmentos.
+
+**Resultado sorprendente**: +0 campos totales. Los canonicos ya estaban completos (18-19/19 campos) desde el momento del merge, porque `unified_extract` respeta campos ya poblados y el sistema heredó la info en la fusion.
+
+**Efecto colateral positivo**: el caso 206 Ingrid pasó de 70 → 58 docs. El pipeline detecto 12 docs duplicados/NO_PERTENECE dentro del caso y los marco automaticamente. **Esto sugiere que F5 es util como limpieza de consistencia interna, no como mejora de cobertura.**
+
+## 9. Estado final definitivo (post-iteracion extendida)
+
+| Metrica | v4.7 inicio | v4.8 post-F4 | **v4.8 final** |
+|---|---|---|---|
+| Docs con file_hash | 62% | 100% | **100%** |
+| Docs con email_id (provenance) | 0% | 20.52% | **23.16%** |
+| Docs NO_PERTENECE | 192 | 191 | **141** (-51) |
+| Grupos auto-mergeables | 8 | 0 | **0** |
+| Casos DUPLICATE_MERGED | 0 | 12 | **12** |
+| Casos COMPLETO activos | 337 | 321 | **321** |
+
+## 10. Lessons learned
+
+1. **El merge ya aplica los campos del fusionado al canonico** — no hay que re-extraer despues de F3, la info ya esta en el canonico via SQL UPDATE.
+2. **La regla "hermanos viajan juntos" funciona en produccion** — en F3 se arrastraron 20 docs por propagacion de paquetes, y en F3b otros 7.
+3. **PENDIENTE_OCR (293 docs)** es un problema separado del cleanup — son PDFs escaneados que necesitan OCR para dar su radicado. Pendiente para futuras iteraciones con PaddleOCR.
+4. **Los 111 EMAIL_MD legacy sin vincular** son de un formato pre-v3 (nombres como `Email_EXTRACCION_<hash>_...`) — la estrategia del hash no matcheo porque los message_ids actuales no usan hex. Podria tackearse con heuristica diferente en futuro.
+
+## 11. Proximas mejoras posibles (ya fuera de scope v4.8)
+
+1. **PENDIENTE_OCR**: re-correr PaddleOCR sobre los 293 docs escaneados
+2. **Typos de carpeta** (`20222-`, `2026 -0055`, etc): renombrar en disco + actualizar folder_path. 12 folders afectadas.
+3. **UI CleanupPanel**: componente frontend que expone F1-F5 al usuario con confirmaciones visuales. Hoy solo backend + CLI.
+4. **Los 141 NO_PERTENECE restantes**: requiere revision manual o una heuristica mas agresiva (confidence MEDIA con validacion adicional).
+5. **111 EMAIL_MD legacy pre-v3** sin vincular: requeririan re-descargar los emails desde Gmail para obtener message_id fresh, probablemente no vale la pena.
 
 ---
 

@@ -19,6 +19,7 @@ from backend.services.cleanup_actions import (
     backfill_content_hash,
     backfill_emails_md,
     merge_identity_groups,
+    batch_move_no_pertenece,
 )
 
 router = APIRouter(prefix="/api/cleanup", tags=["cleanup"])
@@ -57,6 +58,28 @@ def api_cleanup_emails_md(body: DryRunBody = DryRunBody(), db: Session = Depends
     Safe: solo crea archivos nuevos en disco + registra Documents con email_id.
     """
     return backfill_emails_md(db, dry_run=body.dry_run)
+
+
+class MoveNoPertBody(BaseModel):
+    dry_run: bool = True
+    min_confidence: str = "ALTA"
+
+
+@router.post("/move-no-pertenece")
+def api_cleanup_move_no_pertenece(
+    body: MoveNoPertBody = MoveNoPertBody(),
+    db: Session = Depends(get_db),
+):
+    """F3b: Mueve docs NO_PERTENECE a su caso correcto sugerido.
+
+    Regla 'hermanos viajan juntos' aplica automaticamente: si el doc tiene
+    email_id, sus hermanos del paquete lo acompañan al destino.
+    """
+    return batch_move_no_pertenece(
+        db,
+        dry_run=body.dry_run,
+        min_confidence=body.min_confidence,
+    )
 
 
 class MergeBody(BaseModel):
