@@ -162,6 +162,7 @@ def diagnose(db: Session, base_dir: str | None = None) -> dict[str, Any]:
         "cases_completo": db.query(Case).filter(Case.processing_status == "COMPLETO").count(),
         "cases_pendiente": db.query(Case).filter(Case.processing_status == "PENDIENTE").count(),
         "cases_revision": db.query(Case).filter(Case.processing_status == "REVISION").count(),
+        "cases_duplicate_merged": db.query(Case).filter(Case.processing_status == "DUPLICATE_MERGED").count(),
         "cases_zero_docs": db.query(Case).filter(
             ~Case.documents.any()
         ).count(),
@@ -181,8 +182,11 @@ def diagnose(db: Session, base_dir: str | None = None) -> dict[str, Any]:
     }
 
     # --- Identity groups: agrupa casos por (radicado_23d, accionante, tipo_rep) ---
+    # Excluye casos ya fusionados (DUPLICATE_MERGED) para no re-proponer merges.
     identity_map: dict[tuple, list[int]] = defaultdict(list)
-    cases_all = db.query(Case).all()
+    cases_all = db.query(Case).filter(
+        (Case.processing_status != "DUPLICATE_MERGED") | (Case.processing_status.is_(None))
+    ).all()
 
     for c in cases_all:
         identity = case_identity(c)
