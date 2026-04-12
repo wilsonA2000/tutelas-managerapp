@@ -12,7 +12,11 @@ con un solo motor de 6 fases:
 """
 
 import logging
+import threading
 import time
+
+# Lock para operaciones I/O no-thread-safe (rename de carpetas, SQLite FTS5)
+_io_lock = threading.Lock()
 from datetime import datetime
 from pathlib import Path
 
@@ -430,9 +434,11 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
             case.processing_status = "COMPLETO"
             case.updated_at = datetime.utcnow()
 
-        # Renombrar carpeta si aplica
+        # Renombrar carpeta si aplica (serializado para thread-safety)
         try:
-            _rename_folder_if_needed(db, case, stats)
+            with _io_lock:
+                _rename_folder_if_needed(db, case, stats)
+                stats["renamed"] = True
         except Exception:
             pass
 
@@ -442,10 +448,11 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
         except Exception:
             pass
 
-        # Knowledge Base
+        # Knowledge Base (serializado — SQLite FTS5 single-writer)
         try:
-            from backend.knowledge.indexer import index_case_fields
-            index_case_fields(db, case.id, final_fields)
+            with _io_lock:
+                from backend.knowledge.indexer import index_case_fields
+                index_case_fields(db, case.id, final_fields)
         except Exception:
             pass
 

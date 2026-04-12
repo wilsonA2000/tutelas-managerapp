@@ -55,6 +55,7 @@ class Case(Base):
     decision_incidente_3 = Column(String)
 
     observaciones = Column(Text)
+    categoria_tematica = Column(String, default="", index=True)
 
     # --- Metadata ---
     folder_name = Column(String, unique=True, index=True)
@@ -108,6 +109,7 @@ class Case(Base):
         "RESPONSABLE_DESACATO_3": "responsable_desacato_3",
         "DECISION_INCIDENTE_3": "decision_incidente_3",
         "OBSERVACIONES": "observaciones",
+        "CATEGORIA_TEMATICA": "categoria_tematica",
     }
 
     def to_dict(self, include_doc_count: bool = False):

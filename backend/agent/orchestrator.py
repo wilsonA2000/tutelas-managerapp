@@ -4,7 +4,7 @@ Loop principal del agente:
 0. CLASIFICAR → Verificar que cada documento pertenece a esta carpeta (mover los que no)
 1. RECOPILAR → ContextAssembler reúne TODO el contexto
 2. PRE-EXTRAER → RegexExtractors corren en todas las fuentes
-3. RAZONAR → Llamada a Gemini con contexto completo
+3. RAZONAR → Llamada a IA con contexto completo
 4. VALIDAR → PostValidators verifican cada campo
 5. DECIDIR → ConflictResolver fusiona regex + IA
 6. APRENDER → Almacenar para futuras extracciones
@@ -70,37 +70,67 @@ REGLAS:
 Responde SOLO JSON válido."""
 
 
-def _call_gemini_classify(prompt: str, max_retries: int = 3) -> dict:
-    """Llamar a Gemini para clasificación de documentos."""
+def _call_ai_classify(prompt: str, max_retries: int = 3) -> dict:
+    """Clasificar documentos usando Smart Router (DeepSeek/Haiku/Groq)."""
     try:
-        from google import genai
-        from dotenv import load_dotenv
-        load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
-        client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY", ""))
+        from backend.agent.smart_router import route
+        from backend.extraction.ai_extractor import PROVIDERS
+
+        decision = route("extraction")
+        provider = decision.provider
+        model = decision.model
+        env_key = PROVIDERS.get(provider, {}).get("env_key", "")
+        api_key = os.getenv(env_key, "") if env_key else ""
+
+        if not api_key:
+            logger.warning("No API key for classification, skipping")
+            return {}
 
         for attempt in range(max_retries):
             try:
-                r = client.models.generate_content(
-                    model="gemini-2.5-flash", contents=prompt,
-                    config=genai.types.GenerateContentConfig(
-                        response_mime_type="application/json", temperature=0.1,
-                    ),
-                )
-                text = r.text.strip()
+                if provider in ("deepseek", "groq", "cerebras"):
+                    from openai import OpenAI
+                    base_urls = {"deepseek": "https://api.deepseek.com",
+                                 "groq": "https://api.groq.com/openai/v1",
+                                 "cerebras": "https://api.cerebras.ai/v1"}
+                    client = OpenAI(api_key=api_key, base_url=base_urls[provider])
+                    r = client.chat.completions.create(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.1, max_tokens=4000,
+                        response_format={"type": "json_object"} if provider != "cerebras" else None,
+                    )
+                    text = r.choices[0].message.content.strip()
+                elif provider == "anthropic":
+                    import anthropic
+                    client = anthropic.Anthropic(api_key=api_key)
+                    r = client.messages.create(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt + "\n\nResponde SOLO JSON válido."}],
+                        temperature=0.1, max_tokens=4000,
+                    )
+                    text = r.content[0].text.strip()
+                else:
+                    return {}
+
                 if "```" in text:
                     text = re.sub(r"```(?:json)?\s*", "", text).strip()
                     text = re.sub(r"\s*```$", "", text).strip()
+                # Extract JSON if wrapped in text
+                json_match = re.search(r'\{[\s\S]*\}', text)
+                if json_match:
+                    return json.loads(json_match.group())
                 return json.loads(text)
             except Exception as e:
-                if "429" in str(e):
+                if "429" in str(e) or "rate" in str(e).lower():
                     wait = 15 * (attempt + 1)
-                    logger.warning(f"Rate limit clasificación, esperando {wait}s...")
+                    logger.warning(f"Rate limit clasificación ({provider}), esperando {wait}s...")
                     time.sleep(wait)
                 else:
-                    logger.error(f"Gemini classify error: {e}")
+                    logger.error(f"AI classify error ({provider}/{model}): {e}")
                     return {}
     except Exception as e:
-        logger.error(f"Gemini classify init error: {e}")
+        logger.error(f"AI classify init error: {e}")
     return {}
 
 
@@ -160,7 +190,7 @@ def classify_and_clean_folder(db: Session, case, base_dir: str) -> dict:
         folder_name=case.folder_name,
         docs_text=docs_combined[:15000],
     )
-    ai_result = _call_gemini_classify(prompt)
+    ai_result = _call_ai_classify(prompt)
 
     if not ai_result or "documentos" not in ai_result:
         result["classification_error"] = "IA no respondió correctamente, se asume todos OK"
@@ -205,7 +235,7 @@ def classify_and_clean_folder(db: Session, case, base_dir: str) -> dict:
                 except Exception as e:
                     logger.error(f"Error moviendo {filename}: {e}")
 
-    # Actualizar accionante/radicado si Gemini los identificó mejor
+    # Actualizar accionante/radicado si IA los identificó mejor
     ai_acc = ai_result.get("carpeta_accionante", "")
     ai_rad = ai_result.get("carpeta_radicado", "")
     if ai_acc and not (case.accionante or "").strip():
@@ -387,7 +417,7 @@ def smart_extract_case(db: Session, case_id: int, base_dir: str, classify_docs: 
 
 
 def _call_ai_extraction(context: CaseContext, known_fields: dict) -> dict[str, ExtractionResult]:
-    """Llamar a Gemini/IA con el contexto completo del caso."""
+    """Llamar a IA con el contexto completo del caso."""
     try:
         from backend.extraction.ai_extractor import extract_with_ai, SYSTEM_PROMPT
 

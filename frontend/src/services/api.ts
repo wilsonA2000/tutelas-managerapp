@@ -51,8 +51,8 @@ export const getDocumentPreviewUrl = (id: number) =>
 export const extractSingle = (caseId: number) =>
   api.post(`/extraction/single/${caseId}`, {}, { timeout: 180000 }).then(r => r.data);
 
-export const extractBatch = (caseIds?: number[]) =>
-  api.post('/extraction/batch', { case_ids: caseIds }, { timeout: 10000 }).then(r => r.data);
+export const extractBatch = (caseIds?: number[], classifyDocs: boolean = false) =>
+  api.post('/extraction/batch', { case_ids: caseIds, classify_docs: classifyDocs }, { timeout: 10000 }).then(r => r.data);
 
 export const getReviewQueue = () =>
   api.get('/extraction/review').then(r => r.data);
@@ -182,6 +182,9 @@ export const getAlertCounts = () =>
 export const scanAlerts = () =>
   api.post('/alerts/scan').then(r => r.data);
 
+export const markAlertsSeen = () =>
+  api.post('/alerts/mark-seen').then(r => r.data);
+
 export const dismissAlert = (id: number) =>
   api.post(`/alerts/${id}/dismiss`).then(r => r.data);
 
@@ -249,5 +252,34 @@ export const suggestDocTarget = (docId: number) =>
 
 export const moveDocument = (docId: number, targetCaseId: number) =>
   api.post(`/extraction/docs/${docId}/move/${targetCaseId}`).then(r => r.data);
+
+// Cleanup
+export const getCleanupDiagnosis = () =>
+  api.get('/cleanup/diagnosis').then(r => r.data);
+
+export const runHashBackfill = (dryRun = true) =>
+  api.post('/cleanup/hash-backfill', { dry_run: dryRun }).then(r => r.data);
+
+export const runEmailsMdBackfill = (dryRun = true) =>
+  api.post('/cleanup/emails-md-backfill', { dry_run: dryRun }).then(r => r.data);
+
+export const runMoveNoPertenece = (dryRun = true, minConfidence = 'ALTA') =>
+  api.post('/cleanup/move-no-pertenece', { dry_run: dryRun, min_confidence: minConfidence }).then(r => r.data);
+
+export const runMergeIdentity = (dryRun = true, onlyAutoMergeable = true) =>
+  api.post('/cleanup/merge-identity', { dry_run: dryRun, only_auto_mergeable: onlyAutoMergeable }).then(r => r.data);
+
+// v5.0 Audit
+export const getFullAudit = () =>
+  api.get('/cleanup/audit').then(r => r.data);
+
+export const runPurgeDuplicates = (dryRun = true, scope = 'intra') =>
+  api.post('/cleanup/purge-duplicates', { dry_run: dryRun, scope }).then(r => r.data);
+
+export const runMergeForestFragments = (dryRun = true, minConfidence = 'ALTA') =>
+  api.post('/cleanup/merge-forest-fragments', { dry_run: dryRun, min_confidence: minConfidence }).then(r => r.data);
+
+export const runBackfillRadicados = (dryRun = true) =>
+  api.post('/cleanup/backfill-radicados', { dry_run: dryRun }).then(r => r.data);
 
 export default api;

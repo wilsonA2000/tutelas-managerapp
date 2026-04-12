@@ -3,12 +3,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import {
   Mail, RefreshCw, Loader2, Inbox,
-  AlertCircle, ExternalLink, Search,
+  AlertCircle, Search,
   Paperclip, ChevronLeft, X, User,
   Calendar, ArrowRight, FileText, Package,
 } from 'lucide-react'
 import { getEmails, getEmail, checkInbox, getGmailStats, syncAllEmails, getEmailPackage } from '../services/api'
 import { useNavigate } from 'react-router-dom'
+import PageHeader from '@/components/PageHeader'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 
 interface EmailItem {
   id: number
@@ -36,21 +41,31 @@ interface EmailDetail {
 }
 
 const STATUS_STYLES: Record<string, string> = {
-  pendiente: 'bg-amber-100 text-amber-700 border-amber-200',
-  procesado: 'bg-blue-100 text-blue-700 border-blue-200',
-  asignado: 'bg-green-100 text-green-700 border-green-200',
-  ignorado: 'bg-gray-100 text-gray-500 border-gray-200',
+  pendiente: 'bg-amber-50 text-amber-700 border-amber-200',
+  procesado: 'bg-blue-50 text-blue-700 border-blue-200',
+  asignado: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  ignorado: 'bg-muted text-muted-foreground border-border',
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const labels: Record<string, string> = {
-    pendiente: 'Pendiente', procesado: 'Procesado',
-    asignado: 'Asignado', ignorado: 'Ignorado',
-  }
+const STATUS_LABELS: Record<string, string> = {
+  pendiente: 'Pendiente',
+  procesado: 'Procesado',
+  asignado: 'Asignado',
+  ignorado: 'Ignorado',
+}
+
+function EmailStatusBadge({ status }: { status: string }) {
+  const key = status.toLowerCase()
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${STATUS_STYLES[status] ?? 'bg-gray-100 text-gray-500 border-gray-200'}`}>
-      {labels[status] ?? status}
-    </span>
+    <Badge
+      variant="outline"
+      className={cn(
+        'text-[10px] font-semibold px-1.5 py-0.5 rounded-md',
+        STATUS_STYLES[key] ?? 'bg-muted text-muted-foreground border-border'
+      )}
+    >
+      {STATUS_LABELS[key] ?? status}
+    </Badge>
   )
 }
 
@@ -107,7 +122,7 @@ export default function Emails() {
     mutationFn: syncAllEmails,
     onSuccess: (data) => {
       if (data.status === 'started') {
-        toast.success('Sincronizacion completa iniciada...')
+        toast.success('Sincronización completa iniciada...')
         setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 10000)
         setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 30000)
         setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 60000)
@@ -148,81 +163,97 @@ export default function Emails() {
     return match ? match[1].trim() : sender.split('@')[0]
   }
 
+  const headerActions = (
+    <div className="flex items-center gap-2">
+      {gmailStatsQ.data?.faltan > 0 && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => syncMutation.mutate()}
+          disabled={syncMutation.isPending}
+          className="border-amber-300 text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+        >
+          {syncMutation.isPending
+            ? <Loader2 size={14} className="animate-spin mr-1.5" />
+            : <RefreshCw size={14} className="mr-1.5" />}
+          {syncMutation.isPending ? 'Sincronizando...' : `Sync ${gmailStatsQ.data.faltan} faltantes`}
+        </Button>
+      )}
+      <Button
+        size="sm"
+        onClick={() => checkMutation.mutate()}
+        disabled={checkMutation.isPending}
+      >
+        {checkMutation.isPending
+          ? <Loader2 size={14} className="animate-spin mr-1.5" />
+          : <Inbox size={14} className="mr-1.5" />}
+        {checkMutation.isPending ? 'Revisando...' : 'Revisar Bandeja'}
+      </Button>
+    </div>
+  )
+
   return (
     <div className="flex flex-col h-[calc(100vh-64px)]">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <h1 className="text-lg font-bold text-gray-800">Correos</h1>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-[#1A5276] bg-blue-50 px-2 py-0.5 rounded-full">
-              {total} en sistema
-            </span>
-            {gmailStatsQ.data && (
-              <>
-                <span className="text-xs text-gray-400">|</span>
-                <span className="text-xs font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">
-                  {gmailStatsQ.data.gmail_total} en Gmail
+      <div className="flex-shrink-0 px-6 py-4 border-b border-border bg-card">
+        <PageHeader
+          title="Correos"
+          icon={Mail}
+          subtitle={undefined}
+          action={headerActions}
+        />
+        {/* Stats row */}
+        <div className="flex items-center gap-2 mt-2 ml-[3.25rem]">
+          <Badge variant="outline" className="text-[11px] font-semibold text-primary bg-primary/5 border-primary/20">
+            {total} en sistema
+          </Badge>
+          {gmailStatsQ.data && (
+            <>
+              <span className="text-muted-foreground/40 text-xs">|</span>
+              <Badge variant="outline" className="text-[11px] text-muted-foreground">
+                {gmailStatsQ.data.gmail_total} en Gmail
+              </Badge>
+              {gmailStatsQ.data.gmail_unread > 0 && (
+                <Badge variant="outline" className="text-[11px] font-semibold text-amber-700 bg-amber-50 border-amber-200">
+                  {gmailStatsQ.data.gmail_unread} no leidos
+                </Badge>
+              )}
+              {gmailStatsQ.data.faltan > 0 && (
+                <span className="text-[10px] text-destructive font-medium">
+                  ({gmailStatsQ.data.faltan} pendientes en Gmail)
                 </span>
-                {gmailStatsQ.data.gmail_unread > 0 && (
-                  <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
-                    {gmailStatsQ.data.gmail_unread} no leidos
-                  </span>
-                )}
-                {gmailStatsQ.data.faltan > 0 && (
-                  <span className="text-[10px] text-red-500">
-                    ({gmailStatsQ.data.faltan} pendientes en Gmail)
-                  </span>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {gmailStatsQ.data?.faltan > 0 && (
-            <button
-              onClick={() => syncMutation.mutate()}
-              disabled={syncMutation.isPending}
-              className="flex items-center gap-2 px-3 py-2 bg-amber-500 text-white text-sm font-medium rounded-lg hover:bg-amber-600 disabled:opacity-50 transition-colors shadow-sm"
-            >
-              {syncMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-              {syncMutation.isPending ? 'Sincronizando...' : `Sync ${gmailStatsQ.data.faltan} faltantes`}
-            </button>
+              )}
+            </>
           )}
-          <button
-            onClick={() => checkMutation.mutate()}
-            disabled={checkMutation.isPending}
-            className="flex items-center gap-2 px-3 py-2 bg-[#1A5276] text-white text-sm font-medium rounded-lg hover:bg-[#154360] disabled:opacity-50 transition-colors shadow-sm"
-          >
-            {checkMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Inbox size={14} />}
-            {checkMutation.isPending ? 'Revisando...' : 'Revisar Bandeja'}
-          </button>
         </div>
       </div>
 
-      {/* Search bar */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-100 bg-gray-50 flex-shrink-0">
+      {/* Search / filter bar */}
+      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-muted/30 flex-shrink-0">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
-          <input
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} />
+          <Input
             type="text"
             placeholder="Buscar por asunto, remitente, contenido..."
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-            className="w-full pl-9 pr-4 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:border-[#1A5276] focus:outline-none focus:ring-1 focus:ring-[#1A5276]/20"
+            className="pl-9 h-8 text-sm bg-card"
           />
         </div>
         <select
           value={status}
           onChange={(e) => { setStatus(e.target.value); setPage(1) }}
-          className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white"
+          className="text-xs h-8 border border-input rounded-md px-2 bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
         >
           <option value="">Todos</option>
           <option value="PENDIENTE">Pendiente</option>
           <option value="ASIGNADO">Asignado</option>
           <option value="IGNORADO">Ignorado</option>
         </select>
-        <button onClick={() => qc.invalidateQueries({ queryKey: ['emails'] })} className="p-1.5 text-gray-400 hover:text-gray-600">
+        <button
+          onClick={() => qc.invalidateQueries({ queryKey: ['emails'] })}
+          className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+        >
           <RefreshCw size={14} className={emailsQ.isFetching ? 'animate-spin' : ''} />
         </button>
       </div>
@@ -230,58 +261,64 @@ export default function Emails() {
       {/* Main content: list + detail */}
       <div className="flex flex-1 overflow-hidden">
         {/* Email list */}
-        <div className={`${selectedId ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-[380px] lg:w-[420px] border-r border-gray-200 bg-white overflow-hidden flex-shrink-0`}>
+        <div className={cn(
+          'flex-col w-full md:w-[380px] lg:w-[420px] border-r border-border bg-card overflow-hidden flex-shrink-0',
+          selectedId ? 'hidden md:flex' : 'flex'
+        )}>
           {emailsQ.isError ? (
-            <div className="flex items-center gap-2 text-red-500 text-sm p-5">
+            <div className="flex items-center gap-2 text-destructive text-sm p-5">
               <AlertCircle size={16} /> Error al cargar correos
             </div>
           ) : emailsQ.isLoading ? (
             <div className="flex items-center justify-center py-10">
-              <Loader2 size={24} className="animate-spin text-[#1A5276]" />
+              <Loader2 size={24} className="animate-spin text-primary" />
             </div>
           ) : emails.length === 0 ? (
             <div className="text-center py-12">
-              <Mail size={36} className="mx-auto text-gray-300 mb-3" />
-              <p className="text-sm text-gray-500">No hay correos</p>
+              <Mail size={36} className="mx-auto text-muted-foreground/30 mb-3" />
+              <p className="text-sm text-muted-foreground">No hay correos</p>
             </div>
           ) : (
             <>
-              <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
+              <div className="flex-1 overflow-y-auto divide-y divide-border">
                 {emails.map((email) => (
                   <button
                     key={email.id}
                     onClick={() => setSelectedId(email.id)}
-                    className={`w-full text-left px-4 py-3 hover:bg-blue-50/50 transition-colors ${
-                      selectedId === email.id ? 'bg-blue-50 border-l-2 border-l-[#1A5276]' : 'border-l-2 border-l-transparent'
-                    }`}
+                    className={cn(
+                      'w-full text-left px-4 py-3 hover:bg-accent transition-colors border-l-2',
+                      selectedId === email.id
+                        ? 'bg-accent border-l-primary'
+                        : 'border-l-transparent'
+                    )}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 mb-0.5">
-                          <span className="text-xs font-semibold text-gray-700 truncate">
+                          <span className="text-xs font-semibold text-foreground truncate">
                             {extractSenderName(email.sender)}
                           </span>
-                          <StatusBadge status={email.status} />
+                          <EmailStatusBadge status={email.status} />
                         </div>
-                        <p className="text-sm font-medium text-gray-800 truncate">
+                        <p className="text-sm font-medium text-foreground truncate">
                           {email.subject || '(Sin asunto)'}
                         </p>
-                        <p className="text-xs text-gray-400 truncate mt-0.5">
+                        <p className="text-xs text-muted-foreground truncate mt-0.5">
                           {email.snippet || ''}
                         </p>
                       </div>
                       <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                        <span className="text-[10px] text-gray-400 whitespace-nowrap">
+                        <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                           {formatDate(email.received_at)}
                         </span>
                         {(email.attachments_count ?? 0) > 0 && (
-                          <Paperclip size={11} className="text-gray-300" />
+                          <Paperclip size={11} className="text-muted-foreground/40" />
                         )}
                       </div>
                     </div>
                     {email.case_folder && (
                       <div className="mt-1">
-                        <span className="text-[10px] font-mono text-[#1A5276] bg-blue-50 px-1.5 py-0.5 rounded">
+                        <span className="text-[10px] font-mono text-primary bg-primary/8 px-1.5 py-0.5 rounded">
                           {email.case_folder}
                         </span>
                       </div>
@@ -291,12 +328,20 @@ export default function Emails() {
               </div>
               {/* Pagination */}
               {totalPages > 1 && (
-                <div className="flex items-center justify-between px-4 py-2 border-t border-gray-100 bg-gray-50 text-xs text-gray-500">
-                  <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="disabled:opacity-30">
+                <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-muted/30 text-xs text-muted-foreground">
+                  <button
+                    disabled={page <= 1}
+                    onClick={() => setPage(p => p - 1)}
+                    className="disabled:opacity-30 hover:text-foreground transition-colors"
+                  >
                     <ChevronLeft size={14} />
                   </button>
                   <span>{page}/{totalPages}</span>
-                  <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="disabled:opacity-30">
+                  <button
+                    disabled={page >= totalPages}
+                    onClick={() => setPage(p => p + 1)}
+                    className="disabled:opacity-30 hover:text-foreground transition-colors"
+                  >
                     <ChevronLeft size={14} className="rotate-180" />
                   </button>
                 </div>
@@ -306,59 +351,74 @@ export default function Emails() {
         </div>
 
         {/* Email detail / reading pane */}
-        <div className={`${selectedId ? 'flex' : 'hidden md:flex'} flex-1 flex-col bg-gray-50 overflow-hidden`}>
+        <div className={cn(
+          'flex-1 flex-col bg-muted/20 overflow-hidden',
+          selectedId ? 'flex' : 'hidden md:flex'
+        )}>
           {!selectedId ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-400">
-              <Mail size={48} className="mb-3 text-gray-300" />
-              <p className="text-sm">Seleccione un correo para leerlo</p>
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground/50">
+              <Mail size={48} className="mb-3" />
+              <p className="text-sm text-muted-foreground">Seleccione un correo para leerlo</p>
             </div>
           ) : detailQ.isLoading ? (
             <div className="flex items-center justify-center h-full">
-              <Loader2 size={24} className="animate-spin text-[#1A5276]" />
+              <Loader2 size={24} className="animate-spin text-primary" />
             </div>
           ) : detail ? (
             <>
               {/* Detail header */}
-              <div className="px-6 py-4 bg-white border-b border-gray-200 flex-shrink-0">
+              <div className="px-6 py-4 bg-card border-b border-border flex-shrink-0">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 md:hidden mb-2">
-                      <button onClick={() => setSelectedId(null)} className="p-1 text-gray-400 hover:text-gray-600">
+                      <button
+                        onClick={() => setSelectedId(null)}
+                        className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+                      >
                         <ChevronLeft size={18} />
                       </button>
-                      <span className="text-xs text-gray-400">Volver</span>
+                      <span className="text-xs text-muted-foreground">Volver</span>
                     </div>
-                    <h2 className="text-lg font-semibold text-gray-800">{detail.subject || '(Sin asunto)'}</h2>
+                    <h2 className="text-base font-semibold text-foreground">
+                      {detail.subject || '(Sin asunto)'}
+                    </h2>
                     <div className="flex items-center gap-3 mt-2 text-sm">
-                      <div className="flex items-center gap-1.5 text-gray-600">
-                        <User size={13} className="text-gray-400" />
-                        <span className="font-medium">{extractSenderName(detail.sender)}</span>
-                        <span className="text-gray-400 text-xs">&lt;{detail.sender.match(/<(.+?)>/)?.[1] || detail.sender}&gt;</span>
+                      <div className="flex items-center gap-1.5 text-muted-foreground">
+                        <User size={13} />
+                        <span className="font-medium text-foreground">
+                          {extractSenderName(detail.sender)}
+                        </span>
+                        <span className="text-muted-foreground/60 text-xs">
+                          &lt;{detail.sender.match(/<(.+?)>/)?.[1] || detail.sender}&gt;
+                        </span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-400">
+                    <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
                       <Calendar size={11} />
                       <span>{formatFullDate(detail.date_received || '')}</span>
                     </div>
                   </div>
-                  <button onClick={() => setSelectedId(null)} className="hidden md:block p-1.5 text-gray-400 hover:text-gray-600">
+                  <button
+                    onClick={() => setSelectedId(null)}
+                    className="hidden md:block p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                  >
                     <X size={16} />
                   </button>
                 </div>
 
                 {/* Case link */}
                 {detail.case_id && (
-                  <div className="mt-3 flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-                    <ArrowRight size={12} className="text-[#1A5276]" />
-                    <span className="text-xs text-gray-600">Caso asignado:</span>
+                  <div className="mt-3 flex items-center gap-2 bg-primary/5 border border-primary/15 rounded-lg px-3 py-2">
+                    <ArrowRight size={12} className="text-primary" />
+                    <span className="text-xs text-muted-foreground">Caso asignado:</span>
                     <button
                       onClick={() => navigate(`/cases/${detail.case_id}`)}
-                      className="text-xs font-mono text-[#1A5276] font-medium hover:underline"
+                      className="text-xs font-mono text-primary font-medium hover:underline"
                     >
                       {detail.case_folder || `#${detail.case_id}`}
                     </button>
                     {detail.case_accionante && (
-                      <span className="text-xs text-gray-400">- {detail.case_accionante}</span>
+                      <span className="text-xs text-muted-foreground">- {detail.case_accionante}</span>
                     )}
                   </div>
                 )}
@@ -367,8 +427,11 @@ export default function Emails() {
                 {detail.attachments && detail.attachments.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {detail.attachments.map((att, i) => (
-                      <div key={i} className="flex items-center gap-1.5 bg-gray-100 rounded-lg px-2.5 py-1.5 text-xs text-gray-600">
-                        <Paperclip size={11} className="text-gray-400" />
+                      <div
+                        key={i}
+                        className="flex items-center gap-1.5 bg-muted rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground border border-border"
+                      >
+                        <Paperclip size={11} />
                         {att.filename}
                       </div>
                     ))}
@@ -378,35 +441,38 @@ export default function Emails() {
 
               {/* Body */}
               <div className="flex-1 overflow-y-auto p-6">
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 max-w-3xl mb-4">
-                  <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">
+                <div className="bg-card rounded-xl border border-border shadow-sm p-6 max-w-3xl mb-4">
+                  <pre className="text-sm text-foreground whitespace-pre-wrap font-sans leading-relaxed">
                     {detail.body || '(Sin contenido)'}
                   </pre>
                 </div>
 
                 {/* v4.8 Provenance: Paquete vinculado (documents con mismo email_id) */}
                 {packageQ.data && packageQ.data.count > 0 && (
-                  <div className="bg-white rounded-xl border border-indigo-200 shadow-sm p-5 max-w-3xl">
-                    <div className="flex items-center gap-2 mb-3 text-indigo-700">
+                  <div className="bg-card rounded-xl border border-violet-200 shadow-sm p-5 max-w-3xl">
+                    <div className="flex items-center gap-2 mb-3 text-violet-700">
                       <Package size={18} />
                       <h3 className="text-sm font-semibold">
-                        Paquete inmutable ({packageQ.data.count} {packageQ.data.count === 1 ? 'documento' : 'documentos'})
+                        Documentos del correo ({packageQ.data.count}{' '}
+                        {packageQ.data.count === 1 ? 'documento' : 'documentos'})
                       </h3>
                     </div>
-                    <p className="text-xs text-gray-500 mb-3">
-                      Estos documentos estan vinculados a este correo de origen. Al mover cualquiera a otro caso, todos viajan juntos automaticamente.
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Estos documentos estan vinculados a este correo de origen. Al mover cualquiera a otro caso, todos viajan juntos automáticamente.
                     </p>
                     <div className="space-y-2">
                       {packageQ.data.documents.map((doc: any) => (
                         <div
                           key={doc.id}
-                          className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-gray-100 hover:border-indigo-300 hover:bg-indigo-50 transition-colors"
+                          className="flex items-center justify-between gap-3 p-2.5 rounded-lg border border-border hover:border-violet-300 hover:bg-violet-50/50 transition-colors"
                         >
                           <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <FileText size={14} className="text-indigo-500 shrink-0" />
+                            <FileText size={14} className="text-violet-500 shrink-0" />
                             <div className="min-w-0">
-                              <div className="text-xs font-medium text-gray-800 truncate">{doc.filename}</div>
-                              <div className="text-[10px] text-gray-500 mt-0.5">
+                              <div className="text-xs font-medium text-foreground truncate">
+                                {doc.filename}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
                                 {doc.doc_type} · {doc.text_length ? `${doc.text_length} chars` : 'sin texto'} · {doc.verificacion || 'sin verificar'}
                               </div>
                             </div>
@@ -415,7 +481,7 @@ export default function Emails() {
                             href={`/api/documents/${doc.id}/preview`}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-[10px] text-indigo-600 hover:text-indigo-800 shrink-0 px-2 py-1 rounded hover:bg-indigo-100"
+                            className="text-[10px] text-violet-600 hover:text-violet-800 shrink-0 px-2 py-1 rounded hover:bg-violet-100 transition-colors"
                           >
                             Ver
                           </a>
@@ -433,7 +499,7 @@ export default function Emails() {
               </div>
             </>
           ) : (
-            <div className="flex items-center justify-center h-full text-gray-400">
+            <div className="flex items-center justify-center h-full text-muted-foreground">
               <p className="text-sm">Error al cargar el correo</p>
             </div>
           )}

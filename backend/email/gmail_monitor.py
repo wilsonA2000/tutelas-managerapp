@@ -219,6 +219,19 @@ def extract_accionante(subject: str, body: str) -> str:
                 non_skip = [w for w in words if w not in SKIP_WORDS and len(w) > 2]
                 if len(non_skip) >= 2:
                     return name.upper()[:60]
+
+    # Fallback: personería municipal mencionada en subject o body
+    combined = f"{subject or ''} {(body or '')[:3000]}"
+    m_pers = re.search(
+        r"(?i)(?:personero|personera|personería|personeria)\s+(?:municipal\s+)?(?:de|del)\s+(?:el\s+)?([A-Za-záéíóúñÁÉÍÓÚÑ\s]{3,40})",
+        combined,
+    )
+    if m_pers:
+        municipio = m_pers.group(1).strip().upper()
+        municipio = re.sub(r"\s+", " ", municipio).split()[0]  # Primera palabra del municipio
+        if len(municipio) >= 3 and municipio not in {"SANTANDER", "LA", "DE", "DEL", "EL"}:
+            return f"PERSONERIA MUNICIPAL DE {municipio}"
+
     return ""
 
 
@@ -289,12 +302,13 @@ def _normalize_rad_num(text: str) -> str | None:
 
 def match_to_case(db: Session, radicado_data: dict, accionante: str) -> Case | None:
     """Buscar caso existente para vincular email.
-    Prioridad: rad_23 completo > rad_corto exacto > personería > accionante (si mismo radicado).
+    Prioridad: rad_23 completo > rad_23 parcial > FOREST > rad_corto > personería > accionante.
     Returns: Case o None."""
     rad_23 = radicado_data.get("radicado_23", "")
     rad_corto = radicado_data.get("radicado_corto", "")
+    forest = radicado_data.get("forest", "")
 
-    # 1. Radicado 23 dígitos COMPLETO (20 dígitos normalizados)
+    # 1a. Radicado 23 dígitos COMPLETO (20 dígitos normalizados)
     if rad_23:
         norm_new = re.sub(r"[^0-9]", "", rad_23)
         if len(norm_new) >= 18:
@@ -305,6 +319,20 @@ def match_to_case(db: Session, radicado_data: dict, accionante: str) -> Case | N
                 norm_ex = re.sub(r"[^0-9]", "", c.radicado_23_digitos or "")
                 if len(norm_ex) >= 18 and norm_new[:20] == norm_ex[:20]:
                     return c
+
+            # 1b. Match parcial: mismo departamento (5 dígitos) + misma secuencia (últimos 12)
+            for c in cases:
+                norm_ex = re.sub(r"[^0-9]", "", c.radicado_23_digitos or "")
+                if len(norm_ex) >= 18 and norm_new[:5] == norm_ex[:5] and norm_new[-12:] == norm_ex[-12:]:
+                    logger.info("Match parcial rad23: email=%s case=%s (mismo dept+secuencia)", norm_new, norm_ex)
+                    return c
+
+    # 1.5. FOREST como clave secundaria
+    if forest and len(forest) >= 8:
+        case_by_forest = db.query(Case).filter(Case.radicado_forest == forest).first()
+        if case_by_forest:
+            logger.info("Match por FOREST: %s → case_id=%d", forest, case_by_forest.id)
+            return case_by_forest
 
     # 2. Radicado corto EXACTO en folder_names
     if rad_corto:
@@ -787,9 +815,10 @@ def check_inbox(db: Session) -> list[dict]:
                 tipo = classify_email_type(subject, sender)
                 radicado_data = extract_radicado(full_text)
                 forest = extract_forest(body, att_names)
+                radicado_data["forest"] = forest  # v5.0: FOREST como clave de matching
                 accionante = extract_accionante(subject, body)
 
-                logger.info(f"Email: tipo={tipo} rad={radicado_data.get('radicado_corto','')} acc={accionante[:20]}")
+                logger.info(f"Email: tipo={tipo} rad={radicado_data.get('radicado_corto','')} forest={forest} acc={accionante[:20]}")
 
                 # ── MATCH O CREAR ──
                 case = match_to_case(db, radicado_data, accionante)

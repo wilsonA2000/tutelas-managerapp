@@ -9,7 +9,7 @@ Para cada caso, el ContextAssembler reúne:
 6. Knowledge Base search results
 7. Correcciones históricas (para few-shot learning)
 
-Output: CaseContext serializable a prompt para Gemini (cabe en 1M tokens).
+Output: CaseContext serializable a prompt para IA (DeepSeek/Haiku).
 """
 
 import logging

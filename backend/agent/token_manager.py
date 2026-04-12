@@ -4,7 +4,7 @@ Estrategias de ahorro:
 1. Cache de respuestas recientes (no repetir misma consulta)
 2. Contexto progresivo (empezar con regex, solo llamar IA si hace falta)
 3. Budget control (límite diario/mensual configurable)
-4. Selección inteligente de modelo (Gemini gratis → Haiku barato → Sonnet potente)
+4. Selección inteligente de modelo via Smart Router (DeepSeek → Haiku → Groq)
 5. Compresión de contexto (solo enviar lo necesario, no todo)
 6. Batch optimization (agrupar extracciones para reducir overhead)
 """
@@ -156,16 +156,11 @@ def select_optimal_model(task_complexity: str = "simple", budget: TokenBudget | 
 
     Returns: (provider, model)
     """
-    # Siempre preferir Gemini gratis para tareas simples/medias
-    if task_complexity in ("simple", "medium"):
-        return "google", "gemini-2.5-flash"
-
-    # Para tareas complejas, usar Gemini Pro si hay budget, sino Flash
-    budget = budget or TokenBudget()
-    if budget.daily_limit_usd > 0:
-        return "google", "gemini-2.5-flash"  # Flash es suficiente y gratis
-
-    return "google", "gemini-2.5-flash"
+    # Usar Smart Router para seleccionar proveedor
+    from backend.agent.smart_router import route
+    task_map = {"simple": "general", "medium": "extraction", "complex": "complex_reasoning"}
+    decision = route(task_map.get(task_complexity, "general"))
+    return decision.provider, decision.model
 
 
 def estimate_cost(provider: str, model: str, input_tokens: int, output_tokens: int) -> float:
@@ -278,10 +273,8 @@ def _get_optimization_tips(stats: TokenStats) -> list[str]:
         tips.append("Promedio alto por llamada (>50K tokens). Considera comprimir contexto antes de enviar a IA.")
     if stats.calls_today > 20:
         tips.append("Muchas llamadas hoy. Usa cache de respuestas para consultas repetidas.")
-    if stats.top_model != "gemini-2.5-flash":
-        tips.append(f"Modelo '{stats.top_model}' en uso. Gemini Flash es gratis y suficiente para la mayoría de tareas.")
     if stats.budget_status == "WARNING":
         tips.append("Cerca del límite de presupuesto. Considera reducir extracciones masivas.")
     if not tips:
-        tips.append("Consumo óptimo. Gemini Flash gratis cubre todas las necesidades actuales.")
+        tips.append("Consumo óptimo. DeepSeek V3.2 como proveedor principal.")
     return tips

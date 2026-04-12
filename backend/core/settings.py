@@ -47,11 +47,7 @@ class Settings(BaseSettings):
     # Unified Extractor (IR-based)
     UNIFIED_EXTRACTOR_ENABLED: bool = True  # True = usar extractor unificado IR
     KB_ENHANCED_EXTRACTION: bool = True  # True = inyectar contexto KB en prompt IA
-    PARALLEL_AI_EXTRACTION: bool = False  # True = correr Gemini + DeepSeek en paralelo (ThreadPoolExecutor)
-    PARALLEL_AI_PROVIDERS: list[tuple[str, str]] = [
-        ("google", "gemini-2.5-flash"),
-        ("deepseek", "deepseek-chat"),
-    ]  # (provider, model) a ejecutar en paralelo cuando PARALLEL_AI_EXTRACTION=True
+    PARALLEL_AI_EXTRACTION: bool = False  # Deshabilitado post-v4.7 (era Gemini+DeepSeek)
 
     # CSV
     CSV_DELIMITER: str = ";"

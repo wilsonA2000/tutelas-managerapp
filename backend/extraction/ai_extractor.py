@@ -19,9 +19,9 @@ _logger = logging.getLogger("tutelas.extraction")
 # Configuracion de proveedores
 # ============================================================
 
-# Proveedor activo (se puede cambiar en runtime) — Gemini por defecto (gratis)
-_active_provider = "google"
-_active_model = "gemini-2.5-flash"
+# Proveedor activo (se puede cambiar en runtime) — DeepSeek por defecto
+_active_provider = "deepseek"
+_active_model = "deepseek-chat"
 
 # Catalogo de proveedores y modelos con precios (USD por 1M tokens)
 PROVIDERS = {

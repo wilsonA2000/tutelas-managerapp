@@ -21,6 +21,7 @@ import backend.main as _main
 
 class BatchRequest(BaseModel):
     case_ids: list[int] | None = None
+    classify_docs: bool = False
 
 
 # Campos que se incluyen en la respuesta de extracción
@@ -62,9 +63,14 @@ def _get_fields_data(case) -> dict:
     return fields_data
 
 
-def _run_extraction_cases(case_ids: list[int]):
-    """Ejecutar extraccion en background para una lista de case IDs."""
+_progress_lock = threading.Lock()
+MAX_WORKERS = 3
+
+
+def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
+    """Ejecutar extraccion en background con paralelizacion (3 workers)."""
     import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from backend.services.backup_service import auto_backup
 
     _start = time.time()
@@ -72,89 +78,144 @@ def _run_extraction_cases(case_ids: list[int]):
     _main.extraction_progress = {
         "current": 0, "total": len(case_ids), "case_name": "Iniciando...",
         "success": 0, "errors": 0, "progress_pct": 0, "elapsed_seconds": 0,
-        "step": "Preparando extraccion...",
+        "step": "Preparando extraccion...", "phase": "",
     }
 
-    def _update_pct():
-        total = _main.extraction_progress["total"]
-        current = _main.extraction_progress["current"]
-        _main.extraction_progress["progress_pct"] = round((current / total) * 100) if total > 0 else 0
-        _main.extraction_progress["elapsed_seconds"] = round(time.time() - _start)
+    def _update_progress(**kwargs):
+        with _progress_lock:
+            _main.extraction_progress.update(kwargs)
+            total = _main.extraction_progress["total"]
+            current = _main.extraction_progress["current"]
+            _main.extraction_progress["progress_pct"] = round((current / total) * 100) if total > 0 else 0
+            _main.extraction_progress["elapsed_seconds"] = round(time.time() - _start)
 
     # Thread para actualizar elapsed_seconds cada segundo
-    import threading
     _elapsed_stop = threading.Event()
     def _update_elapsed():
         while not _elapsed_stop.is_set():
-            _main.extraction_progress["elapsed_seconds"] = round(time.time() - _start)
+            with _progress_lock:
+                _main.extraction_progress["elapsed_seconds"] = round(time.time() - _start)
+                done = _main.extraction_progress["current"]
+                if done > 0:
+                    avg = (time.time() - _start) / done
+                    remaining = (len(case_ids) - done) * avg / MAX_WORKERS
+                    _main.extraction_progress["eta_seconds"] = round(remaining)
             _elapsed_stop.wait(1)
     elapsed_thread = threading.Thread(target=_update_elapsed, daemon=True)
     elapsed_thread.start()
 
-    try:
-        # Backup automatico antes de extraccion batch
-        _main.extraction_progress["step"] = "Creando backup automatico..."
-        auto_backup("pre_extraction")
+    # Lock para operaciones de archivo (rename, move) — evita race conditions
+    _file_ops_lock = threading.Lock()
 
+    def _process_one_case(cid: int) -> bool:
+        """Procesar un caso en su propio thread con su propia Session."""
         db = SessionLocal()
-        for i, cid in enumerate(case_ids):
-            if not _main.extraction_in_progress:
-                _main.add_monitor_log("Extraccion cancelada por usuario")
-                break
-
+        try:
             case = db.query(Case).filter(Case.id == cid).first()
             if not case:
-                _main.extraction_progress["errors"] += 1
-                continue
+                return False
 
-            _main.extraction_progress["current"] = i + 1
-            _main.extraction_progress["case_name"] = case.folder_name or f"ID {cid}"
-            _main.extraction_progress["step"] = f"Extrayendo ({i+1}/{len(case_ids)}): {(case.folder_name or '')[:40]}..."
-            _update_pct()
+            folder_name = (case.folder_name or f"ID {cid}")[:40]
+            with _progress_lock:
+                _main.extraction_progress["step"] = f"Procesando: {folder_name}..."
+                _main.extraction_progress["phase"] = "Clasificando..." if classify_docs else "Extrayendo..."
 
-            try:
-                if settings.UNIFIED_EXTRACTOR_ENABLED:
-                    from backend.extraction.unified import unified_extract
-                    stats = unified_extract(db, case, settings.BASE_DIR)
-                else:
-                    stats = process_folder(db, case)
-                if stats.get("ai_error") and case.processing_status != "COMPLETO":
-                    _main.extraction_progress["errors"] += 1
-                    case.processing_status = "REVISION"
-                    db.commit()
-                else:
-                    _main.extraction_progress["success"] += 1
-            except Exception as e:
-                _main.extraction_progress["errors"] += 1
-                # Recovery: no dejar en EXTRAYENDO indefinido
+            # Clasificación de documentos (si se pidió) — serializada para evitar colisiones de archivos
+            if classify_docs:
                 try:
+                    with _file_ops_lock:
+                        from backend.agent.orchestrator import classify_and_clean_folder
+                        classify_and_clean_folder(db, case, settings.BASE_DIR)
+                except Exception as e:
+                    _main.add_monitor_log(f"Clasificacion caso {cid}: {str(e)[:80]}", level="warning")
+
+            with _progress_lock:
+                _main.extraction_progress["phase"] = "Extrayendo..."
+
+            # Extracción — paralela (cada thread tiene su propia DB session)
+            if settings.UNIFIED_EXTRACTOR_ENABLED:
+                from backend.extraction.unified import unified_extract
+                stats = unified_extract(db, case, settings.BASE_DIR)
+            else:
+                stats = process_folder(db, case)
+
+            # Rename de carpeta — serializado para evitar race conditions del filesystem
+            if stats.get("renamed"):
+                with _file_ops_lock:
+                    db.refresh(case)
+
+            if stats.get("ai_error") and case.processing_status != "COMPLETO":
+                case.processing_status = "REVISION"
+                db.commit()
+                return False
+
+            return True
+        except Exception as e:
+            try:
+                case = db.query(Case).filter(Case.id == cid).first()
+                if case:
                     case.processing_status = "REVISION"
                     db.commit()
-                except Exception:
-                    pass
-                _main.add_monitor_log(f"Error caso {cid}: {str(e)[:100]}", level="error")
+            except Exception:
+                pass
+            _main.add_monitor_log(f"Error caso {cid}: {str(e)[:100]}", level="error")
+            return False
+        finally:
+            db.close()
 
-            _update_pct()
-            if i < len(case_ids) - 1:
-                time.sleep(2)
+    try:
+        _update_progress(step="Creando backup automatico...", phase="Backup")
+        auto_backup("pre_extraction")
+
+        _update_progress(
+            step=f"Extrayendo {len(case_ids)} casos ({MAX_WORKERS} en paralelo)...",
+            phase="Extraccion",
+        )
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {}
+            for cid in case_ids:
+                if not _main.extraction_in_progress:
+                    break
+                future = executor.submit(_process_one_case, cid)
+                futures[future] = cid
+
+            for future in as_completed(futures):
+                if not _main.extraction_in_progress:
+                    _main.add_monitor_log("Extraccion cancelada por usuario")
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+
+                cid = futures[future]
+                try:
+                    ok = future.result()
+                    with _progress_lock:
+                        _main.extraction_progress["current"] += 1
+                        if ok:
+                            _main.extraction_progress["success"] += 1
+                        else:
+                            _main.extraction_progress["errors"] += 1
+                except Exception:
+                    with _progress_lock:
+                        _main.extraction_progress["current"] += 1
+                        _main.extraction_progress["errors"] += 1
+
+                _update_progress()
 
         ok = _main.extraction_progress["success"]
         total = _main.extraction_progress["total"]
-        _main.extraction_progress["case_name"] = f"Completado: {ok}/{total} exitosos"
-        _main.extraction_progress["step"] = f"Completado: {ok}/{total} exitosos, {_main.extraction_progress['errors']} errores"
-        _main.extraction_progress["progress_pct"] = 100
-        _update_pct()
-        _main.add_monitor_log(f"Extraccion terminada: {ok}/{total} exitosos")
+        _update_progress(
+            case_name=f"Completado: {ok}/{total} exitosos",
+            step=f"Completado: {ok}/{total} exitosos, {_main.extraction_progress['errors']} errores",
+            progress_pct=100, phase="Completado",
+        )
+        _main.add_monitor_log(f"Extraccion terminada: {ok}/{total} exitosos ({MAX_WORKERS} workers)")
 
     except Exception as e:
         _main.add_monitor_log(f"Error en extraccion: {e}", level="error")
     finally:
         _main.extraction_in_progress = False
         _elapsed_stop.set()
-        try:
-            db.close()
-        except Exception:
-            pass
 
 
 @router.post("/single/{case_id}")
@@ -231,9 +292,10 @@ def api_extract_batch(req: BatchRequest):
     if not case_ids:
         return {"status": "empty", "message": "No hay casos pendientes"}
 
-    thread = threading.Thread(target=_run_extraction_cases, args=(case_ids,), daemon=True)
+    thread = threading.Thread(target=_run_extraction_cases, args=(case_ids, req.classify_docs), daemon=True)
     thread.start()
-    return {"status": "started", "message": f"Extraccion de {len(case_ids)} casos iniciada"}
+    classify_msg = " + clasificacion de documentos" if req.classify_docs else ""
+    return {"status": "started", "message": f"Extraccion de {len(case_ids)} casos iniciada ({MAX_WORKERS} en paralelo{classify_msg})"}
 
 
 

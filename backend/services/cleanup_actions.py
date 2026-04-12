@@ -1,4 +1,4 @@
-"""Cleanup actions v4.8: operaciones mutadoras (F2, F3, F4).
+"""Cleanup actions v5.0: operaciones mutadoras.
 
 Cada accion es idempotente y registrable en AuditLog. Se invocan desde
 cleanup_service.py (orquestador) o directamente via endpoint/CLI.
@@ -6,6 +6,7 @@ cleanup_service.py (orquestador) o directamente via endpoint/CLI.
 F2: backfill_content_hash — completa MD5 de docs sin hash
 F4: backfill_emails_md — genera .md faltantes y vincula al email
 F3: batch_move_mismatched, merge_identity_groups — reasignacion segura
+v5.0: purge_duplicates, merge_forest_fragments, backfill_radicado_23d
 
 Todas las funciones DEVUELVEN estadisticas en vez de loggearlas.
 """
@@ -504,6 +505,360 @@ def merge_identity_groups(
             stats["errors"] += 1
             if not dry_run:
                 db.rollback()
+
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
+    return stats
+
+
+# ============================================================
+# v5.0: Purga de duplicados por hash
+# ============================================================
+
+def purge_duplicates(
+    db: Session,
+    scope: str = "intra",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Purga documentos duplicados por hash MD5.
+
+    Args:
+        scope: 'intra' (dentro del mismo caso, seguro),
+               'inter' (entre casos, solo si uno es NO_PERTENECE),
+               'all' (ambos)
+        dry_run: si True, solo cuenta sin eliminar
+
+    Returns:
+        dict con estadisticas y acciones.
+    """
+    from collections import defaultdict
+    import shutil
+
+    start = datetime.utcnow()
+    stats: dict[str, Any] = {
+        "dry_run": dry_run,
+        "scope": scope,
+        "intra_removed": 0,
+        "inter_removed": 0,
+        "errors": 0,
+        "actions": [],
+    }
+
+    docs = db.query(Document).filter(
+        Document.file_hash.isnot(None),
+        Document.file_hash != "",
+    ).all()
+
+    hash_groups: dict[str, list[Document]] = defaultdict(list)
+    for d in docs:
+        hash_groups[d.file_hash].append(d)
+
+    for h, group in hash_groups.items():
+        if len(group) < 2:
+            continue
+
+        case_ids = {d.case_id for d in group}
+
+        # INTRA-CASO: todos en el mismo caso
+        if len(case_ids) == 1 and scope in ("intra", "all"):
+            canonical = min(group, key=lambda d: (d.email_id is None, d.id))
+            for d in group:
+                if d.id == canonical.id:
+                    continue
+                if not dry_run:
+                    if d.file_path:
+                        src = Path(d.file_path)
+                        if src.exists():
+                            dup_dir = src.parent / "_duplicados"
+                            dup_dir.mkdir(exist_ok=True)
+                            try:
+                                shutil.move(str(src), str(dup_dir / src.name))
+                            except Exception as e:
+                                logger.warning("No se pudo mover %s: %s", src, e)
+                    db.delete(d)
+                stats["intra_removed"] += 1
+                if len(stats["actions"]) < 50:
+                    stats["actions"].append({
+                        "type": "intra",
+                        "removed_doc_id": d.id,
+                        "kept_doc_id": canonical.id,
+                        "filename": (d.filename or "")[:60],
+                        "case_id": d.case_id,
+                    })
+
+        # INTER-CASO: en diferentes casos, solo eliminar NO_PERTENECE
+        elif len(case_ids) > 1 and scope in ("inter", "all"):
+            no_pert = [d for d in group if d.verificacion == "NO_PERTENECE"]
+            for d in no_pert:
+                if not dry_run:
+                    if d.file_path:
+                        src = Path(d.file_path)
+                        if src.exists():
+                            dup_dir = src.parent / "_duplicados"
+                            dup_dir.mkdir(exist_ok=True)
+                            try:
+                                shutil.move(str(src), str(dup_dir / src.name))
+                            except Exception as e:
+                                logger.warning("No se pudo mover %s: %s", src, e)
+                    db.delete(d)
+                stats["inter_removed"] += 1
+                if len(stats["actions"]) < 50:
+                    stats["actions"].append({
+                        "type": "inter",
+                        "removed_doc_id": d.id,
+                        "filename": (d.filename or "")[:60],
+                        "case_id": d.case_id,
+                        "reason": "NO_PERTENECE + duplicado en otro caso",
+                    })
+
+    if not dry_run:
+        db.commit()
+        _marker = db.query(Case.id).first()
+        _mid = _marker[0] if _marker else 0
+        db.add(AuditLog(
+            case_id=_mid,
+            field_name="duplicates",
+            action="CLEANUP_PURGE_DUPLICATES",
+            source="cleanup_actions:purge_duplicates",
+            new_value=f"scope={scope} intra={stats['intra_removed']} inter={stats['inter_removed']}",
+        ))
+        db.commit()
+
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
+    return stats
+
+
+# ============================================================
+# v5.0: Fusion de fragmentos FOREST
+# ============================================================
+
+def merge_forest_fragments(
+    db: Session,
+    dry_run: bool = True,
+    min_confidence: str = "ALTA",
+) -> dict[str, Any]:
+    """Fusiona fragmentos FOREST con su caso padre detectado.
+
+    Usa detect_forest_fragments() para encontrar fragmentos y su caso padre sugerido.
+    Solo fusiona si la confianza >= min_confidence.
+
+    Returns:
+        dict con estadisticas y acciones.
+    """
+    from backend.services.cleanup_diagnosis import detect_forest_fragments
+    from backend.services.sibling_mover import move_document_or_package
+
+    CONF_RANK = {"ALTA": 3, "MEDIA": 2, "BAJA": 1}
+    min_rank = CONF_RANK.get(min_confidence, 3)
+
+    start = datetime.utcnow()
+    stats: dict[str, Any] = {
+        "dry_run": dry_run,
+        "min_confidence": min_confidence,
+        "fragments_found": 0,
+        "fragments_merged": 0,
+        "docs_moved": 0,
+        "emails_reassigned": 0,
+        "skipped_no_parent": 0,
+        "skipped_low_confidence": 0,
+        "errors": 0,
+        "actions": [],
+    }
+
+    fragments = detect_forest_fragments(db)
+    stats["fragments_found"] = len(fragments)
+
+    for frag in fragments:
+        parent_id = frag.get("suggested_parent_case_id")
+        confidence = frag.get("confidence")
+
+        if not parent_id:
+            stats["skipped_no_parent"] += 1
+            continue
+
+        if CONF_RANK.get(confidence, 0) < min_rank:
+            stats["skipped_low_confidence"] += 1
+            continue
+
+        frag_case_id = frag["fragment_case_id"]
+        frag_case = db.query(Case).filter(Case.id == frag_case_id).first()
+        parent_case = db.query(Case).filter(Case.id == parent_id).first()
+
+        if not frag_case or not parent_case:
+            stats["errors"] += 1
+            continue
+
+        action = {
+            "fragment_id": frag_case_id,
+            "fragment_folder": (frag_case.folder_name or "")[:60],
+            "parent_id": parent_id,
+            "parent_folder": (parent_case.folder_name or "")[:60],
+            "confidence": confidence,
+            "docs_moved": 0,
+            "emails_reassigned": 0,
+        }
+
+        if dry_run:
+            doc_count = db.query(Document).filter(Document.case_id == frag_case_id).count()
+            email_count = db.query(Email).filter(Email.case_id == frag_case_id).count()
+            action["docs_moved"] = doc_count
+            action["emails_reassigned"] = email_count
+            stats["docs_moved"] += doc_count
+            stats["emails_reassigned"] += email_count
+            stats["fragments_merged"] += 1
+        else:
+            try:
+                frag_docs = db.query(Document).filter(Document.case_id == frag_case_id).all()
+                moved = 0
+                for doc in frag_docs:
+                    result = move_document_or_package(db, doc.id, parent_id, reason="cleanup_forest_merge")
+                    if not result.get("errors"):
+                        moved += len(result.get("moved_ids", []))
+                action["docs_moved"] = moved
+                stats["docs_moved"] += moved
+
+                frag_emails = db.query(Email).filter(Email.case_id == frag_case_id).all()
+                for em in frag_emails:
+                    em.case_id = parent_id
+                action["emails_reassigned"] = len(frag_emails)
+                stats["emails_reassigned"] += len(frag_emails)
+
+                frag_case.processing_status = "DUPLICATE_MERGED"
+
+                db.add(AuditLog(
+                    case_id=parent_id,
+                    field_name="merge",
+                    action="CLEANUP_FOREST_MERGE",
+                    source="cleanup_actions:merge_forest_fragments",
+                    old_value=f"fragment_id={frag_case_id} folder={frag_case.folder_name[:60] if frag_case.folder_name else ''}",
+                    new_value=f"merged_into parent_id={parent_id} docs={moved}",
+                ))
+
+                db.commit()
+                stats["fragments_merged"] += 1
+            except Exception as e:
+                logger.error("merge_forest error frag=%d: %s", frag_case_id, e)
+                stats["errors"] += 1
+                db.rollback()
+
+        stats["actions"].append(action)
+
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
+    return stats
+
+
+# ============================================================
+# v5.0: Backfill radicado_23_digitos desde documentos
+# ============================================================
+
+def backfill_radicado_23d(
+    db: Session,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Busca y asigna radicado_23_digitos desde el texto de los documentos.
+
+    Solo asigna automaticamente si el radicado se encuentra en 2+ documentos
+    del caso (confianza ALTA). Los de 1 doc se reportan como sugerencia.
+
+    Returns:
+        dict con estadisticas y acciones.
+    """
+    import re
+    from backend.services.cleanup_diagnosis import detect_incomplete_radicados
+
+    start = datetime.utcnow()
+    stats: dict[str, Any] = {
+        "dry_run": dry_run,
+        "auto_assigned": 0,
+        "suggested_only": 0,
+        "normalized": 0,
+        "errors": 0,
+        "actions": [],
+    }
+
+    result = detect_incomplete_radicados(db)
+
+    for sug in result.get("suggestions", []):
+        if sug["confidence"] == "ALTA":
+            case = db.query(Case).filter(Case.id == sug["case_id"]).first()
+            if not case:
+                continue
+
+            rad = sug["suggested_rad23"]
+            if len(rad) >= 23:
+                formatted = f"{rad[:16]}-{rad[16:21]}-{rad[21:23]}"
+            elif len(rad) >= 20:
+                formatted = rad
+            else:
+                formatted = rad
+
+            if not dry_run:
+                old_val = case.radicado_23_digitos or ""
+                case.radicado_23_digitos = formatted
+                db.add(AuditLog(
+                    case_id=case.id,
+                    field_name="radicado_23_digitos",
+                    action="CLEANUP_BACKFILL_RAD23",
+                    source="cleanup_actions:backfill_radicado_23d",
+                    old_value=old_val,
+                    new_value=formatted,
+                ))
+
+            stats["auto_assigned"] += 1
+            stats["actions"].append({
+                "case_id": sug["case_id"],
+                "folder_name": sug["folder_name"],
+                "assigned_rad23": formatted,
+                "found_in_docs": sug["found_in_docs"],
+                "confidence": "ALTA",
+                "type": "auto",
+            })
+        else:
+            stats["suggested_only"] += 1
+            stats["actions"].append({
+                "case_id": sug["case_id"],
+                "folder_name": sug["folder_name"],
+                "suggested_rad23": sug["suggested_rad23"],
+                "found_in_docs": sug["found_in_docs"],
+                "confidence": sug["confidence"],
+                "type": "suggestion",
+            })
+
+    for mal in result.get("malformed", []):
+        case = db.query(Case).filter(Case.id == mal["case_id"]).first()
+        if not case or not case.radicado_23_digitos:
+            continue
+
+        digits = re.sub(r"\D", "", case.radicado_23_digitos)
+        if 20 <= len(digits) <= 25:
+            if len(digits) >= 23:
+                formatted = f"{digits[:16]}-{digits[16:21]}-{digits[21:23]}"
+            else:
+                formatted = digits
+
+            if formatted != case.radicado_23_digitos:
+                if not dry_run:
+                    old_val = case.radicado_23_digitos
+                    case.radicado_23_digitos = formatted
+                    db.add(AuditLog(
+                        case_id=case.id,
+                        field_name="radicado_23_digitos",
+                        action="CLEANUP_NORMALIZE_RAD23",
+                        source="cleanup_actions:backfill_radicado_23d",
+                        old_value=old_val,
+                        new_value=formatted,
+                    ))
+
+                stats["normalized"] += 1
+                stats["actions"].append({
+                    "case_id": mal["case_id"],
+                    "folder_name": mal["folder_name"],
+                    "old_rad23": case.radicado_23_digitos,
+                    "new_rad23": formatted,
+                    "type": "normalize",
+                })
+
+    if not dry_run:
+        db.commit()
 
     stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats

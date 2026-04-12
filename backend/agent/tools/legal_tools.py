@@ -237,13 +237,17 @@ def escanear_alertas(db: Session) -> dict:
     category="management",
 )
 def estadisticas_generales(db: Session) -> dict:
-    total_cases = db.query(Case).count()
-    activos = db.query(Case).filter(Case.estado == "ACTIVO").count()
+    active_filter = db.query(Case).filter(
+        Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+        Case.processing_status != "DUPLICATE_MERGED",
+    )
+    total_cases = active_filter.count()
+    activos = active_filter.filter(Case.estado == "ACTIVO").count()
     total_docs = db.query(Document).count()
     total_emails = db.query(Email).count()
-    emails_sin_caso = db.query(Email).filter(Email.case_id.is_(None)).count()
+    emails_sin_caso = db.query(Email).filter(Email.case_id.is_(None), Email.status != "IGNORADO").count()
 
-    with_fallo = db.query(Case).filter(Case.sentido_fallo_1st.isnot(None), Case.sentido_fallo_1st != "").all()
+    with_fallo = active_filter.filter(Case.sentido_fallo_1st.isnot(None), Case.sentido_fallo_1st != "").all()
     concede = sum(1 for c in with_fallo if c.sentido_fallo_1st in ("CONCEDE", "CONCEDE PARCIALMENTE"))
     niega = sum(1 for c in with_fallo if c.sentido_fallo_1st in ("NIEGA", "IMPROCEDENTE"))
 
@@ -257,6 +261,58 @@ def estadisticas_generales(db: Session) -> dict:
         "fallos": {"total": len(with_fallo), "concede": concede, "niega": niega,
                    "tasa_favorabilidad": round(niega / max(len(with_fallo), 1) * 100, 1)},
         "knowledge_base": kb,
+    }
+
+
+@register_tool(
+    name="consultar_cuadro",
+    description="Consulta los datos del Cuadro de Tutelas (misma info que ve el usuario en pantalla). "
+                "Puede filtrar por cualquier campo: accionante, juzgado, ciudad, estado, fallo, abogado, radicado, etc.",
+    category="search",
+    params={
+        "filtro": "str - texto para buscar en cualquier campo (accionante, juzgado, ciudad, radicado, etc.)",
+        "campo": "str - campo específico a filtrar: ACCIONANTE, JUZGADO, CIUDAD, ESTADO, SENTIDO_FALLO_1ST, ABOGADO_RESPONSABLE, IMPUGNACION, INCIDENTE (opcional)",
+        "valor": "str - valor exacto del campo para filtrar (opcional, usa con 'campo')",
+        "limit": "int - máximo resultados (default: 20)",
+    },
+)
+def consultar_cuadro(db: Session, filtro: str = "", campo: str = "", valor: str = "", limit: int = 20) -> dict:
+    """Devuelve datos del cuadro de tutelas con los mismos campos que ve el usuario."""
+    cases = db.query(Case).filter(
+        Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+        Case.processing_status != "DUPLICATE_MERGED",
+    ).order_by(Case.id.desc()).all()
+
+    items = []
+    for c in cases:
+        data = {"id": c.id, "tipo_actuacion": c.tipo_actuacion or "TUTELA"}
+        filled = 0
+        for csv_col, attr in Case.CSV_FIELD_MAP.items():
+            val = getattr(c, attr) or ""
+            data[csv_col] = val
+            if val.strip():
+                filled += 1
+        data["completitud"] = round(filled / len(Case.CSV_FIELD_MAP) * 100)
+        items.append(data)
+
+    # Filtro por campo específico
+    if campo and valor:
+        campo_upper = campo.upper()
+        valor_upper = valor.upper()
+        items = [r for r in items if valor_upper in str(r.get(campo_upper, "")).upper()]
+
+    # Filtro general (busca en todos los campos)
+    if filtro:
+        filtro_lower = filtro.lower()
+        items = [r for r in items if any(filtro_lower in str(v).lower() for v in r.values())]
+
+    total = len(items)
+    items = items[:limit]
+
+    return {
+        "total_encontrados": total,
+        "mostrando": len(items),
+        "casos": items,
     }
 
 
@@ -319,4 +375,69 @@ def validar_forest(forest: str) -> dict:
         "in_blacklist": forest in FOREST_BLACKLIST,
         "starts_with_68": forest.startswith("68"),
         "length": len(forest),
+    }
+
+
+@register_tool(
+    name="contar_por_categoria",
+    description="Cuenta tutelas por categoría temática (INFRAESTRUCTURA, INCLUSION, NOMBRAMIENTOS, "
+                "TRASLADOS, TUTOR_SOMBRA, INTERPRETES, DEBIDO_PROCESO, SALUD, COBERTURA, "
+                "CARRERA_DOCENTE, NOMINA, PRESTACIONES, RESIDENCIA_ESCOLAR, DERECHO_PETICION, GENERAL). "
+                "Muestra qué oficina de la Secretaría de Educación es responsable de cada tema.",
+    category="search",
+    params={
+        "categoria": "str - categoría a consultar (opcional, sin ella muestra todas)",
+    },
+)
+def contar_por_categoria(db: Session, categoria: str = "") -> dict:
+    from collections import Counter
+    from backend.extraction.thematic_classifier import suggest_oficina
+
+    cases = db.query(Case).filter(
+        Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+        Case.processing_status != "DUPLICATE_MERGED",
+    ).all()
+
+    if categoria:
+        cat_upper = categoria.upper().replace(" ", "_")
+        matches = [c for c in cases if (c.categoria_tematica or "").upper() == cat_upper]
+        return {
+            "categoria": cat_upper,
+            "oficina_responsable": suggest_oficina(cat_upper),
+            "total": len(matches),
+            "casos": [
+                {"id": c.id, "accionante": c.accionante, "juzgado": c.juzgado,
+                 "ciudad": c.ciudad, "fallo": c.sentido_fallo_1st,
+                 "observaciones": (c.observaciones or "")[:200]}
+                for c in matches[:20]
+            ],
+        }
+
+    counts = Counter((c.categoria_tematica or "GENERAL") for c in cases)
+    return {
+        "total_casos": len(cases),
+        "por_categoria": [
+            {"categoria": cat, "count": n, "oficina": suggest_oficina(cat)}
+            for cat, n in counts.most_common()
+        ],
+    }
+
+
+@register_tool(
+    name="info_secretaria",
+    description="Información sobre la Secretaría de Educación de Santander: organigrama, "
+                "direcciones, grupos de trabajo, directores, contactos.",
+    category="management",
+)
+def info_secretaria(db: Session) -> dict:
+    from backend.agent.knowledge_sec import SEC_INFO
+    return {
+        "secretaria": SEC_INFO["secretaria"],
+        "email": SEC_INFO["email"],
+        "telefono": SEC_INFO["telefono"],
+        "direcciones": {
+            name: {"director": info["director"], "funcion": info["funcion"], "grupos": info["grupos"]}
+            for name, info in SEC_INFO["direcciones"].items()
+        },
+        "grupo_juridico": SEC_INFO["grupo_juridico"],
     }

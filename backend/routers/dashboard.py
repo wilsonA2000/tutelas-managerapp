@@ -103,9 +103,10 @@ class ChatRequest(BaseModel):
 
 
 def _build_cases_context(db: Session) -> str:
-    """Construir resumen tabular de todos los casos para el prompt de Gemini."""
+    """Construir resumen tabular de todos los casos para el prompt de IA."""
     cases = db.query(Case).filter(
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+        Case.processing_status != "DUPLICATE_MERGED",
     ).all()
 
     # KPIs resumidos
@@ -137,7 +138,7 @@ TOP DERECHOS VULNERADOS:
 
 @router.post("/chat")
 def api_chat(req: ChatRequest, db: Session = Depends(get_db)):
-    """Chat en lenguaje natural sobre las tutelas usando Gemini."""
+    """Chat en lenguaje natural sobre las tutelas usando IA."""
     # Redirigir al Agent Runner (usa Smart Router multi-modelo)
     try:
         import backend.agent.tools.legal_tools  # noqa: F401 — register tools

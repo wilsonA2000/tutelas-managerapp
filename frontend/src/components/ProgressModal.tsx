@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, X, CheckCircle, AlertTriangle } from 'lucide-react'
 import {
   getSyncStatus, getCheckInboxStatus, getExtractionProgress,
   stopExtraction, cancelCheckInbox, cancelSync,
 } from '../services/api'
 import { useSyncProgress, useGmailProgress, useExtractionProgress } from '../hooks/useProgressPolling'
+import { Button } from '@/components/ui/button'
 
 interface ProcessInfo {
   key: string
@@ -47,35 +48,60 @@ function ProcessTracker({ process }: { process: ProcessInfo }) {
   const docsVerified = (data.docs_verified as number) || 0
   const docsTotal = (data.docs_total as number) || 0
   const elapsed = (data.elapsed_seconds as number) || 0
-  // Usar progress_pct del backend si disponible, sino calcular de current/total
+  const eta = (data.eta_seconds as number) || 0
+  const phase = (data.phase as string) || ''
   const backendPct = data.progress_pct as number | undefined
   const pct = backendPct != null ? backendPct : (total > 0 ? Math.round((current / total) * 100) : 0)
-  // Formato de tiempo transcurrido
   const elapsedStr = elapsed > 0 ? `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}` : ''
+  const etaStr = eta > 0 ? `~${Math.floor(eta / 60)}:${String(eta % 60).padStart(2, '0')} restante` : ''
 
   return (
     <div className="mb-4 last:mb-0">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold text-white">{process.label}</h3>
         {process.cancelFn && (
-          <button onClick={() => cancelMut.mutate()} disabled={cancelMut.isPending}
-            className="text-white/60 hover:text-white transition-colors" title="Cancelar">
+          <button
+            onClick={() => cancelMut.mutate()}
+            disabled={cancelMut.isPending}
+            className="text-white/60 hover:text-white transition-colors"
+            title="Cancelar"
+          >
             <X size={16} />
           </button>
         )}
       </div>
-      {total > 0 ? (
+
+      {/* Progress bar */}
+      <div className="h-3 bg-white/10 rounded-full overflow-hidden mb-2">
+        {total > 0 ? (
+          <div
+            className="h-full rounded-full transition-all duration-500 ease-out"
+            style={{
+              width: `${pct}%`,
+              background: 'linear-gradient(90deg, #3b82f6 0%, #8b5cf6 50%, #3b82f6 100%)',
+              backgroundSize: '200% 100%',
+              animation: 'shimmer 2s linear infinite',
+            }}
+          />
+        ) : (
+          <div
+            className="h-full w-full rounded-full"
+            style={{
+              background: 'linear-gradient(90deg, transparent 0%, #3b82f6 50%, transparent 100%)',
+              backgroundSize: '200% 100%',
+              animation: 'shimmer 1.5s linear infinite',
+            }}
+          />
+        )}
+      </div>
+
+      {total > 0 && (
         <>
-          <div className="w-full bg-white/10 rounded-full h-3 mb-2 overflow-hidden">
-            <div className="h-full rounded-full transition-all duration-500 ease-out relative"
-              style={{ width: `${Math.max(pct, 2)}%`, background: 'linear-gradient(90deg, #3b82f6 0%, #8b5cf6 50%, #3b82f6 100%)', backgroundSize: '200% 100%', animation: 'shimmer 2s linear infinite' }}>
-              <div className="absolute inset-0 bg-white/20 animate-pulse" />
-            </div>
-          </div>
           <div className="flex justify-between text-xs text-white/70">
-            <span>{current} de {total}{elapsedStr ? ` · ${elapsedStr}` : ''}</span>
+            <span>{current} de {total}{elapsedStr ? ` \u00B7 ${elapsedStr}` : ''}{etaStr ? ` \u00B7 ${etaStr}` : ''}</span>
             <span className="font-bold text-white text-sm">{pct}%</span>
           </div>
+          {phase && <p className="text-[10px] text-white/40 mt-0.5">{phase}</p>}
           {(success > 0 || errors > 0 || docsVerified > 0) && (
             <div className="flex gap-3 mt-1 text-xs text-white/50">
               {success > 0 && <span className="text-green-300">{success} exitosos</span>}
@@ -84,12 +110,8 @@ function ProcessTracker({ process }: { process: ProcessInfo }) {
             </div>
           )}
         </>
-      ) : (
-        <div className="w-full bg-white/10 rounded-full h-3 mb-2 overflow-hidden">
-          <div className="h-full rounded-full w-full"
-            style={{ background: 'linear-gradient(90deg, transparent 0%, #3b82f6 50%, transparent 100%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s linear infinite' }} />
-        </div>
       )}
+
       {step && <p className="text-xs text-white/50 truncate mt-1">{step}</p>}
     </div>
   )
@@ -111,7 +133,6 @@ export default function ProgressModal() {
   const [completedResults, setCompletedResults] = useState<CompletedResult[]>([])
   const [showCompleted, setShowCompleted] = useState(false)
 
-  // Track previous states to detect completion
   const prevSync = useRef(false)
   const prevGmail = useRef(false)
   const prevExtract = useRef(false)
@@ -119,8 +140,8 @@ export default function ProgressModal() {
   useEffect(() => {
     const syncData = syncQ.data as Record<string, unknown> | undefined
     const syncActive = !!(syncData?.in_progress)
-    if (prevSync.current && !syncActive && syncData?.step) {
-      const d = syncData
+    if (prevSync.current && !syncActive) {
+      const d = syncData || {} as Record<string, unknown>
       const details: string[] = []
       if ((d.docs_added as number) > 0) details.push(`+${d.docs_added} documentos nuevos`)
       if ((d.new_cases as number) > 0) details.push(`+${d.new_cases} casos nuevos`)
@@ -143,8 +164,8 @@ export default function ProgressModal() {
   useEffect(() => {
     const gmailData = gmailQ.data as Record<string, unknown> | undefined
     const gmailActive = !!(gmailData?.in_progress)
-    if (prevGmail.current && !gmailActive && gmailData?.step) {
-      const d = gmailData
+    if (prevGmail.current && !gmailActive) {
+      const d = gmailData || {} as Record<string, unknown>
       const details: string[] = []
       const emails = (d.emails_found as number) || 0
       const cases = (d.cases_processed as number) || 0
@@ -167,8 +188,8 @@ export default function ProgressModal() {
   useEffect(() => {
     const extData = extractQ.data as Record<string, unknown> | undefined
     const extActive = !!(extData?.in_progress)
-    if (prevExtract.current && !extActive && extData?.case_name) {
-      const d = extData
+    if (prevExtract.current && !extActive) {
+      const d = extData || {} as Record<string, unknown>
       const details: string[] = []
       const success = (d.success as number) || 0
       const errors = (d.errors as number) || 0
@@ -187,7 +208,6 @@ export default function ProgressModal() {
     prevExtract.current = extActive
   }, [extractQ.data, qc])
 
-  // Auto-dismiss completed after 15 seconds
   useEffect(() => {
     if (showCompleted) {
       const timer = setTimeout(() => { setShowCompleted(false); setCompletedResults([]) }, 15000)
@@ -207,71 +227,77 @@ export default function ProgressModal() {
 
   if (!hasActive && !hasCompleted) return null
 
+  const handleClose = () => {
+    if (!hasActive) {
+      setShowCompleted(false)
+      setCompletedResults([])
+    }
+  }
+
   return (
     <>
       <style>{`
         @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
       `}</style>
 
-      <div className="fixed inset-0 z-50 flex items-center justify-center">
-        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { if (!hasActive) { setShowCompleted(false); setCompletedResults([]) } }} />
+      {/* Overlay */}
+      <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+        {/* Modal */}
+        <div className="w-full max-w-md bg-gradient-to-br from-primary to-primary/80 rounded-xl border border-white/10 text-white p-6 shadow-2xl">
 
-        <div className="relative z-10 w-full max-w-md mx-4">
-          <div className="bg-gradient-to-br from-[#1A5276] to-[#0E3A5C] rounded-2xl shadow-2xl p-6 border border-white/10">
-
-            {/* Active processes */}
-            {hasActive && (
-              <>
-                <div className="flex justify-center mb-5">
-                  <div className="relative">
-                    <div className="w-16 h-16 rounded-full border-4 border-white/10 flex items-center justify-center">
-                      <Loader2 size={28} className="text-white animate-spin" />
-                    </div>
-                    <div className="absolute -top-1 -right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center">
-                      <span className="text-white text-[10px] font-bold">{activeProcesses.length}</span>
-                    </div>
+          {/* Active processes */}
+          {hasActive && (
+            <>
+              <div className="flex justify-center mb-5">
+                <div className="relative">
+                  <div className="w-16 h-16 rounded-full border-4 border-white/10 flex items-center justify-center">
+                    <Loader2 size={28} className="text-white animate-spin" />
+                  </div>
+                  <div className="absolute -top-1 -right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center">
+                    <span className="text-white text-[10px] font-bold">{activeProcesses.length}</span>
                   </div>
                 </div>
-                <h2 className="text-center text-white font-semibold text-lg mb-1">Procesando</h2>
-                <p className="text-center text-white/50 text-xs mb-5">Puede navegar entre modulos.</p>
-                {activeProcesses.map((p) => <ProcessTracker key={p.key} process={p} />)}
-              </>
-            )}
+              </div>
+              <h2 className="text-center text-white font-semibold text-lg mb-1">Procesando</h2>
+              <p className="text-center text-white/50 text-xs mb-5">Puede navegar entre modulos.</p>
+              {activeProcesses.map((p) => <ProcessTracker key={p.key} process={p} />)}
+            </>
+          )}
 
-            {/* Completed results */}
-            {hasCompleted && !hasActive && (
-              <>
-                <div className="flex justify-center mb-4">
-                  <div className="w-14 h-14 rounded-full bg-green-500/20 flex items-center justify-center">
-                    <CheckCircle size={28} className="text-green-400" />
-                  </div>
+          {/* Completed results */}
+          {hasCompleted && !hasActive && (
+            <>
+              <div className="flex justify-center mb-4">
+                <div className="w-14 h-14 rounded-full bg-green-500/20 flex items-center justify-center">
+                  <CheckCircle size={28} className="text-green-400" />
                 </div>
-                <h2 className="text-center text-white font-semibold text-lg mb-4">Completado</h2>
+              </div>
+              <h2 className="text-center text-white font-semibold text-lg mb-4">Completado</h2>
 
-                {completedResults.map((result, i) => (
-                  <div key={i} className="mb-3 last:mb-0 bg-white/5 rounded-lg p-3">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      {result.hasErrors
-                        ? <AlertTriangle size={14} className="text-amber-400" />
-                        : <CheckCircle size={14} className="text-green-400" />}
-                      <span className="text-sm font-medium text-white">{result.label}</span>
-                    </div>
-                    {result.details.map((detail, j) => (
-                      <p key={j} className="text-xs text-white/60 ml-6">{detail}</p>
-                    ))}
+              {completedResults.map((result, i) => (
+                <div key={i} className="mb-3 last:mb-0 bg-white/5 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    {result.hasErrors
+                      ? <AlertTriangle size={14} className="text-amber-400" />
+                      : <CheckCircle size={14} className="text-green-400" />}
+                    <span className="text-sm font-medium text-white">{result.label}</span>
                   </div>
-                ))}
+                  {result.details.map((detail, j) => (
+                    <p key={j} className="text-xs text-white/60 ml-6">{detail}</p>
+                  ))}
+                </div>
+              ))}
 
-                <button
-                  onClick={() => { setShowCompleted(false); setCompletedResults([]) }}
-                  className="w-full mt-4 py-2 bg-white/10 hover:bg-white/20 text-white text-sm font-medium rounded-lg transition-colors"
-                >
-                  Cerrar
-                </button>
-                <p className="text-center text-white/30 text-[10px] mt-2">Se cierra automaticamente en 15s</p>
-              </>
-            )}
-          </div>
+              <Button
+                variant="ghost"
+                className="w-full mt-4 bg-white/10 hover:bg-white/20 text-white border-0"
+                onClick={handleClose}
+              >
+                Cerrar
+              </Button>
+              <p className="text-center text-white/30 text-[10px] mt-2">Se cierra automaticamente en 15s</p>
+            </>
+          )}
         </div>
       </div>
     </>

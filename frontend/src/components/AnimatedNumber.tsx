@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react'
-import gsap from 'gsap'
+import { useSpring, useMotionValue, motion } from 'motion/react'
 
 interface Props {
   value: number
@@ -11,30 +11,25 @@ interface Props {
 
 export default function AnimatedNumber({ value, suffix = '', decimals = 0, duration = 1.2, className = '' }: Props) {
   const ref = useRef<HTMLSpanElement>(null)
-  const objRef = useRef({ val: 0 })
+  const motionValue = useMotionValue(0)
+  const spring = useSpring(motionValue, { duration: duration * 1000, bounce: 0 })
 
   useEffect(() => {
-    const el = ref.current
-    if (!el) return
+    motionValue.set(value)
+  }, [value, motionValue])
 
-    const snap = decimals > 0 ? Math.pow(10, -decimals) : 1
-
-    const tween = gsap.to(objRef.current, {
-      val: value,
-      duration,
-      ease: 'power2.out',
-      snap: { val: snap },
-      onUpdate: () => {
-        el.textContent = objRef.current.val.toFixed(decimals) + suffix
-      },
+  useEffect(() => {
+    const unsubscribe = spring.on('change', (latest) => {
+      if (ref.current) {
+        ref.current.textContent = latest.toFixed(decimals) + suffix
+      }
     })
-
-    return () => { tween.kill() }
-  }, [value, suffix, decimals, duration])
+    return unsubscribe
+  }, [spring, decimals, suffix])
 
   return (
-    <span ref={ref} className={className}>
+    <motion.span ref={ref} className={className}>
       {(0).toFixed(decimals)}{suffix}
-    </span>
+    </motion.span>
   )
 }

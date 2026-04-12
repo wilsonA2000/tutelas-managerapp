@@ -37,6 +37,7 @@ def api_cases_table(db: Session = Depends(get_db)):
     """Todos los casos con 28 campos para vista de cuadro interactivo (sin paginar)."""
     cases = db.query(Case).filter(
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+        Case.processing_status != "DUPLICATE_MERGED",
     ).order_by(Case.id.desc()).all()
     items = []
     for c in cases:

@@ -19,8 +19,11 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 @router.post("/excel")
 def api_generate_excel(db: Session = Depends(get_db)):
-    """Generar archivo Excel con todos los datos."""
-    cases = db.query(Case).all()
+    """Generar archivo Excel con todos los datos activos (excluye DUPLICATE_MERGED)."""
+    cases = db.query(Case).filter(
+        Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+        Case.processing_status != "DUPLICATE_MERGED",
+    ).all()
     if not cases:
         raise HTTPException(status_code=404, detail="No hay casos en la base de datos")
 
@@ -65,5 +68,8 @@ def api_list_exports():
 
 @router.get("/metrics")
 def api_metrics(db: Session = Depends(get_db)):
-    cases = db.query(Case).all()
+    cases = db.query(Case).filter(
+        Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+        Case.processing_status != "DUPLICATE_MERGED",
+    ).all()
     return calculate_metrics(cases)

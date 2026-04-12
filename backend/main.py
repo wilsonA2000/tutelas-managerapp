@@ -37,8 +37,12 @@ extraction_in_progress = False
 extraction_progress = {"current": 0, "total": 0, "case_name": "", "results": [], "progress_pct": 0}
 
 
+import threading
+_monitor_log_lock = threading.Lock()
+
+
 def add_monitor_log(message: str, level: str = "info", details: dict | None = None):
-    """Agregar entrada al log del monitor."""
+    """Agregar entrada al log del monitor (thread-safe)."""
     global gmail_monitor_log
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -46,9 +50,10 @@ def add_monitor_log(message: str, level: str = "info", details: dict | None = No
         "level": level,
         "details": details or {},
     }
-    gmail_monitor_log.append(entry)
-    if len(gmail_monitor_log) > 50:
-        gmail_monitor_log = gmail_monitor_log[-50:]
+    with _monitor_log_lock:
+        gmail_monitor_log.append(entry)
+        if len(gmail_monitor_log) > 50:
+            gmail_monitor_log = gmail_monitor_log[-50:]
     if level == "error":
         logger.error(message)
     else:
@@ -299,11 +304,9 @@ def _run_gmail_check_background():
         gmail_check_result["step"] = f"Paso 1/3: {len(new_emails)} emails descargados"
 
         if errors:
-            gmail_check_result["step"] = f"Error: {errors[0].get('error', '')}"
-            gmail_check_result["error"] = errors[0].get("error", "")
-            _update_pct()
-            add_monitor_log(f"Error Gmail: {errors[0].get('error', '')}", level="error")
-            return
+            err_msg = errors[0].get("error", "desconocido")
+            add_monitor_log(f"Gmail: {len(errors)} error(es) parciales: {err_msg}", level="warning")
+            # No retornar — continuar con los emails exitosos si los hay
 
         if not new_emails:
             gmail_check_result["current"] = 3

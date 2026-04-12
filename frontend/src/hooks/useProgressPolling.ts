@@ -3,7 +3,7 @@
  * Elimina duplicacion entre Dashboard y ProgressModal.
  * Cada endpoint se pollea UNA sola vez con queryKey unico.
  */
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { getSyncStatus, getCheckInboxStatus, getExtractionProgress } from '../services/api'
 
 const POLL_INTERVAL = 2000 // 2s para todos los procesos

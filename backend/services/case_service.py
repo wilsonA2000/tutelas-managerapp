@@ -32,6 +32,7 @@ def list_cases(
         Case.folder_name.isnot(None),
         Case.folder_name != "None",
         Case.folder_name != "",
+        Case.processing_status != "DUPLICATE_MERGED",
     )
 
     if search:
@@ -132,7 +133,8 @@ MIN_COMPLETITUD_PERCENT = 20.0
 
 def _real_cases_filter(valid_ids: set | None = None):
     """Filtro para excluir casos fantasma (sin carpeta real) y opcionalmente por IDs validos."""
-    filters = [Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != ""]
+    filters = [Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+               Case.processing_status != "DUPLICATE_MERGED"]
     if valid_ids is not None:
         filters.append(Case.id.in_(valid_ids))
     return filters
@@ -154,7 +156,8 @@ def _get_valid_case_ids(db: Session, min_completitud: float = MIN_COMPLETITUD_PE
     Excluye: carpetas PENDIENTE REVISION/IDENTIFICACION, sin accionante+radicado,
     y casos con completitud menor al umbral.
     """
-    base_filters = [Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != ""]
+    base_filters = [Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+                    Case.processing_status != "DUPLICATE_MERGED"]
     all_cases = db.query(Case).filter(*base_filters).all()
 
     valid_ids = set()

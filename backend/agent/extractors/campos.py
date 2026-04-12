@@ -101,6 +101,24 @@ class FechaExtractor(FieldExtractor):
                         method="regex_fallback",
                         reasoning=f"Fecha regex en texto plano de {doc.get('filename', '')}",
                     )
+
+        # Fallback final: buscar por filename (auto/admite/avoca) sin importar doc_type
+        if self.field_name == "fecha_ingreso":
+            _KW = ("auto", "admite", "admis", "avoca")
+            for doc in documents:
+                fname = (doc.get("filename", "") or "").lower()
+                if any(kw in fname for kw in _KW):
+                    text = doc.get("text", "") or doc.get("full_text", "")
+                    if text:
+                        fecha = _extract_fecha_from_text(text)
+                        if fecha:
+                            return ExtractionResult(
+                                value=fecha, confidence=55,
+                                source=doc.get("filename", ""),
+                                method="regex_filename_fallback",
+                                reasoning=f"Fecha de doc con nombre auto/admite: {doc.get('filename', '')}",
+                            )
+
         return None
 
     def validate(self, value: str, context: dict = None) -> tuple[bool, str]:

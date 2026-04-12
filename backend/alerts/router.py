@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from backend.database.database import get_db
-from backend.alerts.detector import run_detection, get_alerts, dismiss_alert, get_alert_counts
+from backend.alerts.detector import run_detection, get_alerts, dismiss_alert, get_alert_counts, mark_alerts_seen
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -28,6 +28,12 @@ def api_alert_counts(db: Session = Depends(get_db)):
 def api_scan_alerts(db: Session = Depends(get_db)):
     counts = run_detection(db)
     return {"message": "Escaneo completado", "alerts_created": counts}
+
+
+@router.post("/mark-seen")
+def api_mark_seen(db: Session = Depends(get_db)):
+    count = mark_alerts_seen(db)
+    return {"message": f"{count} alertas marcadas como vistas", "count": count}
 
 
 @router.post("/{alert_id}/dismiss")

@@ -1,18 +1,51 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Bell, X, AlertTriangle, AlertCircle, Info, Check } from 'lucide-react'
-import { getAlerts, getAlertCounts, dismissAlert, scanAlerts } from '../services/api'
+import { getAlerts, getAlertCounts, dismissAlert, scanAlerts, markAlertsSeen } from '../services/api'
 import toast from 'react-hot-toast'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
 
 const severityConfig = {
-  CRITICAL: { icon: AlertCircle, color: 'text-red-500', bg: 'bg-red-50', border: 'border-red-200' },
-  WARNING: { icon: AlertTriangle, color: 'text-amber-500', bg: 'bg-amber-50', border: 'border-amber-200' },
-  INFO: { icon: Info, color: 'text-blue-500', bg: 'bg-blue-50', border: 'border-blue-200' },
+  CRITICAL: { icon: AlertCircle, color: 'text-red-500', bg: 'bg-red-50', border: 'border-l-red-400' },
+  WARNING: { icon: AlertTriangle, color: 'text-amber-500', bg: 'bg-amber-50', border: 'border-l-amber-400' },
+  INFO: { icon: Info, color: 'text-blue-500', bg: 'bg-blue-50', border: 'border-l-blue-400' },
+}
+
+const severityBadgeVariant: Record<string, 'destructive' | 'outline' | 'secondary'> = {
+  CRITICAL: 'destructive',
+  WARNING: 'outline',
+  INFO: 'secondary',
 }
 
 export default function NotificationCenter() {
   const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ top: 0, left: 0 })
   const queryClient = useQueryClient()
+
+  const updatePos = useCallback(() => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect()
+      setPos({ top: rect.bottom + 8, left: Math.max(8, rect.right - 384) })
+    }
+  }, [])
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node) && btnRef.current && !btnRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    if (open) {
+      updatePos()
+      document.addEventListener('mousedown', handleClick)
+    }
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [open, updatePos])
 
   const { data: counts } = useQuery({
     queryKey: ['alertCounts'],
@@ -22,7 +55,7 @@ export default function NotificationCenter() {
 
   const { data: alerts = [] } = useQuery({
     queryKey: ['alerts'],
-    queryFn: () => getAlerts('NEW'),
+    queryFn: () => getAlerts(),
     enabled: open,
   })
 
@@ -30,6 +63,13 @@ export default function NotificationCenter() {
     mutationFn: dismissAlert,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alerts'] })
+      queryClient.invalidateQueries({ queryKey: ['alertCounts'] })
+    },
+  })
+
+  const markSeenMut = useMutation({
+    mutationFn: markAlertsSeen,
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['alertCounts'] })
     },
   })
@@ -46,84 +86,114 @@ export default function NotificationCenter() {
   const newCount = counts?.total_new || 0
 
   return (
-    <div className="relative">
+    <>
       <button
-        onClick={() => setOpen(!open)}
-        className="relative p-2 text-white/70 hover:text-white transition"
+        ref={btnRef}
+        onClick={() => { if (!open) { setOpen(true); markSeenMut.mutate(); } else { setOpen(false); } }}
+        className="relative p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
         title="Alertas"
       >
-        <Bell size={20} />
+        <Bell size={18} />
         {newCount > 0 && (
-          <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center">
+          <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
             {newCount > 99 ? '99+' : newCount}
           </span>
         )}
       </button>
 
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="fixed left-16 top-16 w-80 sm:w-96 max-h-[70vh] bg-white rounded-xl shadow-2xl border border-gray-200 z-50 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b bg-gray-50">
-              <h3 className="font-semibold text-sm text-gray-800">Alertas ({newCount})</h3>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => scanMut.mutate()}
-                  disabled={scanMut.isPending}
-                  className="text-xs text-[#1A5276] hover:underline disabled:opacity-50"
-                >
-                  {scanMut.isPending ? 'Escaneando...' : 'Escanear'}
-                </button>
-                <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600">
-                  <X size={16} />
-                </button>
-              </div>
+      {open && createPortal(
+        <div
+          ref={panelRef}
+          className="fixed w-80 sm:w-96 bg-popover rounded-lg shadow-lg ring-1 ring-foreground/10 z-50 flex flex-col"
+          style={{ maxHeight: '70vh', top: pos.top, left: pos.left }}
+        >
+          {/* Header */}
+          <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 bg-muted/50 rounded-t-lg border-b">
+            <div className="flex items-center gap-2">
+              <Bell size={14} className="text-muted-foreground" />
+              <span className="font-semibold text-sm text-foreground">Alertas</span>
+              {newCount > 0 && (
+                <Badge variant="destructive" className="h-4 text-[10px] px-1.5">
+                  {newCount}
+                </Badge>
+              )}
             </div>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => scanMut.mutate()}
+                disabled={scanMut.isPending}
+                className="text-primary text-xs"
+              >
+                {scanMut.isPending ? 'Escaneando...' : 'Escanear'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => setOpen(false)}
+                className="text-muted-foreground"
+              >
+                <X size={14} />
+              </Button>
+            </div>
+          </div>
 
-            <div className="overflow-y-auto max-h-[60vh] divide-y divide-gray-100">
-              {alerts.length === 0 ? (
-                <div className="px-4 py-8 text-center text-gray-400 text-sm">
-                  <Check className="w-8 h-8 mx-auto mb-2 text-green-400" />
-                  Sin alertas pendientes
-                </div>
-              ) : (
-                alerts.map((alert: any) => {
+          {/* Alert list — scrollable */}
+          <div className="flex-1 overflow-y-auto overscroll-contain min-h-0">
+            {(alerts as any[]).length === 0 ? (
+              <div className="px-4 py-8 text-center text-muted-foreground text-sm">
+                <Check className="w-8 h-8 mx-auto mb-2 text-green-400" />
+                Sin alertas pendientes
+              </div>
+            ) : (
+              <div>
+                {(alerts as any[]).map((alert: any, idx: number) => {
                   const config = severityConfig[alert.severity as keyof typeof severityConfig] || severityConfig.INFO
                   const Icon = config.icon
                   return (
-                    <div key={alert.id} className={`px-4 py-3 ${config.bg} border-l-4 ${config.border}`}>
-                      <div className="flex items-start gap-2">
-                        <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${config.color}`} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-800 truncate">{alert.title}</p>
-                          {alert.description && (
-                            <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{alert.description}</p>
-                          )}
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[10px] text-gray-400">
-                              {new Date(alert.created_at).toLocaleDateString('es-CO')}
-                            </span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${config.bg} ${config.color} font-medium`}>
-                              {alert.severity}
-                            </span>
+                    <div key={alert.id}>
+                      <div className={`px-4 py-3 border-l-4 ${config.bg} ${config.border}`}>
+                        <div className="flex items-start gap-2">
+                          <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${config.color}`} />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-foreground truncate">{alert.title}</p>
+                            {alert.description && (
+                              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{alert.description}</p>
+                            )}
+                            <div className="flex items-center gap-2 mt-1.5">
+                              <span className="text-[10px] text-muted-foreground">
+                                {new Date(alert.created_at).toLocaleDateString('es-CO')}
+                              </span>
+                              <Badge
+                                variant={severityBadgeVariant[alert.severity] ?? 'outline'}
+                                className="h-4 text-[10px] px-1.5"
+                              >
+                                {alert.severity}
+                              </Badge>
+                            </div>
                           </div>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={() => dismissMut.mutate(alert.id)}
+                            className="text-muted-foreground flex-shrink-0"
+                            title="Descartar"
+                          >
+                            <X size={13} />
+                          </Button>
                         </div>
-                        <button
-                          onClick={() => dismissMut.mutate(alert.id)}
-                          className="text-gray-400 hover:text-gray-600 flex-shrink-0"
-                          title="Descartar"
-                        >
-                          <X size={14} />
-                        </button>
                       </div>
+                      {idx < (alerts as any[]).length - 1 && <Separator />}
                     </div>
                   )
-                })
-              )}
-            </div>
+                })}
+              </div>
+            )}
           </div>
-        </>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   )
 }

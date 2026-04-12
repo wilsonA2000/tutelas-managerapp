@@ -144,10 +144,12 @@ def _detect_anomalies(db: Session) -> int:
 
 def get_alerts(db: Session, status: str | None = None, severity: str | None = None,
                limit: int = 50) -> list[dict]:
-    """Obtener alertas con filtros opcionales."""
+    """Obtener alertas con filtros opcionales. Sin filtro de status, excluye DISMISSED."""
     q = db.query(Alert).order_by(Alert.created_at.desc())
     if status:
         q = q.filter(Alert.status == status)
+    else:
+        q = q.filter(Alert.status != "DISMISSED")
     if severity:
         q = q.filter(Alert.severity == severity)
     alerts = q.limit(limit).all()
@@ -175,14 +177,23 @@ def dismiss_alert(db: Session, alert_id: int):
         db.commit()
 
 
+def mark_alerts_seen(db: Session) -> int:
+    """Marca todas las alertas NEW como SEEN. Retorna cantidad actualizada."""
+    count = db.query(Alert).filter(Alert.status == "NEW").update({"status": "SEEN"})
+    db.commit()
+    return count
+
+
 def get_alert_counts(db: Session) -> dict:
     """Conteo de alertas por status y severity."""
     rows = db.execute(text(
         "SELECT status, severity, COUNT(*) FROM alerts GROUP BY status, severity"
     )).fetchall()
-    result = {"total_new": 0, "by_severity": {}, "by_type": {}}
+    result = {"total_new": 0, "total_active": 0, "by_severity": {}, "by_type": {}}
     for status, severity, cnt in rows:
-        if status in ("NEW", "SEEN"):
+        if status == "NEW":
             result["total_new"] += cnt
+        if status in ("NEW", "SEEN"):
+            result["total_active"] += cnt
         result["by_severity"][severity] = result["by_severity"].get(severity, 0) + cnt
     return result

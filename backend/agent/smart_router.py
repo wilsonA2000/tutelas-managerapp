@@ -1,10 +1,10 @@
 """Smart Router: selección inteligente de proveedor/modelo según tipo de tarea.
 
-Estrategia multi-modelo:
-1. PDFs multimodales → Gemini Flash (único con multimodal nativo)
-2. Extracción de campos → DeepSeek V3.2 (barato, rápido, sin límite RPD)
-3. Razonamiento legal complejo → Qwen 3 235B (thinking mode, gratis en Cerebras)
-4. Fallback → Groq Llama 3.3 70B (gratis, rápido)
+Estrategia multi-modelo (v5.1 — sin Gemini):
+1. Extracción de campos → DeepSeek V3.2 (barato, rápido, sin límite RPD)
+2. Razonamiento legal complejo → Qwen 3 235B (thinking mode, gratis en Cerebras)
+3. Fallback pagado → Claude Haiku 3 (Anthropic)
+4. Fallback gratis → Groq Llama 3.3 70B
 
 El router verifica qué API keys están disponibles y selecciona la mejor opción.
 """
@@ -33,10 +33,10 @@ def report_rate_limit(provider: str):
 
 
 def _is_rate_limited(provider: str) -> bool:
-    """Check si un provider esta en cooldown por rate limit."""
+    """Check si un provider esta en cooldown por rate limit (atomico)."""
     with _rate_limit_lock:
         last_429 = _rate_limit_cooldown.get(provider, 0)
-    return (time.time() - last_429) < _RATE_LIMIT_COOLDOWN_SECS
+        return (time.time() - last_429) < _RATE_LIMIT_COOLDOWN_SECS
 
 # Tipos de tarea que el agente puede ejecutar
 TASK_TYPES = {
@@ -153,14 +153,14 @@ def route(task_type: str = "general") -> RouteDecision:
         available.append((provider, model, model_config))
 
     if not available:
-        logger.warning("No provider available for task '%s', using Gemini Flash", task_type)
+        logger.error("No provider available for task '%s' — configure at least DEEPSEEK_API_KEY", task_type)
         return RouteDecision(
-            provider="google",
-            model="gemini-2.5-flash",
-            reason="Fallback: sin proveedores disponibles para esta tarea",
+            provider="none",
+            model="none",
+            reason="ERROR: sin proveedores disponibles. Configure DEEPSEEK_API_KEY o ANTHROPIC_API_KEY en .env",
             cost_per_1m_input=0,
             cost_per_1m_output=0,
-            context_window=1000000,
+            context_window=0,
         )
 
     # Primary = 1ro disponible, Fallback = 2do disponible

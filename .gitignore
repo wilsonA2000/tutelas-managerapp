@@ -49,3 +49,21 @@ logs/
 # Temporary
 /tmp/
 *.tmp
+
+# Backups y sandbox
+data/backups/
+data/sandbox/
+data/*.md
+
+# Playwright MCP y screenshots de diagnostico
+.playwright-mcp/
+screenshots/
+
+# Claude Code local
+.claude/settings.local.json
+
+# Playwright instalado incidentalmente en raiz
+/package.json
+/package-lock.json
+
+

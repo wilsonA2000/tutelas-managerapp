@@ -14,12 +14,19 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from backend.database.database import get_db
-from backend.services.cleanup_diagnosis import diagnose, render_markdown
+from backend.services.cleanup_diagnosis import (
+    diagnose, render_markdown,
+    detect_forest_fragments, detect_incomplete_radicados,
+    propose_duplicate_cleanup, identify_reextraction_candidates,
+)
 from backend.services.cleanup_actions import (
     backfill_content_hash,
     backfill_emails_md,
     merge_identity_groups,
     batch_move_no_pertenece,
+    purge_duplicates,
+    merge_forest_fragments,
+    backfill_radicado_23d,
 )
 
 router = APIRouter(prefix="/api/cleanup", tags=["cleanup"])
@@ -27,6 +34,16 @@ router = APIRouter(prefix="/api/cleanup", tags=["cleanup"])
 
 class DryRunBody(BaseModel):
     dry_run: bool = True
+
+
+@router.get("/audit")
+def api_cleanup_audit(db: Session = Depends(get_db)):
+    """v5.0: Auditoria completa con detectores ampliados.
+
+    Incluye: diagnostico base + fragmentos FOREST + radicados incompletos
+    + propuesta duplicados + candidatos re-extraccion.
+    """
+    return diagnose(db)
 
 
 @router.get("/diagnosis")
@@ -99,3 +116,46 @@ def api_cleanup_merge_identity(body: MergeBody = MergeBody(), db: Session = Depe
         dry_run=body.dry_run,
         only_auto_mergeable=body.only_auto_mergeable,
     )
+
+
+# --- v5.0 Endpoints ---
+
+class PurgeDuplicatesBody(BaseModel):
+    dry_run: bool = True
+    scope: str = "intra"  # intra | inter | all
+
+
+@router.post("/purge-duplicates")
+def api_cleanup_purge_duplicates(body: PurgeDuplicatesBody = PurgeDuplicatesBody(), db: Session = Depends(get_db)):
+    """v5.0: Purga duplicados por hash MD5.
+
+    scope='intra': dentro del mismo caso (seguro, mueve a _duplicados/).
+    scope='inter': entre casos, solo NO_PERTENECE.
+    scope='all': ambos.
+    """
+    return purge_duplicates(db, scope=body.scope, dry_run=body.dry_run)
+
+
+class ForestMergeBody(BaseModel):
+    dry_run: bool = True
+    min_confidence: str = "ALTA"
+
+
+@router.post("/merge-forest-fragments")
+def api_cleanup_merge_forest(body: ForestMergeBody = ForestMergeBody(), db: Session = Depends(get_db)):
+    """v5.0: Fusiona fragmentos FOREST con su caso padre detectado.
+
+    Detecta casos creados con número FOREST como folder y los vincula
+    al caso original encontrado por radicado 23d en sus documentos.
+    """
+    return merge_forest_fragments(db, dry_run=body.dry_run, min_confidence=body.min_confidence)
+
+
+@router.post("/backfill-radicados")
+def api_cleanup_backfill_radicados(body: DryRunBody = DryRunBody(), db: Session = Depends(get_db)):
+    """v5.0: Busca y asigna radicado_23_digitos desde el texto de documentos.
+
+    Solo auto-asigna con confianza ALTA (radicado en 2+ docs).
+    Los de confianza MEDIA se reportan como sugerencia.
+    """
+    return backfill_radicado_23d(db, dry_run=body.dry_run)
