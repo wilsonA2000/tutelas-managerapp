@@ -1,351 +1,339 @@
-# GUIA DE USUARIO - Plataforma de Gestion Juridica de Tutelas
-## Gobernacion de Santander - Secretaria Juridica - Grupo de Apoyo Juridico
+# GUIA DE USUARIO - AGENTE JURIDICO IA v3.0
+## Plataforma de Gestion Juridica de Acciones de Tutela
+### Gobernacion de Santander - 2026
 
 ---
 
-## 1. REQUISITOS DEL SISTEMA
+## TABLA DE CONTENIDO
 
-| Componente | Requisito |
-|-----------|-----------|
-| Sistema Operativo | Windows 10/11 con WSL2 habilitado |
-| Python | 3.10 o superior |
-| Node.js | 18 o superior |
-| Navegador | Chrome, Edge o Firefox (version reciente) |
-| RAM | Minimo 4 GB disponibles |
-| Disco | ~500 MB para la aplicacion + espacio para documentos |
+1. [Inicio Rapido](#1-inicio-rapido)
+2. [Login y Seguridad](#2-login-y-seguridad)
+3. [Dashboard](#3-dashboard)
+4. [Agente IA (Chat Flotante)](#4-agente-ia-chat-flotante)
+5. [Herramientas del Agente](#5-herramientas-del-agente)
+6. [Tutelas](#6-tutelas)
+7. [Cuadro Interactivo](#7-cuadro-interactivo)
+8. [Extraccion IA](#8-extraccion-ia)
+9. [Correos Gmail](#9-correos-gmail)
+10. [Inteligencia Legal](#10-inteligencia-legal)
+11. [Reportes](#11-reportes)
+12. [Seguimiento de Cumplimientos](#12-seguimiento-de-cumplimientos)
+13. [Configuracion y Alertas](#13-configuracion-y-alertas)
+14. [Proveedores de IA](#14-proveedores-de-ia)
+15. [Flujo de Trabajo Diario](#15-flujo-de-trabajo-diario)
+16. [Solucion de Problemas](#16-solucion-de-problemas)
 
 ---
 
-## 2. INICIAR LA APLICACION
+## 1. INICIO RAPIDO
 
-### Opcion A: Script automatico
+### Requisitos
+- Windows 10/11 con WSL2 (Ubuntu)
+- Python 3.10+
+- Node.js 18+
+- Conexion a internet (para APIs de IA y Gmail)
+
+### Iniciar la plataforma
 ```bash
 cd "/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026/tutelas-app"
 bash start.sh
 ```
 
-### Opcion B: Inicio manual (dos terminales)
-
-**Terminal 1 - Backend:**
-```bash
-cd "/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026/tutelas-app"
-python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-**Terminal 2 - Frontend:**
-```bash
-cd "/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026/tutelas-app/frontend"
-npm run dev -- --host 0.0.0.0
-```
-
-### URLs de acceso
+### URLs
 | Servicio | URL |
 |----------|-----|
-| **Interfaz principal** | http://localhost:5173 |
-| **API Backend** | http://localhost:8000 |
-| **Documentacion API (Swagger)** | http://localhost:8000/docs |
-| **Documentacion API (Redoc)** | http://localhost:8000/redoc |
+| Frontend | http://localhost:5173 |
+| Backend API | http://localhost:8000 |
+| Documentacion API | http://localhost:8000/docs |
 
 ---
 
-## 3. NAVEGACION DE LA INTERFAZ
+## 2. LOGIN Y SEGURIDAD
 
-### 3.1 DASHBOARD (Pagina de inicio)
-La pagina principal muestra un resumen ejecutivo de todas las tutelas:
+La plataforma requiere autenticacion JWT.
 
-- **4 tarjetas KPI** en la parte superior:
-  - Total de tutelas registradas
-  - Casos activos
-  - Casos inactivos
-  - Porcentaje de completitud de datos
+- **Usuario:** wilson
+- **Contrasena:** tutelas2026
+- **Sesion:** 8 horas (se renueva automaticamente)
+- **Cambiar contrasena:** Disponible en el perfil
 
-- **4 graficos interactivos:**
-  - Casos por mes de ingreso (barras)
-  - Distribucion de fallos: CONCEDE/NIEGA/IMPROCEDENTE (torta)
-  - Top ciudades por numero de casos (barras horizontales)
-  - Carga de trabajo por abogado (barras horizontales)
+Al entrar veras la pantalla de login con el escudo de la Gobernacion. Despues de autenticarte, el token se guarda automaticamente.
 
-- **Actividad reciente:** ultimas acciones realizadas en el sistema
-
-### 3.2 TUTELAS (Lista de casos)
-Vista principal de gestion de casos:
-
-- **Buscador:** Busca por nombre del accionante, radicado, juzgado o cualquier texto
-- **Filtros:** Estado (ACTIVO/INACTIVO), Sentido del fallo, Ciudad
-- **Tabla de resultados:** Muestra radicado, accionante, juzgado, ciudad, estado y fallo con colores:
-  - Amarillo = ACTIVO
-  - Verde = INACTIVO
-  - Rojo = CONCEDE
-  - Verde = NIEGA
-  - Naranja = IMPROCEDENTE
-- **Clic en una fila** para ver el detalle completo del caso
-
-### 3.3 DETALLE DEL CASO
-Al hacer clic en un caso se abre la vista de detalle con dos paneles:
-
-**Panel izquierdo (60%) - Formulario editable:**
-Los 28 campos organizados en 8 secciones colapsables:
-1. Identificacion (radicado judicial y FOREST)
-2. Partes (accionante, accionados, vinculados)
-3. Proceso (juzgado, ciudad, fecha, derechos vulnerados)
-4. Gestion (oficina, abogado, estado, fecha respuesta)
-5. Fallo 1ra Instancia
-6. Impugnacion y 2da Instancia
-7. Incidente de Desacato
-8. Observaciones
-
-- Cada campo se puede editar directamente
-- Clic en **"Guardar Cambios"** para persistir
-- Todos los cambios quedan registrados en el historial de auditoria
-
-**Panel derecho (40%) - Documentos:**
-- Lista de todos los archivos del caso (PDFs, DOCX, DOC)
-- Icono segun tipo de documento
-- Clic para abrir/previsualizar el archivo en nueva pestana
-- Boton para re-extraer texto de un documento especifico
-
-### 3.4 EXTRACCION (Motor de IA)
-Pagina para procesar casos con inteligencia artificial:
-
-- **"Extraer Todos los Pendientes"**: Procesa todos los casos que no han sido analizados
-- **"Extraer Caso Individual"**: Seleccionar un caso especifico para extraer
-- **Cola de revision**: Muestra casos con campos de baja confianza que necesitan verificacion manual
-
-**Como funciona la extraccion:**
-1. Lee TODOS los documentos de la carpeta (PDF completo, DOCX con footers y headers)
-2. Envia el texto a Groq IA (Llama 3.3 70B) para analisis
-3. La IA extrae los 28 campos con nivel de confianza (ALTA/MEDIA/BAJA)
-4. Los resultados se guardan en la base de datos
-5. Si algun campo tiene confianza BAJA, el caso aparece en la cola de revision
-
-### 3.5 CORREOS (Bandeja de Gmail)
-Gestion de emails entrantes:
-
-- **"Revisar Bandeja"**: Consulta Gmail manualmente y descarga emails nuevos
-- **Monitor automatico**: Cada 20 minutos revisa automaticamente tu bandeja
-- **Tabla de emails**: Muestra asunto, remitente, fecha, estado y caso asignado
-- **Clasificacion automatica**: El sistema identifica a que caso pertenece cada email por:
-  1. Numero de radicado en el asunto o cuerpo
-  2. Numero FOREST
-  3. Nombre del accionante
-  4. Contenido de los PDFs adjuntos
-
-**Que pasa cuando llega un email nuevo:**
-1. Se busca en la bandeja de Gmail emails no leidos con keywords juridicos
-2. Se descargan los adjuntos PDF/DOCX
-3. Se clasifica a que caso pertenece
-4. Si es un caso nuevo: se crea carpeta automaticamente con formato "2026-XXXXX NOMBRE ACCIONANTE"
-5. Los adjuntos se guardan en la carpeta correcta
-6. Se marca como leido SOLO si se proceso exitosamente
-
-### 3.6 REPORTES (Excel y metricas)
-Generacion de reportes para entrega:
-
-- **"Generar Excel"**: Crea un archivo Excel profesional con 3 hojas:
-  1. **PORTADA**: Resumen ejecutivo con metricas clave
-  2. **TUTELAS**: Tabla completa de 28 columnas con colores semanticos
-  3. **ESTADISTICAS**: Graficos de barras, tablas de frecuencia, top ciudades y abogados
-- **Historial de exportaciones**: Lista de Excel generados previamente con enlace de descarga
-- **Metricas en pantalla**: Resumen rapido sin necesidad de descargar Excel
-
-### 3.7 CONFIGURACION
-Estado del sistema:
-
-- Muestra si Gmail esta configurado y conectado
-- Muestra si la API de Groq (IA) esta configurada
-- Estado de la base de datos y carpetas
+Para **cerrar sesion**, usa el boton rojo en la parte inferior del sidebar.
 
 ---
 
-## 4. FLUJOS DE TRABAJO DIARIOS
+## 3. DASHBOARD
 
-### 4.1 Flujo matutino: Revisar nuevos casos
-1. Abrir http://localhost:5173
-2. Ir a **Correos** → clic en **"Revisar Bandeja"**
-3. Ver emails nuevos descargados y clasificados
-4. Si algun email quedo sin clasificar, asignarlo manualmente a un caso
-5. Ir a **Extraccion** → clic en **"Extraer Todos los Pendientes"**
-6. Revisar la cola de revision para validar campos con baja confianza
-
-### 4.2 Flujo de respuesta a tutela
-1. Ir a **Tutelas** → buscar el caso por radicado o nombre
-2. Abrir el detalle del caso
-3. Revisar los documentos descargados (panel derecho)
-4. Completar o corregir los campos que falten
-5. Guardar cambios
-
-### 4.3 Flujo de entrega mensual
-1. Ir a **Reportes** → clic en **"Generar Excel"**
-2. Descargar el archivo generado
-3. Revisar en Excel que los datos sean correctos
-4. Entregar a la Secretaria Juridica
+Pagina principal con:
+- **8 KPIs principales:** Tutelas activas, favorabilidad, impugnaciones, desacatos
+- **Centro de control:** Revisar Gmail, extraer con IA, generar Excel
+- **Graficas:** Favorabilidad por juzgado, derechos vulnerados, oficinas, tendencias
+- **Actividad reciente:** Ultimas acciones del sistema
+- **Metricas de calidad:** Confiabilidad, documentos verificados
+- **Campana de alertas:** Esquina superior del sidebar (muestra alertas criticas)
 
 ---
 
-## 5. PROTOCOLO DE 28 CAMPOS
+## 4. AGENTE IA (CHAT FLOTANTE)
 
-| # | Campo | Descripcion | Fuente |
-|---|-------|-------------|--------|
-| 1 | RADICADO_23_DIGITOS | Numero judicial de 23 digitos | Auto admisorio PDF |
-| 2 | RADICADO_FOREST | Numero interno FOREST (~11 digitos) | Header DOCX / Gmail PDFs |
-| 3 | ABOGADO_RESPONSABLE | Abogado que proyecto la respuesta | Footer DOCX ("Proyecto:") |
-| 4 | ACCIONANTE | Persona que interpone la tutela | Auto admisorio |
-| 5 | ACCIONADOS | Entidades demandadas | Auto admisorio |
-| 6 | VINCULADOS | Terceros llamados al proceso | Auto admisorio |
-| 7 | DERECHO_VULNERADO | Derechos fundamentales invocados | Auto admisorio |
-| 8 | JUZGADO | Juzgado de primera instancia | Auto admisorio |
-| 9 | CIUDAD | Ciudad del juzgado | Auto admisorio |
-| 10 | FECHA_INGRESO | Fecha de admision (DD/MM/YYYY) | Auto admisorio |
-| 11 | ASUNTO | Resumen de la demanda | Analisis IA |
-| 12 | PRETENSIONES | Que pide el accionante | Auto admisorio |
-| 13 | OFICINA_RESPONSABLE | Oficina que prepara respuesta | Header DOCX FOREST |
-| 14 | ESTADO | ACTIVO o INACTIVO | Inferido del proceso |
-| 15 | FECHA_RESPUESTA | Fecha del documento de respuesta | DOCX metadata |
-| 16 | SENTIDO_FALLO_1ST | CONCEDE / NIEGA / IMPROCEDENTE | Sentencia PDF |
-| 17 | FECHA_FALLO_1ST | Fecha del fallo 1ra instancia | Sentencia PDF |
-| 18 | IMPUGNACION | SI o NO | Autos PDF |
-| 19 | QUIEN_IMPUGNO | Quien apelo el fallo | Autos PDF |
-| 20 | FOREST_IMPUGNACION | FOREST de la impugnacion | Header DOCX |
-| 21 | JUZGADO_2ND | Juzgado de segunda instancia | Autos PDF |
-| 22 | SENTIDO_FALLO_2ND | CONFIRMA / REVOCA / MODIFICA | Sentencia 2da instancia |
-| 23 | FECHA_FALLO_2ND | Fecha fallo 2da instancia | Sentencia 2da instancia |
-| 24 | INCIDENTE | SI o NO (desacato) | Autos PDF |
-| 25 | FECHA_APERTURA_INCIDENTE | Fecha apertura desacato | Auto de apertura |
-| 26 | RESPONSABLE_DESACATO | Abogado del desacato | Footer DOCX desacato |
-| 27 | DECISION_INCIDENTE | Decision del juez | Auto de decision |
-| 28 | OBSERVACIONES | Resumen general del caso | Analisis IA |
+El boton **"Agente IA"** aparece en la esquina inferior derecha de TODAS las paginas.
+
+### Como usarlo
+1. Click en el boton flotante azul
+2. Escribe tu instruccion en lenguaje natural
+3. El agente decide que herramientas usar
+4. Ejecuta las herramientas y te muestra resultados
+
+### Ejemplos de instrucciones
+| Instruccion | Que hace |
+|-------------|----------|
+| "Dame las estadisticas generales" | Muestra total de casos, documentos, emails, favorabilidad |
+| "Buscar caso personero Guavata" | Busca por radicado, accionante, juzgado o texto |
+| "Analizar abogado Cruz" | Rendimiento: casos, activos, tasa de favorabilidad |
+| "Escanear alertas criticas" | Detecta plazos vencidos, anomalias, emails sin caso |
+| "Predecir resultado para Bucaramanga" | Prediccion basada en datos historicos |
+| "Verificar plazo del caso 27" | Calcula dias restantes para cumplimiento |
+| "Buscar en Knowledge Base educacion Vetas" | Busca en 2389 entradas (PDFs, emails, DOCX) |
+| "Cuanto he consumido en tokens" | Muestra consumo y ahorro vs APIs de pago |
+| "Casos por municipio" | Lista agrupada con conteo |
+
+### Boton de ayuda
+En el header del chat hay un icono **?** que te lleva a la pagina completa de herramientas con documentacion y ejemplos.
 
 ---
 
-## 6. ENDPOINTS DE LA API (Para pruebas manuales)
+## 5. HERRAMIENTAS DEL AGENTE
 
-### Salud y configuracion
-```
-GET  http://localhost:8000/api/health
-GET  http://localhost:8000/api/settings/status
-GET  http://localhost:8000/api/monitor/status
-POST http://localhost:8000/api/monitor/toggle
-```
+Pagina **/agent** en el sidebar (icono de llave).
 
-### Casos
-```
-GET  http://localhost:8000/api/cases?search=GARCIA&page=1&per_page=10
-GET  http://localhost:8000/api/cases/filters
-GET  http://localhost:8000/api/cases/232
-PUT  http://localhost:8000/api/cases/232  (body: {"ESTADO": "ACTIVO"})
-```
+Muestra las **15 herramientas** organizadas por categoria:
 
-### Documentos
-```
-GET  http://localhost:8000/api/documents/1
-GET  http://localhost:8000/api/documents/1/preview
-POST http://localhost:8000/api/documents/1/reextract
-```
+### Busqueda (3 herramientas)
+- **buscar_caso** — Por radicado, accionante, juzgado o texto libre
+- **buscar_conocimiento** — Full-text search en Knowledge Base (2389 entradas)
+- **buscar_email** — Por subject, remitente o contenido
 
-### Extraccion
-```
-POST http://localhost:8000/api/extraction/single/232
-POST http://localhost:8000/api/extraction/batch  (body: {"case_ids": [1,2,3]})
-GET  http://localhost:8000/api/extraction/review
-```
+### Analisis (5 herramientas)
+- **verificar_plazo** — Dias restantes para cumplimiento de fallo
+- **predecir_resultado** — Prediccion basada en datos historicos
+- **analizar_abogado** — Rendimiento, casos, tasa favorabilidad
+- **obtener_contexto** — Contexto completo de un caso (documentos, emails, datos)
+- **ver_razonamiento** — Cadena de razonamiento de la ultima extraccion
 
-### Dashboard
-```
-GET  http://localhost:8000/api/dashboard/kpis
-GET  http://localhost:8000/api/dashboard/charts
-GET  http://localhost:8000/api/dashboard/activity
-```
+### Gestion (5 herramientas)
+- **estadisticas_generales** — Resumen completo del sistema
+- **listar_alertas** — Alertas activas (plazos, anomalias)
+- **escanear_alertas** — Ejecutar deteccion de alertas
+- **casos_por_municipio** — Agrupacion con conteo
+- **consumo_tokens** — Consumo, ahorro, tips de optimizacion
 
-### Reportes
-```
-POST http://localhost:8000/api/reports/excel
-GET  http://localhost:8000/api/reports/excel/list
-GET  http://localhost:8000/api/reports/metrics
-```
-
-### Correos
-```
-GET  http://localhost:8000/api/emails
-POST http://localhost:8000/api/emails/check
-PUT  http://localhost:8000/api/emails/1/assign/232
-PUT  http://localhost:8000/api/emails/1/ignore
-```
+### Extraccion (2 herramientas)
+- **extraer_caso** — Extraccion inteligente con Agente IA v3
+- **validar_forest** — Verifica si un FOREST es real o alucinado
 
 ---
 
-## 7. SOLUCION DE PROBLEMAS
+## 6. TUTELAS
+
+Lista paginada de todos los casos (264 actualmente).
+
+- **Buscar** por accionante, radicado, juzgado
+- **Filtrar** por estado (ACTIVO/INACTIVO), fallo, ciudad
+- **Click en una fila** para ver detalle del caso
+- **Sincronizar** carpetas desde disco
+
+### Detalle del caso
+- 10 secciones colapsables con 36 campos editables
+- Panel de documentos con preview inline
+- Boton para sincronizar carpeta individual
+- Boton para eliminar caso (con confirmacion)
+
+---
+
+## 7. CUADRO INTERACTIVO
+
+Tabla tipo Excel con TODOS los campos de TODOS los casos.
+
+- **Edicion inline:** Click en celda para editar, Enter para guardar
+- **Filtro por columna:** Escribir en el header para filtrar
+- **Ordenar:** Click en header de columna
+- **Mostrar/ocultar columnas:** Boton de configuracion
+- **Campos vacios** se muestran en rojo
+
+---
+
+## 8. EXTRACCION IA (Pipeline Autosuficiente v3.1)
+
+### Que hace el pipeline cuando extraes un caso
+1. **Clasifica** cada documento por tipo (RESPUESTA, CONTESTACION, SENTENCIA, SOLICITUD, etc.)
+2. **Extrae abogado** de TODOS los DOCX relevantes, prioriza por tipo (RESPUESTA > CONTESTACION)
+3. **Verifica** si cada documento pertenece al caso (radicado 23 digitos + accionante)
+4. **Mueve automaticamente** documentos que no pertenecen a su carpeta correcta
+5. **Crea casos nuevos** si detecta radicados que no existen en la DB
+6. **Inyecta correcciones** historicas como aprendizaje antes de llamar a la IA
+7. **Etiqueta** documentos con tipo para que la IA sepa de donde extraer cada campo
+8. **Valida** cada campo post-IA (ABOGADO solo de DOCX, FALLO solo de sentencia)
+9. **Muestra resultados** detallados: campos, tokens, docs movidos, casos creados
+
+### Extraccion individual
+Seleccionar caso → "Extraer Caso Individual" → esperar ~1 min → panel de resultados con:
+- Campos extraidos con valores
+- Documentos procesados / excluidos
+- Documentos reasignados a otras carpetas
+- Casos nuevos creados automaticamente
+- Correcciones historicas inyectadas
+- Tokens consumidos y costo
+
+### Extraccion por lotes
+- Protegida contra doble-click
+- Cada caso que falla va a REVISION (nunca queda trabado en EXTRAYENDO)
+- Progreso visible en el modal
+
+### Tipos de DOCX que reconoce
+| Tipo | Patron en filename | Extrae abogado? |
+|------|-------------------|:---:|
+| DOCX_RESPUESTA | respuesta, contestacion, CON FOREST | SI |
+| DOCX_DESACATO | respuesta incidente, desacato | SI |
+| DOCX_IMPUGNACION | contestacion impugnacion | SI |
+| DOCX_CUMPLIMIENTO | cumplimiento fallo | SI |
+| DOCX_SOLICITUD | solicitud, insumo | NO |
+| DOCX_MEMORIAL | memorial, aclaratorio | NO |
+| DOCX_CARTA | carta, oficio | NO |
+
+### Aprendizaje
+Cada vez que editas un campo desde el Cuadro o Detalle:
+1. La correccion se registra automaticamente
+2. La proxima extraccion incluye esa correccion como ejemplo
+3. La IA no repite el mismo error
+
+---
+
+## 9. CORREOS GMAIL
+
+- **Revisar Bandeja:** Boton manual para revisar nuevos emails
+- **Lista de correos** con estado (pendiente, asignado, ignorado)
+- **Detalle** con cuerpo completo, adjuntos, caso vinculado
+- **Clasificacion automatica** por tipo (tutela nueva, fallo, impugnacion, etc.)
+
+---
+
+## 10. INTELIGENCIA LEGAL (NUEVO)
+
+Pagina **/intelligence** con 3 tabs:
+
+### Analytics
+- **Favorabilidad por juzgado:** Que juzgados conceden mas, cuales niegan
+- **Impugnaciones:** Total, resueltas, pendientes, tasa de revocacion
+- **Rendimiento por abogado:** Casos, activos, favorabilidad por cada abogado
+- **Derechos vulnerados:** Top 15 mas frecuentes
+
+### Calendario
+- Plazos de cumplimiento con semaforo (VENCIDO, URGENTE, EN PLAZO)
+- Desacatos pendientes de decision
+- Impugnaciones sin resolver
+
+### Predictor
+- Ingresa juzgado, derecho vulnerado y/o ciudad
+- El sistema predice el resultado probable basado en datos historicos
+- Muestra confianza, tamano de muestra y desglose
+
+---
+
+## 11. REPORTES
+
+- **Generar Excel:** Exporta todos los casos con 28+ campos
+- **Historial:** Lista de reportes generados con fecha y tamano
+- **Descargar:** Click para bajar cualquier reporte previo
+
+---
+
+## 12. SEGUIMIENTO DE CUMPLIMIENTOS
+
+Sistema semaforo para casos con fallo desfavorable:
+- **VENCIDO** (rojo): Plazo excedido
+- **URGENTE** (naranja): Menos de 3 dias
+- **POR VENCER** (amarillo): Menos de 7 dias
+- **EN PLAZO** (verde): Dentro del termino
+- **CUMPLIDO** (azul): Ya se cumplio
+
+---
+
+## 13. CONFIGURACION Y ALERTAS
+
+### Configuracion
+- Estado de servicios (Gmail, IA, DB, carpetas)
+- Informacion del sistema
+- Variables de entorno (referencia)
+
+### Sistema de alertas
+- **Campana** en el sidebar con badge de conteo
+- Click para ver alertas activas
+- **Escanear:** Buscar nuevas alertas
+- **Descartar:** Quitar alertas revisadas
+- Tipos: DEADLINE, UNMATCHED_EMAIL, MISSING_DOC, ANOMALY
+
+---
+
+## 14. PROVEEDORES DE IA
+
+El agente tiene **7 proveedores** con **Smart Router** automatico:
+
+| Proveedor | Modelo | Uso principal | Costo |
+|-----------|--------|---------------|:-----:|
+| Google Gemini | Flash 2.5 | PDFs multimodales | Gratis (20 RPD) |
+| Groq | Llama 3.3 70B | Extraccion rapida, chat | Gratis |
+| Cerebras | Qwen 3 235B | Razonamiento legal complejo | Gratis |
+| HF Router | Qwen 3 / Llama 3.3 | Fallback multi-proveedor | Gratis |
+| DeepSeek | V3.2 | Extraccion economica | $0.28/M tokens |
+| Anthropic | Claude Sonnet 4.6 | Razonamiento premium | $3-15/M tokens |
+| OpenAI | GPT-4o | Multimodal premium | $2.50-10/M tokens |
+
+El Smart Router selecciona automaticamente el mejor proveedor segun la tarea. No necesitas configurar nada.
+
+### API keys
+Las keys se configuran en `tutelas-app/.env`. Ver `GET /api/agent/routes` para ver que proveedor se usara para cada tipo de tarea.
+
+---
+
+## 15. FLUJO DE TRABAJO DIARIO
+
+### Manana
+1. Iniciar plataforma (`bash start.sh`)
+2. Login (wilson / tutelas2026)
+3. Dashboard → Revisar KPIs y alertas (campana)
+4. Revisar Gmail → procesar emails nuevos
+
+### Durante el dia
+5. Usar el **Agente IA** (boton flotante) para consultas rapidas
+6. Verificar plazos en **Inteligencia Legal → Calendario**
+7. Extraer datos de casos nuevos (Extraccion → Individual o Lotes)
+8. Revisar y corregir campos en el **Cuadro** (el agente aprende de tus correcciones)
+
+### Cierre
+9. Generar Excel actualizado (Reportes → Generar)
+10. Revisar seguimiento de cumplimientos
+
+---
+
+## 16. SOLUCION DE PROBLEMAS
 
 | Problema | Solucion |
-|----------|---------|
-| Puerto 8000 ocupado | `fuser -k 8000/tcp` y reiniciar |
-| Puerto 5173 ocupado | `fuser -k 5173/tcp` y reiniciar |
-| Error IMAP Gmail | Verificar App Password en .env y que 2FA este activo en Google |
-| Error Groq API | Verificar GROQ_API_KEY en .env, confirmar en console.groq.com |
-| PDFs sin texto | Instalar tesseract: `sudo apt install tesseract-ocr tesseract-ocr-spa` |
-| Archivos .doc no se leen | Instalar antiword: `sudo apt install antiword` |
-| Base de datos corrupta | Eliminar data/tutelas.db y reiniciar (se re-importa del CSV) |
-| Frontend no carga | Verificar `npm install` en carpeta frontend/ |
+|----------|----------|
+| No carga el frontend | Verificar que `npm run dev` esta corriendo en puerto 5173 |
+| Error 401 Unauthorized | Token expirado, cerrar sesion y volver a entrar |
+| Gemini rate limited | Esperar reset (medianoche UTC) o usar Groq/Cerebras automatico |
+| FOREST incorrecto | Verificar que no sea 3634740 (alucinado). Usar herramienta `validar_forest` |
+| Caso no aparece | Sincronizar carpetas desde lista de Tutelas |
+| Email sin caso asignado | Revisar en Correos → asignar manualmente |
+| Extraccion falla | Verificar API key del proveedor en .env |
+
+### Contacto tecnico
+- Backend: FastAPI + Python 3.10 + SQLAlchemy + SQLite
+- Frontend: React 19 + TypeScript + Vite + TailwindCSS
+- Agente: 15 herramientas + Smart Router + Knowledge Base FTS5
+- API Docs: http://localhost:8000/docs
 
 ---
 
-## 8. ARQUITECTURA TECNICA
-
-```
-tutelas-app/
-├── backend/                    # Python 3.10 + FastAPI
-│   ├── main.py                # Servidor + monitor Gmail background
-│   ├── config.py              # Variables de entorno
-│   ├── database/              # SQLAlchemy + SQLite
-│   │   ├── models.py          # 5 tablas: cases, documents, extractions, emails, audit_log
-│   │   ├── database.py        # Engine y sesiones
-│   │   └── seed.py            # Importador CSV + escaner de carpetas
-│   ├── extraction/            # Motor de extraccion documental
-│   │   ├── pdf_extractor.py   # pdfplumber (todas las paginas)
-│   │   ├── docx_extractor.py  # python-docx + footers + headers XML
-│   │   ├── doc_extractor.py   # antiword/libreoffice para .doc
-│   │   ├── ocr_extractor.py   # pytesseract para escaneados
-│   │   ├── ai_extractor.py    # Groq API (Llama 3.3 70B)
-│   │   └── pipeline.py        # Orquestador del flujo completo
-│   ├── email/                 # Integracion Gmail IMAP
-│   │   ├── gmail_monitor.py   # Descarga y clasificacion automatica
-│   │   └── classifier.py      # Match email -> caso
-│   ├── reports/               # Generacion de reportes
-│   │   ├── excel_generator.py # Excel profesional 3 hojas
-│   │   └── metrics.py         # Calculos estadisticos
-│   ├── routers/               # 6 routers FastAPI (24 endpoints)
-│   └── services/              # Logica de negocio
-├── frontend/                  # React 19 + TypeScript + TailwindCSS
-│   └── src/
-│       ├── pages/             # 7 paginas: Dashboard, Cases, Detail, Extraction, Emails, Reports, Settings
-│       ├── services/api.ts    # Cliente HTTP
-│       └── App.tsx            # Layout + rutas
-├── data/
-│   └── tutelas.db            # Base de datos SQLite
-├── .env                      # Credenciales (NUNCA compartir)
-├── requirements.txt          # Dependencias Python
-└── start.sh                  # Script de inicio
-```
-
----
-
-## 9. METRICAS ACTUALES DEL SISTEMA
-
-| Metrica | Valor |
-|---------|-------|
-| Total archivos fuente | 52 |
-| Lineas de codigo Python | 3,139 |
-| Lineas de codigo TypeScript | 2,417 |
-| Total lineas de codigo | 5,556 |
-| Endpoints API | 24 |
-| Paginas frontend | 7 |
-| Tablas en base de datos | 5 |
-| Casos registrados | 357 |
-| Documentos indexados | 1,576 |
-| Registros de auditoria | 510 |
-| Emails procesados | 112 |
-| Tamanio base de datos | 4.7 MB |
-
----
-
-*Documento generado automaticamente - Tutelas Manager v1.0*
-*Gobernacion de Santander - 2026*
+*Agente Juridico IA v3.0 — Gobernacion de Santander — Marzo 2026*
