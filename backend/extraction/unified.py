@@ -175,7 +175,7 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
         # Guardar campos regex directamente en Case (protección si IA falla)
         saved_regex = 0
         for field_name, result in regex_results.items():
-            attr = Case.CSV_FIELD_MAP.get(field_name)
+            attr = Case.CSV_FIELD_MAP.get(field_name.upper())
             if attr and not getattr(case, attr, None):
                 setattr(case, attr, result.value)
                 saved_regex += 1
@@ -212,7 +212,7 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
         for f in semantic_fields:
             if f in regex_results and regex_results[f].confidence >= 80:
                 continue  # Regex ya lo tiene con confianza alta
-            attr = Case.CSV_FIELD_MAP.get(f)
+            attr = Case.CSV_FIELD_MAP.get(f.upper())
             if attr and getattr(case, attr, None):
                 continue  # Ya tiene valor en DB
             fields_needed.append(f)
@@ -308,9 +308,15 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
                 logger.warning("IA fallo: %s (pero %d campos regex ya guardados)", ai_result.error, saved_regex)
                 stats["ai_error"] = ai_result.error
             else:
-                # Convertir AI fields a ExtractionResult para merge
+                # Convertir AI fields a ExtractionResult para merge.
+                # Normalizar key a lowercase: la IA devuelve MAYUSCULAS (del prompt)
+                # pero regex_results usa minusculas (keys del registry). Sin esto,
+                # all_fields en Fase 5 tratara "radicado_23_digitos" y
+                # "RADICADO_23_DIGITOS" como campos distintos, y el segundo
+                # sobrescribira al primero al escribir en case.
                 for fname, fresult in ai_result.fields.items():
-                    ia_results[fname] = ExtractionResult(
+                    key = fname.lower() if isinstance(fname, str) else fname
+                    ia_results[key] = ExtractionResult(
                         value=fresult.value,
                         confidence=90 if fresult.confidence == "ALTA" else 70 if fresult.confidence == "MEDIA" else 50,
                         source=fresult.source, method="ia",
@@ -351,7 +357,7 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
         # Guardar campos resueltos en Case
         ia_saved = 0
         for fname, value in final_fields.items():
-            attr = Case.CSV_FIELD_MAP.get(fname)
+            attr = Case.CSV_FIELD_MAP.get(fname.upper())
             if not attr:
                 continue
             old_val = getattr(case, attr, None) or ""

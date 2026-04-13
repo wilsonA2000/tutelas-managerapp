@@ -30,11 +30,25 @@ def validate_extraction(case, fields: dict) -> tuple[dict, list[str]]:
     folder_name = case.folder_name or ""
 
     # 1. RADICADO vs CARPETA
+    # La carpeta puede nombrarse con:
+    #  (a) radicado judicial corto (secuencia 1-4 dígitos, ej: "2026-00095"), o
+    #  (b) radicado FOREST interno (secuencia 5+ dígitos, ej: "2026-63875").
+    # Solo podemos validar el radicado 23d contra la carpeta si estamos en el caso (a).
+    # Heurística: si la secuencia significativa tiene ≥5 dígitos o coincide con el FOREST
+    # conocido, la carpeta es tipo FOREST y no sirve para validar el radicado judicial.
     rad_m = re.match(r'(20\d{2})[-\s]?0*(\d+)', folder_name)
     if rad_m:
         case_seq = rad_m.group(2).lstrip('0')
         rad23 = fields.get("radicado_23_digitos", "") or fields.get("RADICADO_23_DIGITOS", "")
-        if rad23:
+        forest_val = (
+            fields.get("radicado_forest", "")
+            or fields.get("RADICADO_FOREST", "")
+            or getattr(case, "radicado_forest", "") or ""
+        )
+        forest_clean = re.sub(r'\D', '', str(forest_val))
+        folder_matches_forest = bool(case_seq) and bool(forest_clean) and case_seq in forest_clean
+        folder_is_forest_shape = len(case_seq) >= 5  # 5+ dígitos → es FOREST, no judicial
+        if rad23 and not folder_matches_forest and not folder_is_forest_shape:
             rad23_clean = re.sub(r'[\s\-\.]', '', rad23)
             if case_seq not in rad23_clean:
                 corrected["radicado_23_digitos"] = ""

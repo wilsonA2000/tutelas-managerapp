@@ -445,6 +445,16 @@ def build_case_ir(db: Session, case: Case) -> CaseIR:
 
         if ext == ".pdf":
             ir = _build_pdf_ir(doc.file_path, doc_type)
+            # Fallback: si fitz no saca texto (PDF escaneado/OCR-only) pero la DB
+            # tiene extracted_text (vino de OCR previo), usar ese texto.
+            if (not ir.full_text or len(ir.full_text.strip()) < 50) and doc.extracted_text:
+                ir = DocumentIR(
+                    filename=doc.filename, doc_type=doc_type,
+                    priority=_DOC_PRIORITY.get(doc_type, 9),
+                    full_text=doc.extracted_text,
+                    zones=[_make_body_zone(doc.extracted_text, filename=doc.filename)],
+                    extraction_method="db_fallback_ocr",
+                )
         elif ext in (".docx", ".doc"):
             ir = _build_docx_ir(doc.file_path, doc_type)
         elif ext == ".md":

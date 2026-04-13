@@ -31,12 +31,19 @@ RAD_23_CONTINUOUS = RegexPattern(
 RAD_23_WITH_SEPARATORS = RegexPattern(
     name="radicado_23_separators",
     pattern=re.compile(
-        r"(68[\d]{3,5}[-\s\.]?\d{2}[-\s\.]?\d{2}[-\s\.]?\d{3}[-\s\.]?\d{4}[-\s\.]?\d{5}[-\s\.]?\d{2})"
+        # Separadores: guion ASCII (-), en-dash (\u2013), em-dash (\u2014), punto, espacios.
+        # Dos formatos reconocidos:
+        #  (a) 7 bloques: NNNNN-NN-NN-NNN-YYYY-NNNNN-NN (Santander canonico)
+        #  (b) 4 bloques: NNNNNNNNNNNN-YYYY-NNNNN-NN (bloque compuesto 12d primero)
+        # [-\s\.\u2013\u2014]* con * permite multiples separadores (ej: " \u2013 ").
+        r"(68[\d]{3,5}[-\s\.\u2013\u2014]?\d{2}[-\s\.\u2013\u2014]?\d{2}[-\s\.\u2013\u2014]?\d{3}[-\s\.\u2013\u2014]?\d{4}[-\s\.\u2013\u2014]?\d{5}[-\s\.\u2013\u2014]?\d{2}"
+        r"|68[\d]{10}[-\s\.\u2013\u2014]*\d{4}[-\s\.\u2013\u2014]*\d{5}[-\s\.\u2013\u2014]*\d{2})"
     ),
-    description="Radicado 23 dígitos con guiones/puntos/espacios",
+    description="Radicado 23 dígitos con guiones/puntos/espacios/dashes-unicode",
     test_positive=[
         ("68001-40-09-027-2026-00034-00", "68001-40-09-027-2026-00034-00"),
-        ("68.679.40.71.001.2026.00032.00", "68.679.40.71.001.2026.00032.00"),
+        ("686694089001 \u2013 2026 \u2013 00060 \u2013 00", "686694089001 \u2013 2026 \u2013 00060 \u2013 00"),
+        ("686694089001-2026-00060-00", "686694089001-2026-00060-00"),
     ],
     test_negative=["123456789"],
 )
