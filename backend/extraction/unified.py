@@ -354,6 +354,27 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
             if resolved and resolved.value:
                 final_fields[fname] = resolved.value
 
+        # Guard observaciones: si los documentos y emails del caso no cambiaron
+        # desde la ultima extraccion, preservar observaciones antigua para evitar
+        # rewrites estocasticos de la IA que no aportan informacion nueva.
+        # El docs_fingerprint se guarda en audit_log con action=OBS_FINGERPRINT.
+        import hashlib
+        hashes = sorted(
+            [d.file_hash for d in case.documents if d.file_hash] +
+            [e.message_id for e in db.query(Email).filter(Email.case_id == case.id).all() if e.message_id]
+        )
+        current_fp = hashlib.md5("|".join(hashes).encode()).hexdigest() if hashes else ""
+        last_fp_row = db.query(AuditLog).filter(
+            AuditLog.case_id == case.id,
+            AuditLog.action == "OBS_FINGERPRINT",
+        ).order_by(AuditLog.id.desc()).first()
+        last_fp = last_fp_row.new_value if last_fp_row else ""
+        docs_unchanged = bool(current_fp) and current_fp == last_fp
+        if docs_unchanged and (case.observaciones or "").strip():
+            logger.info("Observaciones: docs sin cambios (fp=%s), preservando anterior", current_fp[:8])
+            final_fields.pop("observaciones", None)
+            stats["observaciones_preserved"] = True
+
         # Guardar campos resueltos en Case
         ia_saved = 0
         for fname, value in final_fields.items():
@@ -371,6 +392,14 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
                         source=f"regex+ia",
                     ))
                     ia_saved += 1
+
+        # Registrar fingerprint actual para comparar en la proxima extraccion
+        if current_fp:
+            db.add(AuditLog(
+                case_id=case.id, field_name="docs_fingerprint",
+                old_value=last_fp, new_value=current_fp,
+                action="OBS_FINGERPRINT", source="unified_extract",
+            ))
 
         stats["ia_fields"] = ia_saved
         stats["total_fields"] = saved_regex + ia_saved

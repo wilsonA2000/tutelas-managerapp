@@ -97,18 +97,74 @@ def validate_extraction(case, fields: dict) -> tuple[dict, list[str]]:
     if fi and ff1 and ff1 < fi:
         warnings.append(f"fecha_fallo_1st {ff1} anterior a fecha_ingreso {fi} — revisar")
 
-    # 4. FALLO enum
-    fallo_fields = {
-        "sentido_fallo_1st": {"CONCEDE", "NIEGA", "IMPROCEDENTE", "CONCEDE PARCIALMENTE"},
-        "sentido_fallo_2nd": {"CONFIRMA", "REVOCA", "MODIFICA"},
-        "SENTIDO_FALLO_1ST": {"CONCEDE", "NIEGA", "IMPROCEDENTE", "CONCEDE PARCIALMENTE"},
-        "SENTIDO_FALLO_2ND": {"CONFIRMA", "REVOCA", "MODIFICA"},
+    # 4. FALLO enum — normalizar a valor canonico + extraer detalle para observaciones.
+    # El accionante puede agregar matices ("CONCEDE PARCIALMENTE diagnostico - NIEGA tutor sombra")
+    # que son informacion valiosa pero NO pertenecen al enum. Los movemos a OBSERVACIONES
+    # con prefijo [DETALLE FALLO] para que el usuario pueda consultarlos sin romper el enum.
+    # Orden importa: los mas especificos/compuestos primero.
+    ENUM_FALLO_1ST = [
+        "CONCEDE PARCIALMENTE", "HECHO SUPERADO", "DESISTIMIENTO",
+        "IMPROCEDENTE", "CONCEDE", "NIEGA", "AMPARA",
+    ]
+    ENUM_FALLO_2ND = ["CONFIRMA PARCIALMENTE", "REVOCA PARCIALMENTE", "CONFIRMA", "REVOCA", "MODIFICA"]
+    # Sinonimos juridicos → valor canonico
+    FALLO_1ST_SYNONYMS = {
+        "AMPARA": "CONCEDE",
+        "AMPARADO": "CONCEDE",
+        "CARENCIA ACTUAL DE OBJETO POR HECHO SUPERADO": "HECHO SUPERADO",
+        "CARENCIA DE OBJETO": "HECHO SUPERADO",
+        "DESISTIMIENTO ACEPTADO": "DESISTIMIENTO",
     }
-    for ff, valid_vals in fallo_fields.items():
-        val = fields.get(ff, "")
-        if val and val.strip().upper() not in valid_vals:
-            corrected[ff.lower()] = ""
-            warnings.append(f"{ff} '{val}' no es valor valido ({valid_vals}) — eliminado")
+
+    def _normalize_fallo(raw: str, enum_list: list, synonyms: dict = None) -> tuple[str, str]:
+        """Devuelve (valor_canonico, detalle_extra). Si no hay match, ("", raw)."""
+        if not raw:
+            return "", ""
+        up = raw.strip().upper()
+        # Exact match a sinonimo
+        if synonyms and up in synonyms:
+            return synonyms[up], ""
+        # Busqueda por token (mayor especificidad primero)
+        for canon in enum_list:
+            if canon in up:
+                detalle = up.replace(canon, "", 1).strip(" -—()[]:;,.")
+                mapped = (synonyms or {}).get(canon, canon)
+                return mapped, detalle
+        # Busqueda por sinonimo parcial
+        for syn, canon in (synonyms or {}).items():
+            if syn in up:
+                detalle = up.replace(syn, "", 1).strip(" -—()[]:;,.")
+                return canon, detalle
+        return "", raw  # No match — marcar para reintento
+
+    fallo_detalles = []  # acumula (campo, detalle) para anexar a obs
+    for field_canonical, enum_list, syns in (
+        ("sentido_fallo_1st", ENUM_FALLO_1ST, FALLO_1ST_SYNONYMS),
+        ("sentido_fallo_2nd", ENUM_FALLO_2ND, None),
+    ):
+        raw = fields.get(field_canonical) or fields.get(field_canonical.upper()) or ""
+        if not raw:
+            continue
+        canon, detalle = _normalize_fallo(raw, enum_list, syns)
+        if canon and canon != raw.strip().upper():
+            corrected[field_canonical] = canon
+            if detalle:
+                fallo_detalles.append((field_canonical, detalle[:300]))
+            warnings.append(f"{field_canonical} normalizado: '{raw}' → '{canon}'")
+        elif not canon:
+            # No se pudo normalizar — limpiar y avisar
+            corrected[field_canonical] = ""
+            warnings.append(f"{field_canonical}='{raw}' no reconocido en enum — eliminado, revisar manualmente")
+
+    # Anexar detalles extraidos a observaciones (si hay)
+    if fallo_detalles:
+        obs_raw = fields.get("observaciones") or fields.get("OBSERVACIONES") or ""
+        appendices = " ".join(f"[DETALLE {campo.upper()}] {det}." for campo, det in fallo_detalles)
+        # Solo anexar si no esta ya presente
+        if appendices not in obs_raw:
+            nueva_obs = (obs_raw.rstrip(" .") + " " + appendices).strip()
+            corrected["observaciones"] = nueva_obs[:3000]
+            warnings.append(f"Detalles de fallo movidos a observaciones: {len(fallo_detalles)}")
 
     # 4b. INTERDEPENDENCIA de campos
     fallo_2nd = fields.get("sentido_fallo_2nd", "") or fields.get("SENTIDO_FALLO_2ND", "")

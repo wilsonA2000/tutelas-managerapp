@@ -9,11 +9,47 @@ CAMPOS A EXTRAER:
 - ACCIONADOS: Entidades demandadas. Separar con " - " si son varias.
 - VINCULADOS: Terceros vinculados al proceso. Separar con " - ".
 - DERECHO_VULNERADO: Derechos fundamentales invocados. Ej: "SALUD - VIDA - DIGNIDAD HUMANA".
-- ASUNTO: Resumen breve de lo que se demanda (1-2 oraciones).
-- PRETENSIONES: Que solicita el accionante al juez (concreto).
-- SENTIDO_FALLO_1ST: SOLO si no fue extraido. Valores: CONCEDE / NIEGA / IMPROCEDENTE / CONCEDE PARCIALMENTE.
-- SENTIDO_FALLO_2ND: SOLO si hay segunda instancia. Valores: CONFIRMA / REVOCA / MODIFICA.
-- OBSERVACIONES: Resumen general del estado del caso (2-3 oraciones).
+- ASUNTO: Resumen breve de lo que se demanda (1-2 oraciones, 100-250 chars).
+- PRETENSIONES: Listado DETALLADO de TODO lo que solicita el accionante al juez.
+  DEBES incluir estos 4 componentes (en orden, separados por " - "), aunque la
+  tutela tenga un objeto unico:
+    (1) AMPARO: qué derechos fundamentales pide que se amparen (literal).
+    (2) ORDEN PRINCIPAL: qué debe hacer el accionado, con detalle concreto
+        (acción + destinatario + objeto). Ej: "ordenar a la SED departamental
+        reintegrar a la docente al cargo de planta en la IE X".
+    (3) PLAZO: tiempo pedido para cumplir (48h, 10 días, término perentorio, etc.).
+    (4) MEDIDAS ADICIONALES: medida provisional si existe, pretensiones subsidiarias,
+        solicitudes económicas, notificaciones, vinculaciones. Si no hay, escribe
+        "sin medidas adicionales".
+  MÍNIMO 200 chars. Si la tutela tiene multiples pretensiones, listarlas TODAS
+  con " - " entre ellas. NO resumir en una sola frase. Parafrasea en lenguaje
+  claro pero conserva nombres, fechas y radicados exactos.
+- SENTIDO_FALLO_1ST: SOLO si no fue extraido. DEBES elegir UNO y SOLO UNO de estos
+  valores EXACTOS (case-sensitive, sin parentesis, sin aclaraciones, sin guiones):
+    CONCEDE
+    NIEGA
+    IMPROCEDENTE
+    CONCEDE PARCIALMENTE
+    HECHO SUPERADO
+    DESISTIMIENTO
+  NO escribas "NIEGA - IMPROCEDENTE", NO escribas "CONCEDE (AMPARA)", NO escribas
+  "CARENCIA ACTUAL DE OBJETO POR HECHO SUPERADO" (usa solo "HECHO SUPERADO").
+  Si el fallo ampara algunos derechos y niega otros, usa CONCEDE PARCIALMENTE.
+  TODOS los matices, detalles y aclaraciones van en OBSERVACIONES, no aqui.
+- SENTIDO_FALLO_2ND: SOLO si hay segunda instancia. Valores EXACTOS:
+  CONFIRMA / REVOCA / MODIFICA / CONFIRMA PARCIALMENTE / REVOCA PARCIALMENTE.
+  Sin parentesis ni aclaraciones. Matices van a OBSERVACIONES.
+- OBSERVACIONES: Resumen narrativo COMPLETO del estado del caso (MÍNIMO 600 chars,
+  idealmente 700-1000). Debe incluir en este orden:
+  (1) quién interpuso, contra quién, por qué derecho;
+  (2) hechos relevantes en orden cronológico (fechas concretas);
+  (3) decisión de primera instancia con fecha y juzgado;
+  (4) impugnación si la hubo, quién y por qué;
+  (5) decisión de segunda instancia con fecha si aplica;
+  (6) incidente de desacato si lo hay, estado actual;
+  (7) estado final y próxima acción pendiente (respuesta, cumplimiento, archivo).
+  NO repetir palabras textuales del accionante; parafrasear pero manteniendo
+  fechas, nombres y radicados exactos.
 - OFICINA_RESPONSABLE: Dependencia de la Gobernacion que responde. Ej: "Secretaria de Educacion Departamental".
 - QUIEN_IMPUGNO: Si hay impugnacion, quien impugno: Accionante / Accionado / Vinculado.
 - DECISION_INCIDENTE: Si hay desacato, la decision del juez.
