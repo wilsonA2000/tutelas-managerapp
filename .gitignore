@@ -61,6 +61,8 @@ screenshots/
 
 # Claude Code local
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/*.lock
 
 # Playwright instalado incidentalmente en raiz
 /package.json
