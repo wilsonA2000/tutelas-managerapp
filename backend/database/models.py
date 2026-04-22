@@ -3,6 +3,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, JSON, Index,
+    LargeBinary, UniqueConstraint, Boolean,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -65,11 +66,17 @@ class Case(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # v5.3: modo de anonimización aplicado a este caso.
+    # NULL = usa PII_MODE_DEFAULT global; "selective" = solo identificadores numéricos;
+    # "aggressive" = también tokeniza nombres, diagnósticos, radicados
+    pii_mode = Column(String, nullable=True)
+
     # Relaciones
     documents = relationship("Document", back_populates="case", cascade="all, delete-orphan")
     extractions = relationship("Extraction", back_populates="case", cascade="all, delete-orphan")
     emails = relationship("Email", back_populates="case")
     audit_logs = relationship("AuditLog", back_populates="case", cascade="all, delete-orphan")
+    pii_mappings = relationship("PiiMapping", back_populates="case", cascade="all, delete-orphan")
 
     # Mapeo CSV -> atributo del modelo
     CSV_FIELD_MAP = {
@@ -121,6 +128,7 @@ class Case(Base):
             "folder_name": self.folder_name,
             "folder_path": self.folder_path,
             "processing_status": self.processing_status,
+            "pii_mode": self.pii_mode,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -300,3 +308,44 @@ class TokenUsage(Base):
     duration_ms = Column(Integer, default=0)         # Tiempo de respuesta en ms
     error = Column(Text, nullable=True)
     chunk_index = Column(Integer, default=0)         # 0 si es llamada unica, 1+ si multi-chunk
+
+
+class PiiMapping(Base):
+    """Mapeo token ↔ valor real para un caso (v5.3).
+
+    Los tokens van a la IA externa; los valores se rehidratan localmente
+    antes de persistir/mostrar al operador. value_encrypted usa Fernet con
+    key derivada de PII_MASTER_KEY. value_hash es HMAC-SHA256 para lookup
+    inverso (detección de duplicados dentro del mismo case_id) sin descifrar.
+    """
+    __tablename__ = "pii_mappings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    token = Column(String, nullable=False)                # "[ACCIONANTE_1]"
+    kind = Column(String, nullable=False, index=True)     # PERSON / CC / NUIP / ORG / ...
+    value_encrypted = Column(LargeBinary, nullable=False)
+    value_hash = Column(String, nullable=False, index=True)  # HMAC para lookup sin descifrar
+    meta_json = Column(Text, nullable=True)               # edad/región/últimos 4, etc.
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("case_id", "token", name="uq_pii_case_token"),)
+
+    case = relationship("Case", back_populates="pii_mappings")
+
+
+class PrivacyStats(Base):
+    """Telemetría agregada de la capa PII por caso y corrida."""
+    __tablename__ = "privacy_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    run_at = Column(DateTime, default=datetime.utcnow, index=True)
+    mode = Column(String, nullable=False)                 # selective / aggressive
+    spans_detected = Column(Integer, default=0)
+    tokens_minted = Column(Integer, default=0)
+    violations_count = Column(Integer, default=0)
+    gate_blocked = Column(Boolean, default=False)
+    redactor_ms = Column(Integer, default=0)
+    rehydrator_ms = Column(Integer, default=0)
+    notes = Column(Text, nullable=True)

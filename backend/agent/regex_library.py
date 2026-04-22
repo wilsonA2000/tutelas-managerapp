@@ -58,21 +58,42 @@ RAD_T_FORMAT = RegexPattern(
 
 RAD_LABEL = RegexPattern(
     name="radicado_label",
+    # F1 (v5.0): separador obligatorio guion/dash + negative lookahead que impide FOREST (>5 digitos contiguos)
+    # Acepta: "RAD. 2026-00095", "Radicado No. 2026-030", "Radicado: 2026-00115", "RAD 2026-00057"
+    # Rechaza: "numero de radicado 20260066132" (FOREST 11d), "radicado 20260069467" (FOREST)
     pattern=re.compile(
-        r"(?:RAD|Rad|RADICADO|Radicado)\.?\s*:?\s*#?\s*(?:No\.?\s*)?(20\d{2})[-\s]?0*(\d{2,5})",
+        r"(?:RAD\.?|RADICADO(?:\s+No\.?|\s*:)|Rad(?:icado)?\.|Rad(?:icado)?:)"
+        r"\s*#?\s*(?:No\.?\s*)?"
+        r"(20\d{2})[-\u2013\u2014/]\s*0*(\d{2,5})(?!\d)",
         re.IGNORECASE,
     ),
-    description="RAD./Radicado No. 2026-00095",
-    test_positive=[("RAD. 2026-00095", "2026"), ("Radicado No. 2026-030", "2026")],
-    test_negative=["texto sin radicado"],
+    description="RAD./Radicado No./Radicado: 2026-00095 con separador guion obligatorio",
+    test_positive=[
+        ("RAD. 2026-00095", "00095"),
+        ("Radicado No. 2026-030", "030"),
+        ("RADICADO: 2026-00115", "00115"),
+        ("Rad. 2026-00057", "00057"),
+    ],
+    test_negative=[
+        "texto sin radicado",
+        "numero de radicado 20260066132",  # FOREST 11d (B1)
+        "Con numero de radicado 20260066132",  # FOREST 11d (B1)
+        "con número de radicado 20260069467",  # FOREST 11d (B1)
+        "radicado 20260066132",  # FOREST 11d (B1)
+    ],
 )
 
 RAD_GENERIC = RegexPattern(
     name="radicado_generic",
-    pattern=re.compile(r"(20\d{2})[-\s](\d{2,5})"),
-    description="Patrón genérico 20XX-NNNNN (fallback)",
-    test_positive=[("caso 2026-00095", "2026")],
-    test_negative=["fecha 2026"],
+    # F1 (v5.0): negative lookahead agregado para rechazar FOREST continuo (20260066132)
+    pattern=re.compile(r"(20\d{2})[-\u2013\u2014]\s*0*(\d{2,5})(?!\d)"),
+    description="Patrón genérico 20XX-NNNNN con separador obligatorio (fallback)",
+    test_positive=[("caso 2026-00095", "00095"), ("ref 2026-030 ok", "030")],
+    test_negative=[
+        "fecha 2026",
+        "radicado 20260066132",  # FOREST 11d (B1)
+        "20260069467",  # FOREST continuo (B1)
+    ],
 )
 
 # ============================================================
@@ -178,11 +199,79 @@ CITY_CLEANUP = re.compile(r',?\s*(?:Santander|Colombia).*$', re.IGNORECASE)
 # UTILITY: Run all patterns
 # ============================================================
 
+# ============================================================
+# v5.2 FORENSIC PATTERNS (emulan proceso cognitivo humano)
+# ============================================================
+
+# Cédula de ciudadanía — el identificador MÁS CONFIABLE para matching
+CC_ACCIONANTE = RegexPattern(
+    name="cc_accionante",
+    pattern=re.compile(
+        r"(?:C\.?C\.?|[Cc][eé]dula(?:\s+de\s+[Cc]iudadan[íi]a)?|"
+        r"[Ii]dentificad[oa]\s+con\s+(?:documento|c[eé]dula)(?:\s+de\s+ciudadan[íi]a)?)"
+        r"[\s:\.]*(?:No\.?\s*)?(\d{6,10})(?!\d)",
+        re.IGNORECASE,
+    ),
+    description="Cédula de ciudadanía colombiana (6-10 digitos)",
+    test_positive=[
+        ("C.C. 1077467661", "1077467661"),
+        ("identificada con documento: 91071881", "91071881"),
+        ("cédula de ciudadanía No. 1005461409", "1005461409"),
+    ],
+    test_negative=["telefono 3204992211"],
+)
+
+# Tutela en línea (número del sistema judicial colombiano)
+TUTELA_ONLINE_NO = RegexPattern(
+    name="tutela_online_no",
+    pattern=re.compile(
+        r"Tutela\s+(?:en\s+L[íi]nea\s+)?(?:con\s+n[úu]mero\s+|No\.?\s*)(\d{7,8})",
+        re.IGNORECASE,
+    ),
+    description="Número de tutela en línea generado por apptutelasbga (7-8 dígitos)",
+    test_positive=[
+        ("Tutela en Línea con número 3645440", "3645440"),
+        ("Generación de Tutela en línea No 3722226", "3722226"),
+    ],
+    test_negative=["Tutela 2026-00057"],
+)
+
+# Acta de reparto civil
+ACTA_REPARTO_NO = RegexPattern(
+    name="acta_reparto_no",
+    pattern=re.compile(
+        r"ACTA\s+DE\s+REPARTO(?:\s+\w+)?\s+No\.?\s*(\d+)",
+        re.IGNORECASE,
+    ),
+    description="Número de acta de reparto (ACTA DE REPARTO CIVIL No. 148)",
+    test_positive=[("ACTA DE REPARTO CIVIL No. 148", "148")],
+    test_negative=[],
+)
+
+# Expediente disciplinario
+EXPEDIENTE_DISCIPLINARIO = RegexPattern(
+    name="expediente_disciplinario",
+    pattern=re.compile(r"Expediente\s+(?:No\.?\s*)?(\d{3,4}[-–]\d{2})", re.IGNORECASE),
+    description="Expediente disciplinario (formato 160-25)",
+    test_positive=[("Expediente No. 160-25", "160-25")],
+    test_negative=[],
+)
+
+# NUIP menor (Registro Civil)
+NUIP_MENOR = RegexPattern(
+    name="nuip_menor",
+    pattern=re.compile(r"(?:RC|Registro\s+Civil)\s+(?:No\.?\s*)?(\d{10,11})", re.IGNORECASE),
+    description="NUIP de menor (Registro Civil 10-11 dígitos)",
+    test_positive=[("Registro Civil No. 1130104808", "1130104808")],
+    test_negative=[],
+)
+
 ALL_PATTERNS = [
     RAD_23_CONTINUOUS, RAD_23_WITH_SEPARATORS, RAD_T_FORMAT, RAD_LABEL, RAD_GENERIC,
     FOREST_SPECIFIC, FOREST_KEYWORD,
     ACCIONANTE_EXPLICIT, ACCIONANTE_DEMANDANTE, ACCIONANTE_PROMOVIDA,
     PERSONERO_MUNICIPIO, ABOGADO_FOOTER,
+    CC_ACCIONANTE, TUTELA_ONLINE_NO, ACTA_REPARTO_NO, EXPEDIENTE_DISCIPLINARIO, NUIP_MENOR,
 ]
 
 

@@ -133,7 +133,9 @@ def classify_email_type(subject: str, sender: str) -> str:
 
 def extract_radicado(text: str) -> dict:
     """Extraer radicado judicial del texto (subject + body).
-    Usa patrones centralizados de regex_library.py.
+    F2 (v5.0): si existe rad_23 valido, SIEMPRE derivar rad_corto del rad_23 antes de
+    probar patrones de etiqueta. Evita que "numero de radicado 20260066132" (FOREST)
+    se interprete como 2026-66132 cuando el subject ya tenia "TUTELA 2026-00057".
     Returns: {'radicado_23': str, 'radicado_corto': str}"""
     from backend.agent.regex_library import (
         RAD_23_CONTINUOUS, RAD_23_WITH_SEPARATORS, RAD_T_FORMAT, RAD_LABEL, RAD_GENERIC,
@@ -145,10 +147,19 @@ def extract_radicado(text: str) -> dict:
     if not m:
         m = RAD_23_WITH_SEPARATORS.pattern.search(text)
     if not m:
-        # Fallback laxo para emails con separadores atipicos
         m = re.search(r"(68[\d]{5,7}[-\s\.]?[\d]{3,4}[-\s\.]?[\d]{4}[-\s\.]?[\d]{5}[-\s\.]?[\d]{2})", text)
     if m:
         result["radicado_23"] = m.group(1)
+
+    # F2: PRIORITARIO — Si hay rad23 valido, derivar rad_corto directamente de el.
+    # Esto PREVIENE que RAD_LABEL/RAD_GENERIC interpreten FOREST (20260066132)
+    # como rad_corto (2026-66132) cuando el rad23 ya contiene el consecutivo real.
+    if result["radicado_23"]:
+        clean = re.sub(r"[\s\-\.]", "", result["radicado_23"])
+        m = re.search(r"(20\d{2})(\d{5})(\d{2})$", clean)
+        if m:
+            result["radicado_corto"] = f"{m.group(1)}-{m.group(2)}"
+            return result
 
     # Patrón 2: Formato T-00053/2026
     m = RAD_T_FORMAT.pattern.search(text)
@@ -156,20 +167,13 @@ def extract_radicado(text: str) -> dict:
         result["radicado_corto"] = f"{m.group(2)}-{m.group(1).zfill(5)}"
         return result
 
-    # Patrón 3: RAD 2026-00053 o Radicado 2026-053
+    # Patrón 3: RAD 2026-00053 o Radicado 2026-053 (regex F1 endurecido)
     m = RAD_LABEL.pattern.search(text)
     if m:
         result["radicado_corto"] = f"{m.group(1)}-{m.group(2).zfill(5)}"
         return result
 
-    # Patrón 4: Extraer del radicado 23 dígitos
-    if result["radicado_23"]:
-        clean = re.sub(r"[\s\-\.]", "", result["radicado_23"])
-        m = re.search(r"(20\d{2})(\d{5})(\d{2})$", clean)
-        if m:
-            result["radicado_corto"] = f"{m.group(1)}-{m.group(2)}"
-
-    # Patrón 5: Cualquier 20XX-NNNNN suelto (fallback genérico)
+    # Patrón 5: Fallback generico 20XX-NNNNN (regex F1 endurecido con separador obligatorio)
     if not result["radicado_corto"]:
         m = RAD_GENERIC.pattern.search(text)
         if m:
@@ -192,8 +196,30 @@ def extract_forest(body: str, attachment_names: list[str]) -> str:
     return ""
 
 
+def _split_forwarded_blocks(body: str) -> list[str]:
+    """F6 (v5.0): partir el body en bloques de emails reenviados anidados.
+    Cada bloque separado por "________________________________" + "De:"/"From:" hasta 3-4 niveles.
+    Returns: lista de bloques (strings), del mas superficial al mas profundo.
+    """
+    if not body:
+        return []
+    # Separadores comunes: linea larga de underscores, ---, === o "De:"/"From:" al inicio de linea
+    parts = re.split(r"(?:_{5,}|-{5,}|={5,})\s*\n", body)
+    # Dentro de cada parte, subdividir por "De:"/"From:" que empieza en linea
+    blocks = []
+    for part in parts:
+        # Algunas cadenas tienen "De: X\nEnviado: Y\n..." seguidas sin separador grafico
+        sub = re.split(r"\n(?=(?:De|From):\s)", part)
+        for s in sub:
+            s = s.strip()
+            if s:
+                blocks.append(s)
+    return blocks
+
+
 def extract_accionante(subject: str, body: str) -> str:
     """Extraer nombre del accionante del email.
+    F6 (v5.0): busca en subject + TODOS los bloques forwarded (no solo primeros 2000 chars).
     Returns: nombre en MAYÚSCULAS o '' si no se encuentra."""
     SKIP_WORDS = {
         "ACCION", "TUTELA", "AUTO", "JUZGADO", "NOTIFICACION", "SENTENCIA",
@@ -204,31 +230,55 @@ def extract_accionante(subject: str, body: str) -> str:
         "REPUBLICA", "HONORABLE", "DESPACHO", "URGENTE", "PERSONERIA",
     }
 
-    for text in [subject or "", (body or "")[:2000]]:
-        patterns = [
-            r"(?i)accionante[:\s]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{5,50})",
-            r"(?i)demandante[:\s]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{5,50})",
-            r"(?i)promovida?\s+por\s+(?:el señor |la señora )?([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{5,50})",
-        ]
+    patterns = [
+        r"(?i)accionante[:\s]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{5,50})",
+        r"(?i)demandante[:\s]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{5,50})",
+        r"(?i)promovida?\s+por\s+(?:el señor |la señora )?([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{5,50})",
+    ]
+
+    # F6: buscar en subject + cada bloque forwarded (max 5 bloques para no gastar)
+    texts_to_scan = [subject or ""]
+    texts_to_scan.extend(_split_forwarded_blocks(body or "")[:5])
+    # Garantizar que tambien revisemos los primeros 5000 chars del body crudo
+    if body and len(body) > 2000:
+        texts_to_scan.append(body[:5000])
+
+    # F6 v5.0: tokens que marcan fin del nombre del accionante (no son parte del nombre)
+    STOP_TOKENS = {
+        "ACCIONADO", "ACCIONADOS", "ACCIONANTE", "CC", "C.C", "DEMANDADO",
+        "IDENTIFICADO", "IDENTIFICADA", "MAYOR", "ACTUANDO", "VS",
+        "CONTRA", "EN", "REPRESENTACION", "REPRESENTACIÓN", "NOMBRE",
+    }
+
+    for text in texts_to_scan:
         for pat in patterns:
             match = re.search(pat, text)
             if match:
                 name = re.sub(r"[\n\r]+", " ", match.group(1).strip())
                 name = re.sub(r"\s+", " ", name).strip()
+                # F6: truncar en el primer STOP_TOKEN (ACCIONADO, CC, etc.)
+                tokens = name.split()
+                trimmed = []
+                for tok in tokens:
+                    if tok.upper().strip(".,:;") in STOP_TOKENS:
+                        break
+                    trimmed.append(tok)
+                if trimmed:
+                    name = " ".join(trimmed)
                 words = name.upper().split()
                 non_skip = [w for w in words if w not in SKIP_WORDS and len(w) > 2]
                 if len(non_skip) >= 2:
                     return name.upper()[:60]
 
     # Fallback: personería municipal mencionada en subject o body
-    combined = f"{subject or ''} {(body or '')[:3000]}"
+    combined = f"{subject or ''} {(body or '')[:5000]}"
     m_pers = re.search(
         r"(?i)(?:personero|personera|personería|personeria)\s+(?:municipal\s+)?(?:de|del)\s+(?:el\s+)?([A-Za-záéíóúñÁÉÍÓÚÑ\s]{3,40})",
         combined,
     )
     if m_pers:
         municipio = m_pers.group(1).strip().upper()
-        municipio = re.sub(r"\s+", " ", municipio).split()[0]  # Primera palabra del municipio
+        municipio = re.sub(r"\s+", " ", municipio).split()[0]
         if len(municipio) >= 3 and municipio not in {"SANTANDER", "LA", "DE", "DEL", "EL"}:
             return f"PERSONERIA MUNICIPAL DE {municipio}"
 
@@ -302,11 +352,12 @@ def _normalize_rad_num(text: str) -> str | None:
 
 def match_to_case(db: Session, radicado_data: dict, accionante: str) -> Case | None:
     """Buscar caso existente para vincular email.
-    Prioridad: rad_23 completo > rad_23 parcial > FOREST > rad_corto > personería > accionante.
+    Prioridad: rad_23 completo > rad_23 parcial > CC (v5.2) > FOREST > rad_corto > personería > accionante.
     Returns: Case o None."""
     rad_23 = radicado_data.get("radicado_23", "")
     rad_corto = radicado_data.get("radicado_corto", "")
     forest = radicado_data.get("forest", "")
+    cc_accionante = radicado_data.get("cc_accionante", "")  # v5.2
 
     # 1a. Radicado 23 dígitos COMPLETO (20 dígitos normalizados)
     if rad_23:
@@ -327,6 +378,22 @@ def match_to_case(db: Session, radicado_data: dict, accionante: str) -> Case | N
                     logger.info("Match parcial rad23: email=%s case=%s (mismo dept+secuencia)", norm_new, norm_ex)
                     return c
 
+    # 1.4 (v5.2) CC del accionante — identificador ÚNICO por persona, no reusable
+    # Buscar en observaciones/accionante donde la CC haya sido guardada previamente
+    if cc_accionante and len(cc_accionante) >= 7:
+        from sqlalchemy import or_
+        case_by_cc = db.query(Case).filter(
+            Case.processing_status != "DUPLICATE_MERGED",
+            or_(
+                Case.observaciones.like(f"%{cc_accionante}%"),
+                Case.accionante.like(f"%{cc_accionante}%"),
+                Case.asunto.like(f"%{cc_accionante}%"),
+            ),
+        ).first()
+        if case_by_cc:
+            logger.info("Match por CC %s → case_id=%d (v5.2)", cc_accionante, case_by_cc.id)
+            return case_by_cc
+
     # 1.5. FOREST como clave secundaria
     if forest and len(forest) >= 8:
         case_by_forest = db.query(Case).filter(Case.radicado_forest == forest).first()
@@ -343,6 +410,19 @@ def match_to_case(db: Session, radicado_data: dict, accionante: str) -> Case | N
             for c in cases:
                 norm = _normalize_rad_num(c.folder_name)
                 if norm and norm == f"{year}:{num}":
+                    # F7 (v5.0): si ambos tienen rad23, verificar que el codigo de juzgado
+                    # (digitos 6-12 del rad23 canonico) coincida. Evita matchear dos tutelas
+                    # con mismo year:seq pero juzgados distintos (ej. 2026-00057 Bucaramanga
+                    # vs 2026-00057 San Gil → casos distintos).
+                    if rad_23 and c.radicado_23_digitos:
+                        norm_new = re.sub(r"[^0-9]", "", rad_23)
+                        norm_ex = re.sub(r"[^0-9]", "", c.radicado_23_digitos)
+                        if len(norm_new) >= 18 and len(norm_ex) >= 18 and norm_new[5:12] != norm_ex[5:12]:
+                            logger.info(
+                                "F7: match por rad_corto rechazado (juzgado distinto): email=%s vs case=%s",
+                                norm_new[5:12], norm_ex[5:12],
+                            )
+                            continue
                     return c
 
     # 3. Personería por municipio
@@ -407,6 +487,11 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
     folder_path = BASE_DIR / folder_name
     folder_path.mkdir(parents=True, exist_ok=True)
 
+    # v5.2: guardar CC en observaciones para que match_to_case pueda encontrarlo después
+    cc_note = ""
+    if radicado_data.get("cc_accionante"):
+        cc_note = f"CC accionante: {radicado_data['cc_accionante']}"
+
     case = Case(
         folder_name=folder_name,
         folder_path=str(folder_path),
@@ -415,6 +500,7 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
         processing_status="PENDIENTE",
         estado="ACTIVO",
         tipo_actuacion="TUTELA",
+        observaciones=cc_note or None,
     )
     db.add(case)
     db.flush()
@@ -818,7 +904,16 @@ def check_inbox(db: Session) -> list[dict]:
                 radicado_data["forest"] = forest  # v5.0: FOREST como clave de matching
                 accionante = extract_accionante(subject, body)
 
-                logger.info(f"Email: tipo={tipo} rad={radicado_data.get('radicado_corto','')} forest={forest} acc={accionante[:20]}")
+                # v5.2: extraer CC con regex forensic (identificador más confiable que nombre)
+                try:
+                    from backend.agent.regex_library import CC_ACCIONANTE
+                    cc_match = CC_ACCIONANTE.pattern.search(f"{subject}\n{body[:5000]}")
+                    if cc_match:
+                        radicado_data["cc_accionante"] = cc_match.group(1)
+                except Exception:
+                    pass
+
+                logger.info(f"Email: tipo={tipo} rad={radicado_data.get('radicado_corto','')} forest={forest} cc={radicado_data.get('cc_accionante','-')} acc={accionante[:20]}")
 
                 # ── MATCH O CREAR ──
                 case = match_to_case(db, radicado_data, accionante)

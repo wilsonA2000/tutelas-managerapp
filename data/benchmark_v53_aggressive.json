@@ -1,0 +1,282 @@
+[
+  {
+    "case_id": 564,
+    "folder_name": "2023-00021 PERSONERO MUNICIPAL DEL PLAYON (T-142-2024 Corte Constitucional)",
+    "mode": "aggressive",
+    "orig_chars": 190,
+    "redacted_chars": 195,
+    "char_delta_pct": 2.6,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 4,
+    "spans_detected": 5,
+    "redactor_ms": 5261,
+    "violations": 0
+  },
+  {
+    "case_id": 563,
+    "folder_name": "2025-00058 DIANA SERRANO AMADO",
+    "mode": "aggressive",
+    "orig_chars": 76147,
+    "redacted_chars": 74658,
+    "char_delta_pct": -2.0,
+    "orig_pii": {
+      "CC_DOTS": 6,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 30,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 101,
+    "spans_detected": 416,
+    "redactor_ms": 2574,
+    "violations": 0
+  },
+  {
+    "case_id": 560,
+    "folder_name": "2026-00057 LIBIA INES PATIÑO ROMÁN",
+    "mode": "aggressive",
+    "orig_chars": 7771,
+    "redacted_chars": 7206,
+    "char_delta_pct": -7.3,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 29,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 20,
+    "spans_detected": 60,
+    "redactor_ms": 160,
+    "violations": 0
+  },
+  {
+    "case_id": 559,
+    "folder_name": "2026-00060 ELVER ALBEIRO ALVARADO SANTOS C",
+    "mode": "aggressive",
+    "orig_chars": 38508,
+    "redacted_chars": 37308,
+    "char_delta_pct": -3.1,
+    "orig_pii": {
+      "CC_DOTS": 1,
+      "CC_BARE": 19,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 13,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 7,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 56,
+    "spans_detected": 236,
+    "redactor_ms": 677,
+    "violations": 17
+  },
+  {
+    "case_id": 557,
+    "folder_name": "2026-00064 SEIDE YANETH TARAZONA PABON como agente oficiosa de su hijo JUAN SEBASTIAN MALDONADO TARAZONA",
+    "mode": "aggressive",
+    "orig_chars": 8367,
+    "redacted_chars": 7157,
+    "char_delta_pct": -14.5,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 33,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 35,
+    "spans_detected": 97,
+    "redactor_ms": 172,
+    "violations": 0
+  },
+  {
+    "case_id": 555,
+    "folder_name": "2026-00066 RUTH QUIJANO GARCÉS",
+    "mode": "aggressive",
+    "orig_chars": 29189,
+    "redacted_chars": 28494,
+    "char_delta_pct": -2.4,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 21,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 47,
+    "spans_detected": 112,
+    "redactor_ms": 645,
+    "violations": 0
+  },
+  {
+    "case_id": 554,
+    "folder_name": "2026-00129 AYDE PÉREZ MURILLO Y OTROS SE REMITE RESPUESTA",
+    "mode": "aggressive",
+    "orig_chars": 54736,
+    "redacted_chars": 52474,
+    "char_delta_pct": -4.1,
+    "orig_pii": {
+      "CC_DOTS": 14,
+      "CC_BARE": 6,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 2,
+      "EMAIL": 36,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 101,
+    "spans_detected": 308,
+    "redactor_ms": 1215,
+    "violations": 3
+  },
+  {
+    "case_id": 553,
+    "folder_name": "2026-00061 CIRO ALFONSO CAICEDO CAICEDO",
+    "mode": "aggressive",
+    "orig_chars": 30979,
+    "redacted_chars": 28082,
+    "char_delta_pct": -9.4,
+    "orig_pii": {
+      "CC_DOTS": 11,
+      "CC_BARE": 9,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 1,
+      "EMAIL": 73,
+      "ADDR": 1
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 1,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 64,
+    "spans_detected": 324,
+    "redactor_ms": 683,
+    "violations": 3
+  },
+  {
+    "case_id": 551,
+    "folder_name": "2026-00065 ERIKA YURANY SUESCUN CAMARGO ACCIONADA",
+    "mode": "aggressive",
+    "orig_chars": 86470,
+    "redacted_chars": 82513,
+    "char_delta_pct": -4.6,
+    "orig_pii": {
+      "CC_DOTS": 1,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 88,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 135,
+    "spans_detected": 542,
+    "redactor_ms": 1857,
+    "violations": 1
+  },
+  {
+    "case_id": 549,
+    "folder_name": "2026-00096 Cindy Katherine Vesga Montoya",
+    "mode": "aggressive",
+    "orig_chars": 83126,
+    "redacted_chars": 81937,
+    "char_delta_pct": -1.4,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 2,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 50,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 1,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 99,
+    "spans_detected": 390,
+    "redactor_ms": 2123,
+    "violations": 1
+  }
+]

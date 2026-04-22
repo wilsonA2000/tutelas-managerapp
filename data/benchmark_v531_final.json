@@ -1,0 +1,562 @@
+[
+  {
+    "case_id": 564,
+    "folder_name": "2023-00021 PERSONERO MUNICIPAL DEL PLAYON (T-142-2024 Corte Constitucional)",
+    "mode": "selective",
+    "orig_chars": 190,
+    "redacted_chars": 190,
+    "char_delta_pct": 0.0,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 0,
+    "spans_detected": 0,
+    "redactor_ms": 6073,
+    "violations": 0
+  },
+  {
+    "case_id": 563,
+    "folder_name": "2025-00058 DIANA SERRANO AMADO",
+    "mode": "selective",
+    "orig_chars": 76147,
+    "redacted_chars": 75400,
+    "char_delta_pct": -1.0,
+    "orig_pii": {
+      "CC_DOTS": 6,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 30,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 5,
+    "spans_detected": 36,
+    "redactor_ms": 1898,
+    "violations": 0
+  },
+  {
+    "case_id": 560,
+    "folder_name": "2026-00057 LIBIA INES PATIÑO ROMÁN",
+    "mode": "selective",
+    "orig_chars": 7771,
+    "redacted_chars": 7188,
+    "char_delta_pct": -7.5,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 29,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 2,
+    "spans_detected": 29,
+    "redactor_ms": 177,
+    "violations": 0
+  },
+  {
+    "case_id": 559,
+    "folder_name": "2026-00060 ELVER ALBEIRO ALVARADO SANTOS C",
+    "mode": "selective",
+    "orig_chars": 38508,
+    "redacted_chars": 38282,
+    "char_delta_pct": -0.6,
+    "orig_pii": {
+      "CC_DOTS": 1,
+      "CC_BARE": 19,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 13,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 2,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 7,
+    "spans_detected": 42,
+    "redactor_ms": 729,
+    "violations": 3
+  },
+  {
+    "case_id": 557,
+    "folder_name": "2026-00064 SEIDE YANETH TARAZONA PABON como agente oficiosa de su hijo JUAN SEBASTIAN MALDONADO TARAZONA",
+    "mode": "selective",
+    "orig_chars": 8367,
+    "redacted_chars": 7734,
+    "char_delta_pct": -7.6,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 33,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 3,
+    "spans_detected": 33,
+    "redactor_ms": 190,
+    "violations": 0
+  },
+  {
+    "case_id": 555,
+    "folder_name": "2026-00066 RUTH QUIJANO GARCÉS",
+    "mode": "selective",
+    "orig_chars": 29189,
+    "redacted_chars": 28848,
+    "char_delta_pct": -1.2,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 21,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 3,
+    "spans_detected": 21,
+    "redactor_ms": 664,
+    "violations": 0
+  },
+  {
+    "case_id": 554,
+    "folder_name": "2026-00129 AYDE PÉREZ MURILLO Y OTROS SE REMITE RESPUESTA",
+    "mode": "selective",
+    "orig_chars": 54736,
+    "redacted_chars": 54005,
+    "char_delta_pct": -1.3,
+    "orig_pii": {
+      "CC_DOTS": 14,
+      "CC_BARE": 6,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 2,
+      "EMAIL": 36,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 9,
+    "spans_detected": 61,
+    "redactor_ms": 1257,
+    "violations": 0
+  },
+  {
+    "case_id": 553,
+    "folder_name": "2026-00061 CIRO ALFONSO CAICEDO CAICEDO",
+    "mode": "selective",
+    "orig_chars": 30979,
+    "redacted_chars": 29507,
+    "char_delta_pct": -4.8,
+    "orig_pii": {
+      "CC_DOTS": 11,
+      "CC_BARE": 9,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 1,
+      "EMAIL": 73,
+      "ADDR": 1
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 2,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 7,
+    "spans_detected": 96,
+    "redactor_ms": 774,
+    "violations": 0
+  },
+  {
+    "case_id": 551,
+    "folder_name": "2026-00065 ERIKA YURANY SUESCUN CAMARGO ACCIONADA",
+    "mode": "selective",
+    "orig_chars": 86470,
+    "redacted_chars": 84663,
+    "char_delta_pct": -2.1,
+    "orig_pii": {
+      "CC_DOTS": 1,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 88,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 6,
+    "spans_detected": 93,
+    "redactor_ms": 1966,
+    "violations": 0
+  },
+  {
+    "case_id": 549,
+    "folder_name": "2026-00096 Cindy Katherine Vesga Montoya",
+    "mode": "selective",
+    "orig_chars": 83126,
+    "redacted_chars": 81963,
+    "char_delta_pct": -1.4,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 2,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 50,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 1,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 4,
+    "spans_detected": 51,
+    "redactor_ms": 2240,
+    "violations": 1
+  },
+  {
+    "case_id": 548,
+    "folder_name": "2026-00049 Jhon Edgar Castillo Cadena",
+    "mode": "selective",
+    "orig_chars": 23914,
+    "redacted_chars": 23000,
+    "char_delta_pct": -3.8,
+    "orig_pii": {
+      "CC_DOTS": 1,
+      "CC_BARE": 2,
+      "NUIP_DOTS": 1,
+      "PHONE_MOBILE": 2,
+      "EMAIL": 45,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 6,
+    "spans_detected": 59,
+    "redactor_ms": 637,
+    "violations": 0
+  },
+  {
+    "case_id": 547,
+    "folder_name": "2026-00032 PERSONERIA MUNICIPAL DE GAMBITA",
+    "mode": "selective",
+    "orig_chars": 73753,
+    "redacted_chars": 73330,
+    "char_delta_pct": -0.6,
+    "orig_pii": {
+      "CC_DOTS": 19,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 11,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 4,
+    "spans_detected": 31,
+    "redactor_ms": 1901,
+    "violations": 0
+  },
+  {
+    "case_id": 546,
+    "folder_name": "2026-00055 LEÓNIDAS MARTÍNEZ MARTÍNEZ REPRESENTADO POR SU MADR",
+    "mode": "selective",
+    "orig_chars": 16267,
+    "redacted_chars": 13964,
+    "char_delta_pct": -14.2,
+    "orig_pii": {
+      "CC_DOTS": 2,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 2,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 101,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 3,
+    "spans_detected": 103,
+    "redactor_ms": 355,
+    "violations": 0
+  },
+  {
+    "case_id": 545,
+    "folder_name": "2025-00006 JENNY JOHANA FONSECA ROJAS",
+    "mode": "selective",
+    "orig_chars": 23860,
+    "redacted_chars": 23114,
+    "char_delta_pct": -3.1,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 36,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 2,
+    "spans_detected": 36,
+    "redactor_ms": 582,
+    "violations": 0
+  },
+  {
+    "case_id": 544,
+    "folder_name": "2026-00062 FABIO LEANDRO CARREÑO NIÑO miembro del consejo dire",
+    "mode": "selective",
+    "orig_chars": 38967,
+    "redacted_chars": 37298,
+    "char_delta_pct": -4.3,
+    "orig_pii": {
+      "CC_DOTS": 2,
+      "CC_BARE": 6,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 2,
+      "EMAIL": 74,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 3,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 8,
+    "spans_detected": 84,
+    "redactor_ms": 1071,
+    "violations": 3
+  },
+  {
+    "case_id": 543,
+    "folder_name": "2026-00047 LEIBY ADRIANA GARCIA ROMERO",
+    "mode": "selective",
+    "orig_chars": 179771,
+    "redacted_chars": 179353,
+    "char_delta_pct": -0.2,
+    "orig_pii": {
+      "CC_DOTS": 6,
+      "CC_BARE": 2,
+      "NUIP_DOTS": 5,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 19,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 9,
+    "spans_detected": 34,
+    "redactor_ms": 5822,
+    "violations": 0
+  },
+  {
+    "case_id": 540,
+    "folder_name": "2025-00020 YESSENIA FERNANDA SANDOVAL BECERRA",
+    "mode": "selective",
+    "orig_chars": 148441,
+    "redacted_chars": 146819,
+    "char_delta_pct": -1.1,
+    "orig_pii": {
+      "CC_DOTS": 10,
+      "CC_BARE": 14,
+      "NUIP_DOTS": 10,
+      "PHONE_MOBILE": 8,
+      "EMAIL": 79,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 7,
+    "spans_detected": 133,
+    "redactor_ms": 4016,
+    "violations": 0
+  },
+  {
+    "case_id": 539,
+    "folder_name": "2022-00259 FREDY HUMBERTO FONSECA ACCIONADOS",
+    "mode": "selective",
+    "orig_chars": 129481,
+    "redacted_chars": 127409,
+    "char_delta_pct": -1.6,
+    "orig_pii": {
+      "CC_DOTS": 20,
+      "CC_BARE": 7,
+      "NUIP_DOTS": 7,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 81,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 1,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 14,
+    "spans_detected": 120,
+    "redactor_ms": 3077,
+    "violations": 22
+  },
+  {
+    "case_id": 538,
+    "folder_name": "2025-00108 CARMEN BELEN CAPACHO PORTILLA OFENDIDO",
+    "mode": "selective",
+    "orig_chars": 43507,
+    "redacted_chars": 42669,
+    "char_delta_pct": -1.9,
+    "orig_pii": {
+      "CC_DOTS": 6,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 34,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 5,
+    "spans_detected": 41,
+    "redactor_ms": 1096,
+    "violations": 0
+  },
+  {
+    "case_id": 537,
+    "folder_name": "2026-00048 JESSIKA VIVIANA CAMARGO ARDILA",
+    "mode": "selective",
+    "orig_chars": 51672,
+    "redacted_chars": 51015,
+    "char_delta_pct": -1.3,
+    "orig_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 35,
+      "ADDR": 0
+    },
+    "redacted_pii": {
+      "CC_DOTS": 0,
+      "CC_BARE": 0,
+      "NUIP_DOTS": 0,
+      "PHONE_MOBILE": 0,
+      "EMAIL": 0,
+      "ADDR": 0
+    },
+    "tokens_minted": 2,
+    "spans_detected": 35,
+    "redactor_ms": 1161,
+    "violations": 0
+  }
+]

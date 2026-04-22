@@ -237,4 +237,95 @@ def validate_extraction(case, fields: dict) -> tuple[dict, list[str]]:
             formatted = f"{d[:2]}-{d[2:5]}-{d[5:7]}-{d[7:9]}-{d[9:12]}-{d[12:16]}-{d[16:21]}-{d[21:23]}"
             corrected["radicado_23_digitos"] = formatted
 
+    # 8. F4 (v5.0) — RADICADOS AJENOS EN CAMPOS NARRATIVOS
+    # Si observaciones/asunto/pretensiones mencionan "20YY-NNNNN" que no es el
+    # rad_corto del caso, advertir; si el patron es "Caso 20YY-NNNNN" en
+    # observaciones (indicador de contaminacion B3), eliminar esa oracion.
+    final_rad23 = corrected.get("radicado_23_digitos", "") or rad23 or ""
+    rc_official = ""
+    if final_rad23:
+        _digits = re.sub(r"\D", "", final_rad23)
+        _m = re.search(r"(20\d{2})(\d{5})\d{2}$", _digits)
+        if _m:
+            rc_official = f"{_m.group(1)}-{_m.group(2)}"
+    rc_folder = ""
+    _fm = re.match(r"(20\d{2})-0*(\d{1,5})", folder_name)
+    if _fm:
+        rc_folder = f"{_fm.group(1)}-{int(_fm.group(2)):05d}"
+    # F4: si folder difiere del rad23 oficial, el folder esta malformado (bug B1).
+    # No tolerar menciones que coincidan con el folder — solo con el oficial.
+    if rc_official and rc_folder and rc_folder != rc_official:
+        rc_folder = ""  # descartar folder como "legitimo"
+
+    # Keywords que indican mencion legitima de otros radicados (tutelas acumuladas)
+    _LEGIT_KW = (
+        "acumulad", "conex", "relacionad", "tutela previa",
+        "anterior tutela", "radicados acumulados",
+    )
+
+    for narrative_field in ("observaciones", "asunto", "pretensiones"):
+        val = fields.get(narrative_field) or fields.get(narrative_field.upper()) or ""
+        # No tocar valor ya corregido por otras reglas
+        if not val or narrative_field in corrected:
+            continue
+        # Excluir menciones de FOREST literales (11 digitos continuos prefijados por keyword)
+        val_scan = re.sub(
+            r"(?i)(?:forest|radicado\s+(?:numero|n[uú]mero|interno)|n[uú]mero\s+de\s+radicado)\s*:?\s*\d{7,}",
+            " ",
+            val,
+        )
+        mentions = set()
+        for mm in re.finditer(r"\b(20\d{2})[-\s]0*(\d{1,5})(?!\d)\b", val_scan):
+            norm = f"{mm.group(1)}-{int(mm.group(2)):05d}"
+            mentions.add(norm)
+        foreign = set()
+        for m in mentions:
+            if rc_official and m == rc_official:
+                continue
+            if rc_folder and m == rc_folder:
+                continue
+            foreign.add(m)
+        if not foreign:
+            continue
+        # Si la obs usa keyword de acumuladas, tolerar (son legitimas)
+        if narrative_field == "observaciones" and any(kw in val.lower() for kw in _LEGIT_KW):
+            warnings.append(
+                f"{narrative_field}: radicados ajenos {sorted(foreign)} pero keyword 'acumulada/conexa' — tolerado"
+            )
+            continue
+        # Para observaciones: intentar remover oraciones que digan "Caso 20YY-NNNNN..."
+        # (patron B3: "Caso 2026-66132 en estado ACTIVO. ..." → eliminar esa oracion)
+        if narrative_field == "observaciones" and rc_official:
+            sentences = re.split(r"(?<=[\.\!])\s+", val)
+            cleaned = []
+            removed = 0
+            for s in sentences:
+                s_mentions = set()
+                s_scan = re.sub(
+                    r"(?i)(?:forest|radicado\s+(?:numero|n[uú]mero|interno)|n[uú]mero\s+de\s+radicado)\s*:?\s*\d{7,}",
+                    " ",
+                    s,
+                )
+                for mm in re.finditer(r"\b(20\d{2})[-\s]0*(\d{1,5})(?!\d)\b", s_scan):
+                    s_mentions.add(f"{mm.group(1)}-{int(mm.group(2)):05d}")
+                s_foreign = s_mentions - ({rc_official} if rc_official else set()) - ({rc_folder} if rc_folder else set())
+                if s_foreign and re.search(r"(?i)\bcaso\s+20\d{2}[-\s]\d", s):
+                    removed += 1
+                    continue  # eliminar oracion contaminada
+                cleaned.append(s)
+            if removed:
+                new_val = " ".join(cleaned).strip()
+                if new_val and new_val != val.strip():
+                    corrected[narrative_field] = new_val[:3000]
+                    warnings.append(
+                        f"{narrative_field}: {removed} oracion(es) con radicado ajeno eliminadas "
+                        f"(oficial={rc_official}, ajenos={sorted(foreign)})"
+                    )
+                    continue
+        # Warning pero no modificar
+        warnings.append(
+            f"{narrative_field}: menciona radicados ajenos {sorted(foreign)} "
+            f"(oficial={rc_official or 'NULL'}, folder={rc_folder or 'NULL'}) — revisar"
+        )
+
     return corrected, warnings

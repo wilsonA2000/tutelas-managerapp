@@ -10,6 +10,7 @@ import {
   getCleanupDiagnosis, runHashBackfill, runEmailsMdBackfill,
   runMoveNoPertenece, runMergeIdentity,
   runPurgeDuplicates, runMergeForestFragments, runBackfillRadicados,
+  getHealthV50,
 } from '../services/api'
 import PageShell from '@/components/PageShell'
 import PageHeader from '@/components/PageHeader'
@@ -108,6 +109,24 @@ export default function CleanupPanel() {
     queryKey: ['cleanup-diagnosis'],
     queryFn: getCleanupDiagnosis,
   })
+
+  // v5.0 Salud de Datos (KPIs post-audit)
+  const healthQ = useQuery({
+    queryKey: ['cleanup-health-v50'],
+    queryFn: getHealthV50,
+  })
+  const health = healthQ.data as {
+    summary?: {
+      folders_pendiente_revision_activos?: number
+      completo_sin_rad23?: number
+      folders_disonantes_b1_residual?: number
+      obs_contaminadas_b4_residual?: number
+      pares_duplicados_f9?: number
+      docs_sospechosos_total?: number
+    }
+    top_sospechosos?: Array<{ case_id: number; folder: string; n_sospechosos: number }>
+    duplicate_pairs?: Array<{ rad_corto: string; case_ids: number[] }>
+  } | undefined
 
   const diag = diagQ.data as Record<string, unknown> | undefined
 
@@ -231,14 +250,122 @@ export default function CleanupPanel() {
         action={
           <Button
             variant="outline"
-            onClick={() => diagQ.refetch()}
-            disabled={diagQ.isFetching}
+            onClick={() => { diagQ.refetch(); healthQ.refetch() }}
+            disabled={diagQ.isFetching || healthQ.isFetching}
           >
-            <RefreshCw size={16} className={diagQ.isFetching ? 'animate-spin' : ''} />
+            <RefreshCw size={16} className={(diagQ.isFetching || healthQ.isFetching) ? 'animate-spin' : ''} />
             Actualizar
           </Button>
         }
       />
+
+      {/* ============================================================ */}
+      {/* Salud de Datos V50 — KPIs accionables post auditoria          */}
+      {/* ============================================================ */}
+      {health?.summary && (
+        <Card className="border-emerald-200">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-emerald-100 bg-emerald-50 rounded-t-lg">
+            <div className="flex items-center gap-2">
+              <CheckCircle size={14} className="text-emerald-600" />
+              <span className="text-sm font-medium text-emerald-700">Salud de Datos</span>
+              <Badge variant="outline" className="ml-1 text-[10px] text-emerald-700 border-emerald-200 bg-emerald-100">
+                post auditoria v5.0
+              </Badge>
+            </div>
+          </div>
+          <CardContent className="pt-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 text-xs">
+              {[
+                {
+                  label: 'Carpetas [PENDIENTE]',
+                  value: health.summary.folders_pendiente_revision_activos ?? 0,
+                  target: 0,
+                  hint: 'Folders sin clasificar',
+                },
+                {
+                  label: 'Sin radicado judicial',
+                  value: health.summary.completo_sin_rad23 ?? 0,
+                  target: 0,
+                  hint: 'Completos sin rad 23 digitos',
+                },
+                {
+                  label: 'Carpetas con numero incorrecto',
+                  value: health.summary.folders_disonantes_b1_residual ?? 0,
+                  target: 0,
+                  hint: 'Nombre folder ≠ radicado oficial',
+                },
+                {
+                  label: 'Observaciones con mezcla',
+                  value: health.summary.obs_contaminadas_b4_residual ?? 0,
+                  target: 5,
+                  hint: 'Mencionan radicados ajenos',
+                },
+                {
+                  label: 'Posibles duplicados',
+                  value: health.summary.pares_duplicados_f9 ?? 0,
+                  target: 0,
+                  hint: 'Mismo radicado, casos distintos',
+                },
+                {
+                  label: 'Documentos por revisar',
+                  value: health.summary.docs_sospechosos_total ?? 0,
+                  target: 30,
+                  hint: 'Sospechosos sin clasificar',
+                },
+              ].map(({ label, value, target, hint }) => {
+                const ok = value <= target
+                return (
+                  <div
+                    key={label}
+                    className={`rounded-lg p-2.5 border ${ok ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}
+                  >
+                    <div className="flex items-baseline gap-1">
+                      <p className="font-bold text-lg">{value}</p>
+                      <p className="text-[10px] opacity-60">/ meta {target}</p>
+                    </div>
+                    <p className="font-medium text-[11px]">{label}</p>
+                    <p className="text-[10px] opacity-70 mt-0.5">{hint}</p>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Top 3 docs sospechosos */}
+            {health.top_sospechosos && health.top_sospechosos.length > 0 && (
+              <details className="mt-3 text-xs">
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                  Top casos con documentos sospechosos ({health.top_sospechosos.length})
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {health.top_sospechosos.slice(0, 5).map(s => (
+                    <div key={s.case_id} className="flex items-center justify-between px-2 py-1.5 bg-muted/40 rounded">
+                      <span className="truncate">{s.folder}</span>
+                      <Badge variant="outline" className="text-[10px] ml-2">{s.n_sospechosos} docs</Badge>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            {/* Duplicados potenciales */}
+            {health.duplicate_pairs && health.duplicate_pairs.length > 0 && (
+              <details className="mt-2 text-xs">
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                  Posibles duplicados ({health.duplicate_pairs.length}) — revisar manualmente
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {health.duplicate_pairs.slice(0, 8).map(p => (
+                    <div key={p.rad_corto} className="flex items-center justify-between px-2 py-1.5 bg-muted/40 rounded">
+                      <span className="font-mono text-[11px]">{p.rad_corto}</span>
+                      <span className="text-[10px] text-muted-foreground">casos: {p.case_ids.join(', ')}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Stats Grid */}
       {diagQ.isLoading ? (

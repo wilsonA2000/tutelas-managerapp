@@ -177,6 +177,34 @@ async def lifespan(app: FastAPI):
     backup_thread.start()
     add_monitor_log("Scheduler de backup diario activado (6:00 AM)")
 
+    # v5.1 Sprint 1: scheduler de WAL checkpoint cada 5 min.
+    # Evita que el archivo .db-wal crezca indefinidamente y garantiza
+    # que scripts CLI (que leen el .db principal) vean los datos mas recientes.
+    def _wal_checkpoint_scheduler():
+        import time as _time
+        from backend.database.database import wal_checkpoint
+        while True:
+            _time.sleep(300)  # 5 minutos
+            try:
+                r = wal_checkpoint("PASSIVE")
+                if r.get("log_pages", 0) > 500:
+                    add_monitor_log(f"WAL checkpoint: {r['checkpointed']}/{r['log_pages']} pages")
+            except Exception as e:
+                add_monitor_log(f"Error WAL checkpoint: {e}", level="warning")
+
+    wal_thread = threading.Thread(target=_wal_checkpoint_scheduler, daemon=True, name="wal-checkpoint")
+    wal_thread.start()
+    add_monitor_log("Scheduler de WAL checkpoint activado (cada 5 min)")
+
+    # v5.3.3: Active learning nocturno (3:00 AM)
+    try:
+        from backend.services.active_learning_scheduler import run_scheduler_thread as _al_thread
+        al_thread = threading.Thread(target=_al_thread, daemon=True, name="active-learning")
+        al_thread.start()
+        add_monitor_log("Active learning scheduler activado (cron 3:00 AM)")
+    except Exception as e:
+        add_monitor_log(f"Active learning no activado: {e}", level="warning")
+
     yield
 
     # Cleanup

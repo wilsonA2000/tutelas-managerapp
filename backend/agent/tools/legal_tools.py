@@ -11,7 +11,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from backend.agent.tools.registry import register_tool
-from backend.database.models import Case, Document, Email
+from backend.database.models import Case, Document, Email, AuditLog
 
 
 # ============================================================
@@ -233,10 +233,12 @@ def escanear_alertas(db: Session) -> dict:
 
 @register_tool(
     name="estadisticas_generales",
-    description="Muestra estadísticas generales del sistema: casos, documentos, emails, KB",
+    description="Muestra estadísticas generales del sistema con KPIs v5.0 de salud: casos por status, "
+                "folders problemáticos, documentos sospechosos, pares duplicados detectados",
     category="management",
 )
 def estadisticas_generales(db: Session) -> dict:
+    from sqlalchemy import func
     active_filter = db.query(Case).filter(
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
         Case.processing_status != "DUPLICATE_MERGED",
@@ -251,16 +253,364 @@ def estadisticas_generales(db: Session) -> dict:
     concede = sum(1 for c in with_fallo if c.sentido_fallo_1st in ("CONCEDE", "CONCEDE PARCIALMENTE"))
     niega = sum(1 for c in with_fallo if c.sentido_fallo_1st in ("NIEGA", "IMPROCEDENTE"))
 
+    # v5.1: KPIs de status y salud
+    status_dist = {}
+    for row in db.query(Case.processing_status, func.count(Case.id)).group_by(Case.processing_status).all():
+        status_dist[row[0] or "NULL"] = row[1]
+
+    # Folders [PENDIENTE REVISION] activos (v5.0 debe ser 0)
+    folders_pendiente = db.query(Case).filter(
+        Case.folder_name.like("%PENDIENTE%"),
+        Case.processing_status != "DUPLICATE_MERGED",
+    ).count()
+
+    # COMPLETO sin rad23 (v5.0 debe ser 0)
+    completo_sin_rad23 = db.query(Case).filter(
+        Case.processing_status == "COMPLETO",
+        (Case.radicado_23_digitos.is_(None)) | (Case.radicado_23_digitos == ""),
+    ).count()
+
+    # Docs por verificacion
+    verif_dist = {}
+    for row in db.query(Document.verificacion, func.count(Document.id)).group_by(Document.verificacion).all():
+        verif_dist[row[0] or "NULL"] = row[1]
+
     from backend.knowledge.search import get_stats as kb_stats
     kb = kb_stats(db)
 
     return {
-        "casos": {"total": total_cases, "activos": activos, "inactivos": total_cases - activos},
-        "documentos": total_docs,
+        "casos": {
+            "total": total_cases, "activos": activos, "inactivos": total_cases - activos,
+            "por_status": status_dist,
+        },
+        "salud_v50": {
+            "folders_pendiente_revision_activos": folders_pendiente,
+            "completo_sin_rad23": completo_sin_rad23,
+        },
+        "documentos": {"total": total_docs, "por_verificacion": verif_dist},
         "emails": {"total": total_emails, "sin_caso": emails_sin_caso},
         "fallos": {"total": len(with_fallo), "concede": concede, "niega": niega,
                    "tasa_favorabilidad": round(niega / max(len(with_fallo), 1) * 100, 1)},
         "knowledge_base": kb,
+    }
+
+
+# ═══════════════════════════════════════════════════════════
+# v5.1: Tools de salud y cleanup
+# ═══════════════════════════════════════════════════════════
+
+@register_tool(
+    name="diagnosticar_salud",
+    description="Diagnóstico completo de la salud de los datos (v5.0 KPIs): folders mal formados, "
+                "COMPLETO sin rad23, obs contaminadas, pares duplicados, docs sospechosos top. "
+                "Devuelve summary + detalles accionables.",
+    category="diagnostic",
+)
+def diagnosticar_salud(db: Session) -> dict:
+    from backend.routers.cleanup import api_cleanup_health
+    return api_cleanup_health(db)
+
+
+@register_tool(
+    name="detectar_duplicados",
+    description="Detecta pares de casos con mismo radicado judicial (rad_corto) validando juzgado. "
+                "Lista cada par con accionantes y folder_names para que el usuario decida consolidar.",
+    category="diagnostic",
+)
+def detectar_duplicados(db: Session) -> dict:
+    import re as _re
+    all_cases = db.query(Case).filter(Case.processing_status != "DUPLICATE_MERGED").all()
+    by_rad_corto = {}
+    for c in all_cases:
+        if not c.radicado_23_digitos:
+            continue
+        digits = _re.sub(r"\D", "", c.radicado_23_digitos)
+        m = _re.search(r"(20\d{2})(\d{5})\d{2}$", digits)
+        if not m:
+            continue
+        rc = f"{m.group(1)}-{m.group(2)}"
+        juzgado = digits[5:12] if len(digits) >= 12 else ""
+        key = (rc, juzgado)  # mismo rad_corto + mismo juzgado → duplicado real
+        by_rad_corto.setdefault(key, []).append(c)
+
+    duplicates = []
+    for (rc, juz), cases in by_rad_corto.items():
+        if len(cases) <= 1:
+            continue
+        duplicates.append({
+            "rad_corto": rc,
+            "juzgado_code": juz,
+            "cases": [{
+                "id": c.id, "folder_name": c.folder_name,
+                "accionante": c.accionante, "status": c.processing_status,
+                "updated_at": str(c.updated_at) if c.updated_at else None,
+            } for c in cases],
+        })
+    return {"total_pares": len(duplicates), "duplicados": duplicates}
+
+
+@register_tool(
+    name="reconciliar_db",
+    description="Reconcilia inconsistencias históricas: mueve docs/emails de casos DUPLICATE_MERGED a "
+                "su canónico y sincroniza file_paths desalineados. Pasar dry_run=true primero.",
+    category="cleanup",
+    params={
+        "dry_run": "bool - true para preview sin cambios, false para aplicar (default: true)",
+    },
+)
+def reconciliar_db(db: Session, dry_run: bool = True) -> dict:
+    from backend.services.reconcile_db import reconcile_db as _reconcile
+    return _reconcile(db, dry_run=bool(dry_run))
+
+
+@register_tool(
+    name="verificar_rad23_integrity",
+    description="Verifica integridad del radicado 23 dígitos de un caso o del universo completo. "
+                "Detecta folders con rad_corto que no corresponde al rad23 oficial (bug B1).",
+    category="diagnostic",
+    params={
+        "case_id": "int - caso específico a verificar (opcional; si se omite, audita toda la DB)",
+    },
+)
+def verificar_rad23_integrity(db: Session, case_id: int = 0) -> dict:
+    import re as _re
+
+    def rad_corto_from_23(rad23):
+        if not rad23: return None
+        digits = _re.sub(r"\D", "", rad23)
+        m = _re.search(r"(20\d{2})(\d{5})\d{2}$", digits)
+        return f"{m.group(1)}-{m.group(2)}" if m else None
+
+    q = db.query(Case).filter(Case.processing_status != "DUPLICATE_MERGED")
+    if case_id:
+        q = q.filter(Case.id == int(case_id))
+    cases = q.all()
+
+    issues = []
+    for c in cases:
+        if not c.folder_name:
+            continue
+        fm = _re.match(r"(20\d{2})-0*(\d{1,6})", c.folder_name)
+        if not fm:
+            continue
+        rc_folder = f"{fm.group(1)}-{int(fm.group(2)):05d}"
+        rc_off = rad_corto_from_23(c.radicado_23_digitos)
+        if not rc_off:
+            if c.processing_status == "COMPLETO":
+                issues.append({
+                    "case_id": c.id, "folder": c.folder_name,
+                    "severity": "high", "issue": "COMPLETO sin rad23 valido",
+                })
+            continue
+        if rc_folder != rc_off:
+            forest_clean = _re.sub(r"\D", "", c.radicado_forest or "")
+            seq = int(fm.group(2))
+            folder_from_forest = (forest_clean and str(seq) in forest_clean) or (not forest_clean and seq >= 10000)
+            severity = "high" if folder_from_forest else "medium"
+            issues.append({
+                "case_id": c.id, "folder": c.folder_name,
+                "rad_corto_folder": rc_folder, "rad_corto_oficial": rc_off,
+                "severity": severity,
+                "issue": "Folder B1 (viene de FOREST)" if folder_from_forest else "Folder divergente de rad23",
+            })
+
+    return {
+        "total_cases_checked": len(cases),
+        "total_issues": len(issues),
+        "issues": issues[:50],
+    }
+
+
+@register_tool(
+    name="re_ocr_pending",
+    description="Re-ejecuta OCR sobre documentos con verificacion=PENDIENTE_OCR (PDFs escaneados). "
+                "Actualiza extracted_text y cambia a OK/REVISAR según resultado.",
+    category="cleanup",
+    params={
+        "limit": "int - máximo de docs a procesar (default: 10, usar 0 para todos)",
+    },
+)
+def re_ocr_pending(db: Session, limit: int = 10) -> dict:
+    try:
+        from backend.extraction.document_normalizer import normalize_pdf_lightweight
+    except ImportError as e:
+        return {"error": f"No disponible: {e}"}
+    from pathlib import Path as _P
+    q = db.query(Document).filter(Document.verificacion == "PENDIENTE_OCR")
+    if limit:
+        q = q.limit(int(limit))
+    docs = q.all()
+
+    updated_ok = 0
+    updated_revisar = 0
+    failed = 0
+    for doc in docs:
+        if not doc.file_path or not _P(doc.file_path).is_file():
+            failed += 1
+            continue
+        try:
+            result = normalize_pdf_lightweight(doc.file_path)
+            text = (result.text or "").strip()
+            if len(text) >= 50:
+                doc.extracted_text = text
+                doc.extraction_method = result.method or "ocr_reocr_v51"
+                doc.verificacion = "OK"
+                doc.verificacion_detalle = f"Re-OCR v5.1: {len(text)} chars"
+                updated_ok += 1
+            else:
+                doc.verificacion = "REVISAR"
+                doc.verificacion_detalle = f"Re-OCR v5.1: insuficiente ({len(text)} chars)"
+                updated_revisar += 1
+        except Exception:
+            failed += 1
+    db.commit()
+    return {
+        "total_processed": len(docs),
+        "recovered_ok": updated_ok,
+        "still_insufficient": updated_revisar,
+        "failed": failed,
+    }
+
+
+@register_tool(
+    name="resolver_sospechosos",
+    description="Re-ejecuta verify_document_belongs sobre documentos SOSPECHOSO/REVISAR con los datos "
+                "actualizados del caso (post v5.0). Algunos quedan OK si el caso ganó rad23 nuevo.",
+    category="cleanup",
+    params={
+        "limit": "int - máximo de docs a procesar (default: 50, usar 0 para todos)",
+        "include_revisar": "bool - si incluir también verificacion=REVISAR (default: true)",
+    },
+)
+def resolver_sospechosos(db: Session, limit: int = 50, include_revisar: bool = True) -> dict:
+    from backend.extraction.pipeline import verify_document_belongs as _verify
+    statuses = ["SOSPECHOSO"] + (["REVISAR"] if include_revisar else [])
+    q = db.query(Document).filter(Document.verificacion.in_(statuses))
+    if limit:
+        q = q.limit(int(limit))
+    docs = q.all()
+
+    transitions = {}
+    for doc in docs:
+        case = db.query(Case).filter(Case.id == doc.case_id).first()
+        if not case:
+            continue
+        old = doc.verificacion
+        try:
+            new_status, new_detail = _verify(case, doc)
+        except Exception:
+            continue
+        transitions[(old, new_status)] = transitions.get((old, new_status), 0) + 1
+        if new_status != old:
+            doc.verificacion = new_status
+            doc.verificacion_detalle = f"Re-verify v5.1: {new_detail[:180]}"
+    db.commit()
+    return {
+        "total_reviewed": len(docs),
+        "transitions": {f"{o}→{n}": c for (o, n), c in transitions.items()},
+    }
+
+
+@register_tool(
+    name="analizar_forense_carpeta",
+    description="v5.2: análisis forense de una carpeta (sin IA). Extrae identificadores, entidades, "
+                "tipos de documento y busca caso destino en DB. Emula el proceso cognitivo humano.",
+    category="diagnostic",
+    params={
+        "folder_path": "str - ruta absoluta de la carpeta a analizar",
+    },
+)
+def analizar_forense_carpeta(db, folder_path: str) -> dict:
+    from backend.services.folder_correlator import correlate_folder, find_case_for_group
+    result = correlate_folder(folder_path)
+    if "error" in result:
+        return result
+    # Para cada grupo, buscar caso destino
+    for idx, group in enumerate(result["groups"]):
+        match = find_case_for_group(db, group)
+        result.setdefault("dest_suggestions", []).append({
+            "group_index": idx,
+            "files": [a.filename for a in group],
+            "accionantes": list({a.accionante for a in group if a.accionante}),
+            "ccs": list({a.cc_accionante for a in group if a.cc_accionante}),
+            "suggested_case": match,
+        })
+    # Serializar groups (DocumentAnalysis no es JSON)
+    result["groups_summary"] = [
+        [{"filename": a.filename, "type": a.primary_type,
+          "accionante": a.accionante, "cc": a.cc_accionante,
+          "rad23": a.rad23} for a in group]
+        for group in result["groups"]
+    ]
+    del result["groups"]
+    return result
+
+
+@register_tool(
+    name="analizar_forense_documento",
+    description="v5.2: análisis forense de un solo documento (PDF/DOCX). Devuelve tipo, identificadores "
+                "y entidades extraídas mecánicamente (sin IA).",
+    category="diagnostic",
+    params={
+        "file_path": "str - ruta absoluta del archivo",
+    },
+    requires_db=False,
+)
+def analizar_forense_documento(file_path: str) -> dict:
+    from backend.services.forensic_analyzer import analyze_document
+    a = analyze_document(file_path)
+    return {
+        "filename": a.filename,
+        "has_text": a.has_text,
+        "text_length": a.text_length,
+        "primary_type": a.primary_type,
+        "all_types": a.doc_types,
+        "accionante": a.accionante,
+        "cc_accionante": a.cc_accionante,
+        "rad23": a.rad23,
+        "identifiers": a.identifiers,
+        "entities": a.entities,
+    }
+
+
+@register_tool(
+    name="consolidar_duplicados",
+    description="Fusiona dos casos duplicados (mismo radicado): mueve docs/emails del secundario al "
+                "canónico y marca el secundario como DUPLICATE_MERGED. Requiere IDs explícitos.",
+    category="cleanup",
+    params={
+        "canonical_id": "int - ID del caso que permanece activo",
+        "duplicate_id": "int - ID del caso que se marca DUPLICATE_MERGED",
+    },
+)
+def consolidar_duplicados(db: Session, canonical_id: int, duplicate_id: int) -> dict:
+    canon = db.query(Case).filter(Case.id == int(canonical_id)).first()
+    dup = db.query(Case).filter(Case.id == int(duplicate_id)).first()
+    if not canon or not dup:
+        return {"error": "canonical_id o duplicate_id no encontrado"}
+    if canon.processing_status == "DUPLICATE_MERGED":
+        return {"error": "canonical es DUPLICATE_MERGED — usar otro como canónico"}
+
+    docs_moved = db.query(Document).filter(Document.case_id == dup.id).update(
+        {"case_id": canon.id}, synchronize_session=False,
+    )
+    emails_moved = db.query(Email).filter(Email.case_id == dup.id).update(
+        {"case_id": canon.id}, synchronize_session=False,
+    )
+    dup.processing_status = "DUPLICATE_MERGED"
+    dup.observaciones = (dup.observaciones or "") + f" | AGENT_MERGE_V51: canonical=id{canon.id}"
+    db.add(AuditLog(
+        case_id=duplicate_id, field_name="processing_status",
+        old_value="COMPLETO", new_value="DUPLICATE_MERGED",
+        action="AGENT_MERGE_V51", source=f"canonical=id{canonical_id}",
+    ))
+    db.commit()
+    return {
+        "canonical_id": canonical_id,
+        "duplicate_id": duplicate_id,
+        "docs_moved": docs_moved,
+        "emails_moved": emails_moved,
+        "status": "ok",
     }
 
 

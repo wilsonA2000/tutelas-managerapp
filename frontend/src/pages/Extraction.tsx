@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 const FIELD_LABELS: Record<string, string> = {
@@ -140,16 +141,46 @@ export default function Extraction() {
         subtitle="Extraccion automatica de campos desde documentos PDF y DOCX usando IA"
         icon={Cpu}
         action={
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => auditMut.mutate()} disabled={auditMut.isPending} className="text-amber-700 border-amber-200 hover:bg-amber-50">
-              {auditMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <ClipboardCheck size={14} />}
-              {auditMut.isPending ? 'Auditando...' : 'Auditoria'}
-            </Button>
-            <Button onClick={() => syncMut.mutate()} disabled={isSyncing}>
-              {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-              {isSyncing ? 'Sincronizando...' : 'Sincronizar Carpetas'}
-            </Button>
-          </div>
+          <TooltipProvider delay={200}>
+            <div className="flex gap-2">
+              <Tooltip>
+                <TooltipTrigger render={<div className="inline-flex" />}>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      // U4: warning antes de accion destructiva
+                      const msg = 'Auditoria general verifica integridad completa:\n\n'
+                        + '• Compara disco ↔ base de datos\n'
+                        + '• Identifica documentos sospechosos\n'
+                        + '• Detecta carpetas vacias y sin accionante\n'
+                        + '• Limpia documentos fantasma (REGISTROS de DB sin archivo en disco)\n\n'
+                        + 'Tarda 30-60 segundos. ¿Continuar?'
+                      if (window.confirm(msg)) auditMut.mutate()
+                    }}
+                    disabled={auditMut.isPending}
+                    className="text-amber-700 border-amber-200 hover:bg-amber-50"
+                  >
+                    {auditMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <ClipboardCheck size={14} />}
+                    {auditMut.isPending ? 'Auditando...' : 'Auditoria'}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="text-xs max-w-xs">Verifica integridad disco ↔ DB, detecta problemas y limpia registros fantasma.</p>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger render={<div className="inline-flex" />}>
+                  <Button onClick={() => syncMut.mutate()} disabled={isSyncing}>
+                    {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                    {isSyncing ? 'Sincronizando...' : 'Sincronizar Carpetas'}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="text-xs max-w-xs">Registra en la DB las carpetas que estan en disco pero no en la base. No mueve archivos.</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
         }
       />
 
@@ -210,7 +241,10 @@ export default function Extraction() {
 
             {reviewQ.data && reviewQueue.length > 0 && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                <p className="text-xs text-amber-700 font-medium">{reviewQueue.length} caso(s) pendientes de revision</p>
+                <p className="text-xs text-amber-700 font-medium">
+                  {reviewQueue.length} caso(s) con campos incompletos o baja confianza
+                </p>
+                <p className="text-[10px] text-amber-600 mt-0.5">Requieren extraccion o revision manual</p>
               </div>
             )}
 
@@ -225,11 +259,42 @@ export default function Extraction() {
               </div>
             </div>
 
-            <label className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors">
-              <input type="checkbox" checked={classifyDocs} onChange={(e) => setClassifyDocs(e.target.checked)} className="rounded border-amber-300 text-amber-600 focus:ring-amber-500" />
-              <FolderCheck size={14} className="text-amber-600" />
-              <span className="text-xs text-amber-800">Clasificar documentos (detecta y mueve los que no pertenecen a su carpeta)</span>
-            </label>
+            <TooltipProvider delay={200}>
+              <Tooltip>
+                <TooltipTrigger render={<div className="inline-flex" />}>
+                  <label className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={classifyDocs}
+                      onChange={(e) => {
+                        // U3: warning al activar accion destructiva
+                        if (e.target.checked) {
+                          const ok = window.confirm(
+                            '¿Activar clasificacion de documentos?\n\n'
+                            + 'Esta opcion MUEVE archivos fisicos entre carpetas cuando el sistema '
+                            + 'detecta que un documento pertenece a otro caso.\n\n'
+                            + 'Los cambios son dificiles de revertir. Se recomienda hacer backup antes.'
+                          )
+                          if (!ok) return
+                        }
+                        setClassifyDocs(e.target.checked)
+                      }}
+                      className="rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                    />
+                    <FolderCheck size={14} className="text-amber-600" />
+                    <span className="text-xs text-amber-800">
+                      Clasificar documentos <span className="text-[10px] opacity-75">(MUEVE archivos fisicos)</span>
+                    </span>
+                  </label>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="text-xs max-w-xs">
+                    Verifica cada documento contra los datos del caso y MUEVE los que no pertenecen al caso correcto.
+                    Accion destructiva — requiere backup previo.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
 
             <Button
               onClick={() => {

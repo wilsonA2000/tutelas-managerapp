@@ -3,7 +3,7 @@
 Estrategia multi-modelo (v5.1 — sin Gemini):
 1. Extracción de campos → DeepSeek V3.2 (barato, rápido, sin límite RPD)
 2. Razonamiento legal complejo → Qwen 3 235B (thinking mode, gratis en Cerebras)
-3. Fallback pagado → Claude Haiku 3 (Anthropic)
+3. Fallback pagado → Claude Haiku 4.5 (Anthropic)
 4. Fallback gratis → Groq Llama 3.3 70B
 
 El router verifica qué API keys están disponibles y selecciona la mejor opción.
@@ -75,11 +75,11 @@ ROUTING_CHAINS = {
         # Ya no hay ruta multimodal: el texto viene del normalizer local
         # (pdfplumber + PaddleOCR). La clave se deja por compat hacia atras.
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
+        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
     ],
     "extraction": [
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
+        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
         ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
         ("huggingface", "meta-llama/Llama-3.3-70B-Instruct", "HF_TOKEN"),
         ("cerebras", "llama-3.3-70b", "CEREBRAS_API_KEY"),
@@ -88,27 +88,27 @@ ROUTING_CHAINS = {
         ("cerebras", "qwen-3-235b-a22b-instruct-2507", "CEREBRAS_API_KEY"),
         ("huggingface", "Qwen/Qwen3-235B-A22B-Instruct-2507", "HF_TOKEN"),
         ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
-        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
+        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
         ("groq", "qwen-qwq-32b", "GROQ_API_KEY"),
     ],
     "legal_analysis": [
         ("cerebras", "qwen-3-235b-a22b-instruct-2507", "CEREBRAS_API_KEY"),
         ("huggingface", "Qwen/Qwen3-235B-A22B-Instruct-2507", "HF_TOKEN"),
         ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
-        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
+        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
     ],
     "general": [
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
         ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
         ("cerebras", "llama-3.3-70b", "CEREBRAS_API_KEY"),
-        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
+        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
         ("huggingface", "meta-llama/Llama-3.3-70B-Instruct", "HF_TOKEN"),
     ],
     "multilingual": [
         ("cerebras", "qwen-3-235b-a22b-instruct-2507", "CEREBRAS_API_KEY"),
         ("huggingface", "Qwen/Qwen3-235B-A22B-Instruct-2507", "HF_TOKEN"),
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-        ("anthropic", "claude-3-haiku-20240307", "ANTHROPIC_API_KEY"),
+        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
     ],
 }
 

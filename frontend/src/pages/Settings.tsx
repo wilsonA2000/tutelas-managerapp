@@ -31,7 +31,7 @@ const SERVICES: StatusItem[] = [
   {
     key: 'groq',
     label: 'Inteligencia Artificial',
-    description: 'DeepSeek V3.2 + Claude Haiku 3 para extraccion de campos',
+    description: 'DeepSeek V3.2 + Claude Haiku 4.5 para extraccion de campos',
     icon: Cpu,
     iconColor: 'text-purple-500',
   },

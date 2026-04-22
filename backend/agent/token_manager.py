@@ -30,7 +30,6 @@ PRICING = {
     },
     "anthropic": {
         "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00},
-        "claude-sonnet-4-6-20260320": {"input": 3.00, "output": 15.00},
     },
     "openai": {
         "gpt-4o-mini": {"input": 0.15, "output": 0.60},
@@ -246,10 +245,9 @@ def get_savings_report(db: Session) -> dict:
     # Estimate how much would have cost with paid models
     if stats.total_tokens > 0:
         cost_if_gpt4o = estimate_cost("openai", "gpt-4o", stats.total_tokens // 2, stats.total_tokens // 2)
-        cost_if_claude = estimate_cost("anthropic", "claude-sonnet-4-6-20260320", stats.total_tokens // 2, stats.total_tokens // 2)
         cost_if_haiku = estimate_cost("anthropic", "claude-haiku-4-5-20251001", stats.total_tokens // 2, stats.total_tokens // 2)
     else:
-        cost_if_gpt4o = cost_if_claude = cost_if_haiku = 0
+        cost_if_gpt4o = cost_if_haiku = 0
 
     return {
         "actual_cost": stats.total_cost_usd,
@@ -258,7 +256,6 @@ def get_savings_report(db: Session) -> dict:
         "model_used": stats.top_model,
         "savings": {
             "vs_gpt4o": round(cost_if_gpt4o - stats.total_cost_usd, 2),
-            "vs_claude_sonnet": round(cost_if_claude - stats.total_cost_usd, 2),
             "vs_claude_haiku": round(cost_if_haiku - stats.total_cost_usd, 2),
         },
         "cache_hits": len(_RESPONSE_CACHE),

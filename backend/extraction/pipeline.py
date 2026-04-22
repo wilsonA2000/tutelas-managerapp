@@ -546,15 +546,17 @@ def _sanitize_folder_name(name: str) -> str:
 
 
 def _rename_folder_if_needed(db, case: Case, stats: dict):
-    """Renombrar carpeta física si la IA encontró accionante y la carpeta no lo tiene."""
+    """Renombrar carpeta física si la IA encontró accionante y la carpeta no lo tiene.
+    F5 (v5.0): si rad23 del caso difiere del rad corto del folder, renombrar usando
+    rad23 como fuente de verdad (corrige folders formados con FOREST por bug B1).
+    """
     import re
 
-    if not case.accionante or not case.folder_path or not case.folder_name:
+    if not case.folder_path or not case.folder_name:
         return
 
     # Verificar si el folder_name actual ya tiene el accionante
     current_name = case.folder_name
-    # Extraer solo la parte después del radicado
     m = re.match(r"(20\d{2}[-\s]?\d+(?:[-\s]\d+)?)\s*(.*)", current_name)
     if not m:
         return
@@ -562,8 +564,25 @@ def _rename_folder_if_needed(db, case: Case, stats: dict):
     rad_part = m.group(1).strip()
     name_part = m.group(2).strip()
 
-    # Si ya tiene nombre real (no vacío, no jurídico, no [PENDIENTE REVISION]), no renombrar
-    if name_part and len(name_part) > 3 and "[PENDIENTE" not in name_part:
+    # F5: derivar rad_corto REAL desde radicado_23_digitos (fuente de verdad).
+    rad_from_23 = ""
+    if case.radicado_23_digitos:
+        digits = re.sub(r"\D", "", case.radicado_23_digitos)
+        rm23 = re.search(r"(20\d{2})(\d{5})\d{2}$", digits)
+        if rm23:
+            rad_from_23 = f"{rm23.group(1)}-{rm23.group(2)}"
+
+    # Rad corto extraido del folder actual (para detectar disonancia con rad23)
+    rm_folder = re.match(r"(20\d{2})[-\s]?0*(\d+)", rad_part)
+    rad_from_folder = ""
+    if rm_folder:
+        rad_from_folder = f"{rm_folder.group(1)}-{rm_folder.group(2).zfill(5)}"
+
+    # F5: disonancia rad23 vs folder → forzar rename aunque name_part parezca "real"
+    force_rename = bool(rad_from_23 and rad_from_folder and rad_from_23 != rad_from_folder)
+
+    # Si ya tiene nombre real Y no hay disonancia rad23/folder, respetar (no renombrar)
+    if not force_rename and name_part and len(name_part) > 3 and "[PENDIENTE" not in name_part:
         JURIDICAL = {"remito", "oficio", "respuesta", "acción", "accion", "traslado",
                      "contestación", "notificación", "auto", "sentencia", "segunda",
                      "instancia", "adelantar", "control", "acciones", "evidenciar",
@@ -571,17 +590,29 @@ def _rename_folder_if_needed(db, case: Case, stats: dict):
         words = set(re.findall(r"[a-záéíóúñ]+", name_part.lower()))
         non_jur = [w for w in words if w not in JURIDICAL and len(w) > 2]
         if len(non_jur) >= 2:
-            return  # Ya tiene nombre real
+            return  # Ya tiene nombre real y rad coincide con rad23
 
-    # Normalizar radicado
-    rm = re.match(r"(20\d{2})[-\s]?0*(\d+)", rad_part)
-    if rm:
-        rad_part = f"{rm.group(1)}-{rm.group(2).zfill(5)}"
+    # Si no hay accionante, no podemos construir nombre nuevo (salvo que force_rename
+    # tenga un rad23 correcto y name_part sirva). Si no hay accionante y tampoco
+    # rad23, abortar.
+    if not case.accionante and not force_rename:
+        return
 
-    # Limpiar accionante
-    accionante = case.accionante.strip()
-    accionante = re.sub(r'[\n\r]', ' ', accionante)
-    accionante = re.sub(r'\s+', ' ', accionante)
+    # F5: usar rad23 como fuente preferida; fallback a rad_folder
+    if rad_from_23:
+        rad_part = rad_from_23
+    elif rad_from_folder:
+        rad_part = rad_from_folder
+
+    # Limpiar accionante (si existe); si no, preservar name_part salvo que sea PENDIENTE
+    if case.accionante:
+        accionante = case.accionante.strip()
+        accionante = re.sub(r'[\n\r]', ' ', accionante)
+        accionante = re.sub(r'\s+', ' ', accionante)
+    elif name_part and "[PENDIENTE" not in name_part:
+        accionante = name_part
+    else:
+        accionante = "[PENDIENTE ACCIONANTE]"
 
     new_name = _sanitize_folder_name(f"{rad_part} {accionante}")
 

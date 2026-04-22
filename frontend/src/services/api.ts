@@ -24,6 +24,16 @@ export const deleteCase = (id: number) =>
 export const deleteDocument = (caseId: number, docId: number) =>
   api.delete(`/cases/${caseId}/docs/${docId}`).then(r => r.data);
 
+// v5.3 PII privacy mode
+export const setPiiMode = (caseId: number, mode: 'selective' | 'aggressive' | null) =>
+  api.patch(`/cases/${caseId}/pii-mode`, { mode }).then(r => r.data);
+
+export const getPiiHints = (caseId: number) =>
+  api.get(`/cases/${caseId}/pii-hints`).then(r => r.data as {
+    case_id: number; current_mode: string | null;
+    hints: string[]; recommend_aggressive: boolean;
+  });
+
 export const getFilterOptions = () =>
   api.get('/cases/filters').then(r => r.data);
 
@@ -272,6 +282,10 @@ export const runMergeIdentity = (dryRun = true, onlyAutoMergeable = true) =>
 // v5.0 Audit
 export const getFullAudit = () =>
   api.get('/cleanup/audit').then(r => r.data);
+
+// v5.0 Salud de Datos (post-audit KPIs)
+export const getHealthV50 = () =>
+  api.get('/cleanup/health-v50').then(r => r.data);
 
 export const runPurgeDuplicates = (dryRun = true, scope = 'intra') =>
   api.post('/cleanup/purge-duplicates', { dry_run: dryRun, scope }).then(r => r.data);

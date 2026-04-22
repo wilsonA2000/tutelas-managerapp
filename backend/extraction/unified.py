@@ -12,6 +12,7 @@ con un solo motor de 6 fases:
 """
 
 import logging
+import re
 import threading
 import time
 
@@ -22,9 +23,11 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from backend.database.models import Case, Document, Email, Extraction, AuditLog, TokenUsage
+from backend.database.models import Case, Document, Email, Extraction, AuditLog, TokenUsage, PrivacyStats
 from backend.extraction.ir_models import CaseIR, DocumentIR
 from backend.extraction.ir_builder import build_case_ir
+from backend.privacy import redact_payload, rehydrate_fields, RedactionContext, assert_clean
+from backend.privacy.redactor import persist_mapping
 from backend.extraction.pipeline import (
     extract_document_text, classify_doc_type, verify_document_belongs,
     _rename_folder_if_needed, _check_and_link_to_base_case,
@@ -41,6 +44,32 @@ from backend.agent.extractors.base import ExtractionResult
 from backend.agent.forest_extractor import extract_forest_from_sources
 
 logger = logging.getLogger("tutelas.unified")
+
+
+def _collect_known_entities(regex_results: dict, case: Case) -> dict[str, list[str]]:
+    """Construye blacklist determinística para la capa PII a partir de datos ya extraídos.
+
+    La blacklist tiene prioridad máxima en el detector: garantiza que los nombres
+    y CCs ya identificados por regex/forensic sean redactados sin depender del NER.
+    """
+    known: dict[str, list[str]] = {"PERSON": [], "CC": [], "NUIP": [], "RADICADO_FOREST": []}
+    # De regex_results (clave → ExtractionResult)
+    for key in ("accionante", "abogado_responsable"):
+        r = regex_results.get(key)
+        if r and r.value:
+            known["PERSON"].append(r.value.strip())
+    # De campos ya persistidos en el caso (si es re-extract)
+    for attr, bucket in (
+        ("accionante", "PERSON"), ("abogado_responsable", "PERSON"),
+        ("radicado_forest", "RADICADO_FOREST"),
+    ):
+        v = getattr(case, attr, None)
+        if v and v.strip():
+            known[bucket].append(v.strip())
+    # Deduplicar
+    for k in list(known.keys()):
+        known[k] = list({v for v in known[k] if v})
+    return known
 
 
 def unified_extract(db: Session, case: Case, base_dir: str = "",
@@ -199,7 +228,88 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
         db.commit()
 
         # =================================================================
-        # FASE 4: IA — solo campos semánticos
+        # FASE 3.5 (v5.2): FORENSIC ENRICHMENT — emula cognicion humana sin IA
+        # Complementa regex con: CC, NUIP menor, tutela online, acta reparto,
+        # subject del email md, abogado del footer docx, clasificacion por contenido.
+        # =================================================================
+        try:
+            from backend.services.folder_correlator import correlate_folder
+            if case.folder_path and Path(case.folder_path).is_dir():
+                forensic_report = correlate_folder(case.folder_path)
+                stats["forensic"] = {
+                    "file_count": forensic_report.get("file_count", 0),
+                    "recommendation": forensic_report.get("recommendation", ""),
+                    "accionantes_detected": forensic_report.get("accionantes_detected", []),
+                    "ccs_detected": forensic_report.get("cc_detected", []),
+                    "rad23_detected": forensic_report.get("rad23_detected", []),
+                }
+                # Si forensic detecto CC y el caso no la tiene en observaciones, añadirla
+                ccs = forensic_report.get("cc_detected", [])
+                if ccs:
+                    current_obs = case.observaciones or ""
+                    cc_missing = [cc for cc in ccs if cc not in current_obs]
+                    if cc_missing:
+                        cc_note = f"[CC detectada forensic: {', '.join(cc_missing)}]"
+                        case.observaciones = (current_obs + " " + cc_note).strip()[:3000]
+                        stats["forensic_cc_added"] = cc_missing
+                # Si forensic detecto rad23 y el caso no lo tiene
+                rads = forensic_report.get("rad23_detected", [])
+                if rads and not case.radicado_23_digitos:
+                    case.radicado_23_digitos = rads[0]
+                    stats["forensic_rad23_added"] = rads[0]
+                    saved_regex += 1
+                # Si forensic detecto accionante y el caso no lo tiene
+                accs = forensic_report.get("accionantes_detected", [])
+                if accs and not case.accionante:
+                    case.accionante = accs[0]
+                    stats["forensic_accionante_added"] = accs[0]
+                    saved_regex += 1
+                db.commit()
+                logger.info("Fase 3.5 Forensic: CCs=%d, rad23=%d, accionantes=%d",
+                            len(ccs), len(rads), len(accs))
+        except Exception as e:
+            logger.debug("Forensic enrichment skipped: %s", e)
+
+        # =================================================================
+        # FASE 3.6 (v5.3.1): COGNICIÓN LOCAL — rellenar campos semánticos
+        # SIN IA externa antes de decidir si la necesitamos.
+        # =================================================================
+        cognitive_results = {}
+        try:
+            from backend.cognition import cognitive_fill
+            # Concatenar textos de documentos para visión global del caso
+            full_text_parts = []
+            for d in case.documents[:15]:  # límite para no explotar memoria
+                if d.extracted_text:
+                    full_text_parts.append(d.extracted_text)
+            full_text = "\n\n".join(full_text_parts)
+            case_meta = {
+                "id": case.id,
+                "fecha_ingreso": case.fecha_ingreso or "",
+                "radicado_23_digitos": case.radicado_23_digitos or "",
+                "radicado_forest": case.radicado_forest or "",
+                "abogado_responsable": case.abogado_responsable or "",
+                "incidente": case.incidente or "",
+            }
+            # Lista de docs con filename+text para timeline_builder
+            docs_for_cognition = [
+                {"filename": d.filename, "text": d.extracted_text or "",
+                 "doc_type": d.doc_type or ""}
+                for d in case.documents[:15] if d.extracted_text
+            ]
+            cognitive_results = cognitive_fill(
+                case_meta, full_text, regex_results,
+                documents=docs_for_cognition,
+            )
+            stats["cognitive_filled"] = len(cognitive_results)
+            stats["cognitive_fields"] = sorted(cognitive_results.keys())
+            logger.info("Fase 3.6 Cognición: %d campos llenados sin IA: %s",
+                        len(cognitive_results), sorted(cognitive_results.keys()))
+        except Exception as e:
+            logger.warning("Cognición local falló: %s", e)
+
+        # =================================================================
+        # FASE 4: IA — solo campos semánticos que cognición NO logró
         # =================================================================
         semantic_fields = {
             "accionante", "accionados", "vinculados", "derecho_vulnerado",
@@ -207,11 +317,13 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
             "observaciones", "oficina_responsable", "quien_impugno",
             "decision_incidente",
         }
-        # Quitar campos que regex ya lleno con alta confianza
+        # Quitar campos que regex o cognición ya llenó con suficiente confianza
         fields_needed = []
         for f in semantic_fields:
             if f in regex_results and regex_results[f].confidence >= 80:
                 continue  # Regex ya lo tiene con confianza alta
+            if f in cognitive_results and cognitive_results[f].confidence >= 65:
+                continue  # Cognición lo llenó con confianza razonable
             attr = Case.CSV_FIELD_MAP.get(f.upper())
             if attr and getattr(case, attr, None):
                 continue  # Ya tiene valor en DB
@@ -265,25 +377,85 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
 
             # Llamar a IA (paralelo o secuencial segun feature flag)
             from backend.core.settings import settings as _ai_settings
-            if _ai_settings.PARALLEL_AI_EXTRACTION:
+            # F3 (v5.0): propagar rad23 oficial del caso para anti-contaminacion
+            # en campos narrativos (obs/asunto). Evita que la IA mencione
+            # "Caso 2026-66132" cuando el folder_name esta malformado pero el
+            # rad23 del caso tiene el consecutivo real.
+            rad_oficial = (case.radicado_23_digitos or "").strip()
+
+            # =================================================================
+            # v5.3 — CAPA PII: redactar antes de enviar a IA externa
+            # =================================================================
+            pii_mode = case.pii_mode or _ai_settings.PII_MODE_DEFAULT
+            pii_stats = None
+            if _ai_settings.PII_REDACTION_ENABLED:
+                # Recopilar entidades ya conocidas (regex + forensic) como blacklist determinística
+                known_entities = _collect_known_entities(regex_results, case)
+                redaction_ctx = RedactionContext(
+                    case_id=case.id, mode=pii_mode, known_entities=known_entities,
+                )
+                payload = redact_payload(ia_doc_texts, redaction_ctx)
+                violations = assert_clean(
+                    payload.docs, mode=pii_mode,
+                    known_entities=known_entities,
+                )
+                if violations and _ai_settings.PII_GATE_STRICT:
+                    logger.warning(
+                        "PII gate bloqueó envío IA: %d violaciones (case=%s mode=%s). Marcando REVISION.",
+                        len(violations), case.id, pii_mode,
+                    )
+                    case.processing_status = "REVISION"
+                    stats["pii_gate_blocked"] = True
+                    stats["pii_violations"] = [{"kind": v.kind, "snippet": v.snippet[:40]} for v in violations[:10]]
+                    db.add(PrivacyStats(
+                        case_id=case.id, mode=pii_mode,
+                        spans_detected=payload.stats.get("spans_detected", 0),
+                        tokens_minted=payload.stats.get("tokens_minted", 0),
+                        violations_count=len(violations), gate_blocked=True,
+                        redactor_ms=payload.stats.get("redactor_ms", 0),
+                        notes=f"Violations: {[v.kind for v in violations[:5]]}",
+                    ))
+                    db.commit()
+                    # No llamamos IA. El merge usará solo regex_results.
+                    ia_doc_texts = None
+                else:
+                    ia_doc_texts = payload.docs
+                    persist_mapping(db, case.id, payload.mapping)
+                    pii_stats = PrivacyStats(
+                        case_id=case.id, mode=pii_mode,
+                        spans_detected=payload.stats.get("spans_detected", 0),
+                        tokens_minted=payload.stats.get("tokens_minted", 0),
+                        violations_count=len(violations), gate_blocked=False,
+                        redactor_ms=payload.stats.get("redactor_ms", 0),
+                        notes=f"Warn: {len(violations)} violaciones (gate non-strict)" if violations else None,
+                    )
+                    stats["pii_mode"] = pii_mode
+                    stats["pii_tokens"] = payload.stats.get("tokens_minted", 0)
+
+            if ia_doc_texts is None:
+                ai_result = None
+                raw_ai_results = []
+            elif _ai_settings.PARALLEL_AI_EXTRACTION:
                 from backend.extraction.ai_extractor import parallel_extract_with_ai
                 ai_result, raw_ai_results = parallel_extract_with_ai(
                     ia_doc_texts,
                     case.folder_name or "",
                     pdf_file_paths=pdf_file_paths[:4] if pdf_file_paths else None,
                     case_id=case.id,
+                    radicado_oficial=rad_oficial,
                 )
             else:
                 ai_result = extract_with_ai(
                     ia_doc_texts,
                     case.folder_name or "",
                     pdf_file_paths=pdf_file_paths[:4] if pdf_file_paths else None,
+                    radicado_oficial=rad_oficial,
                 )
                 raw_ai_results = [ai_result]
 
             # Registrar tokens: 1 TokenUsage por provider ejecutado
             from backend.extraction.ai_extractor import PROVIDERS
-            for r in raw_ai_results:
+            for r in (raw_ai_results or []):
                 r_model_info = PROVIDERS.get(r.provider or "", {}).get("models", {}).get(r.model or "", {}) if r.provider else {}
                 r_inp_price = r_model_info.get("input_price", 0)
                 r_out_price = r_model_info.get("output_price", 0)
@@ -304,10 +476,29 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
                     chunk_index=r.chunks_used,
                 ))
 
-            if ai_result.error:
+            if ai_result is None:
+                # PII gate bloqueó envío — no hubo llamada IA
+                stats["ai_skipped_pii_gate"] = True
+            elif ai_result.error:
                 logger.warning("IA fallo: %s (pero %d campos regex ya guardados)", ai_result.error, saved_regex)
                 stats["ai_error"] = ai_result.error
             else:
+                # v5.3: REHIDRATAR tokens antes de persistir en DB
+                if _ai_settings.PII_REDACTION_ENABLED:
+                    import time as _t
+                    _t0 = _t.time()
+                    rehydrated_fields = {}
+                    for fname, fresult in ai_result.fields.items():
+                        from backend.privacy import rehydrate_text as _rehyd
+                        rehydrated_fields[fname] = type(fresult)(
+                            value=_rehyd(db, case.id, fresult.value or ""),
+                            confidence=fresult.confidence,
+                            source=fresult.source,
+                        )
+                    ai_result.fields = rehydrated_fields
+                    if pii_stats is not None:
+                        pii_stats.rehydrator_ms = int((_t.time() - _t0) * 1000)
+
                 # Convertir AI fields a ExtractionResult para merge.
                 # Normalizar key a lowercase: la IA devuelve MAYUSCULAS (del prompt)
                 # pero regex_results usa minusculas (keys del registry). Sin esto,
@@ -323,10 +514,15 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
                         reasoning=f"IA ({ai_result.provider}/{ai_result.model})",
                     )
 
-            stats["tokens_input"] = ai_result.tokens_input
-            stats["tokens_output"] = ai_result.tokens_output
-            stats["provider"] = ai_result.provider
-            stats["model"] = ai_result.model
+            if ai_result is not None:
+                stats["tokens_input"] = ai_result.tokens_input
+                stats["tokens_output"] = ai_result.tokens_output
+                stats["provider"] = ai_result.provider
+                stats["model"] = ai_result.model
+
+            if pii_stats is not None:
+                db.add(pii_stats)
+                db.commit()
 
             # Observabilidad extra para modo paralelo
             if _ai_settings.PARALLEL_AI_EXTRACTION and len(raw_ai_results) == 2:
@@ -344,13 +540,26 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
         # =================================================================
         logger.info("Fase 5: Merge %d regex + %d IA", len(regex_results), len(ia_results))
 
-        all_fields = set(list(regex_results.keys()) + list(ia_results.keys()))
+        all_fields = set(list(regex_results.keys()) + list(ia_results.keys()) + list(cognitive_results.keys()))
         final_fields = {}
 
         for fname in all_fields:
             regex_r = regex_results.get(fname)
             ai_r = ia_results.get(fname)
-            resolved = resolve_field(fname, regex_r, ai_r)
+            cog_r = cognitive_results.get(fname)
+            # Merge de 3 fuentes: regex > cognition > ai (cuando cognition tiene
+            # confianza razonable). Si no hay cognition o confianza baja, cae al
+            # merge clásico regex+ia.
+            if cog_r and (not ai_r) and (not regex_r or regex_r.confidence < 80):
+                # Solo cognición disponible
+                resolved = cog_r
+            elif cog_r and regex_r and regex_r.confidence < 80 and (not ai_r):
+                resolved = cog_r if cog_r.confidence > regex_r.confidence else regex_r
+            else:
+                resolved = resolve_field(fname, regex_r, ai_r)
+                # Si resolve_field no encontró nada pero cognition sí, usarlo
+                if (not resolved or not resolved.value) and cog_r and cog_r.value:
+                    resolved = cog_r
             if resolved and resolved.value:
                 final_fields[fname] = resolved.value
 
@@ -462,9 +671,71 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
         if lawyer_from_docx:
             case.abogado_responsable = lawyer_from_docx
 
-        # Estado final
+        # F8 (v5.0): validacion pre-COMPLETO — exigir rad23 valido o folder+accionante.
+        # Un caso sin rad23 NI nombre real del accionante no deberia marcarse COMPLETO.
+        _rad23 = (case.radicado_23_digitos or "").strip()
+        _rad23_digits = re.sub(r"\D", "", _rad23) if _rad23 else ""
+        _has_valid_rad23 = len(_rad23_digits) >= 18
+        _has_named_folder = bool(
+            case.folder_name
+            and "[PENDIENTE" not in (case.folder_name or "")
+            and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}", case.folder_name or "")
+        )
+        _has_accionante = bool((case.accionante or "").strip())
+
+        # F9 (v5.0): detectar duplicado potencial por rad_corto canonico.
+        # Buscar otro caso con mismo rad_corto (derivado de rad23 oficial). Si existe
+        # y el actual es distinto, registrar en stats y log — la reconsolidacion
+        # automatica se hace en remediacion historica (R1/R3) con revision manual.
+        if _has_valid_rad23:
+            rm_self = re.search(r"(20\d{2})(\d{5})\d{2}$", _rad23_digits)
+            if rm_self:
+                self_rc = f"{rm_self.group(1)}-{rm_self.group(2)}"
+                self_jud = _rad23_digits[5:12] if len(_rad23_digits) >= 12 else ""
+                candidates = db.query(Case).filter(
+                    Case.id != case.id,
+                    Case.processing_status != "DUPLICATE_MERGED",
+                ).all()
+                for other in candidates:
+                    # Comparar por rad23 si ambos lo tienen
+                    if other.radicado_23_digitos:
+                        oth_d = re.sub(r"\D", "", other.radicado_23_digitos)
+                        if len(oth_d) >= 18 and oth_d[:20] == _rad23_digits[:20]:
+                            stats["potential_duplicate_of"] = other.id
+                            logger.warning(
+                                "F9: caso %d y %d tienen mismo rad23 %s — revisar consolidacion",
+                                case.id, other.id, self_rc,
+                            )
+                            break
+                    # Comparar por rad_corto + juzgado (cuando el otro no tiene rad23)
+                    oth_folder = other.folder_name or ""
+                    mf = re.match(r"(20\d{2})-0*(\d{1,5})\b", oth_folder)
+                    if mf:
+                        oth_rc = f"{mf.group(1)}-{int(mf.group(2)):05d}"
+                        # Solo si NO es un folder forest-like (seq>=10000 o igual a forest del otro)
+                        oth_seq = int(mf.group(2))
+                        oth_forest_clean = re.sub(r"\D", "", other.radicado_forest or "")
+                        oth_is_forest_folder = oth_seq >= 10000 and (
+                            not oth_forest_clean or str(oth_seq) in oth_forest_clean
+                        )
+                        if not oth_is_forest_folder and oth_rc == self_rc:
+                            stats["potential_duplicate_of"] = other.id
+                            logger.warning(
+                                "F9: caso %d tiene rad %s que coincide con folder %d ('%s') — revisar",
+                                case.id, self_rc, other.id, oth_folder[:40],
+                            )
+                            break
+
         if stats.get("ai_error") and saved_regex < 5:
             case.processing_status = "REVISION"
+        elif not _has_valid_rad23 and not (_has_named_folder and _has_accionante):
+            # F8: sin rad23 valido y sin folder+accionante definido → no es COMPLETO
+            case.processing_status = "REVISION"
+            stats["reason_revision"] = "F8: falta rad23 valido o folder+accionante"
+            logger.info(
+                "F8: caso %d marcado REVISION (rad23_valido=%s, folder_nombrado=%s, accionante=%s)",
+                case.id, _has_valid_rad23, _has_named_folder, _has_accionante,
+            )
         else:
             case.processing_status = "COMPLETO"
             case.updated_at = datetime.utcnow()

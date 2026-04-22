@@ -9,6 +9,9 @@ data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+data/*.bak
+data/*.db.bak
+data/*.pre_*
 
 # Python
 __pycache__/
@@ -54,6 +57,8 @@ logs/
 data/backups/
 data/sandbox/
 data/*.md
+backend_preaudit_v*/
+backend_backup_*/
 
 # Playwright MCP y screenshots de diagnostico
 .playwright-mcp/

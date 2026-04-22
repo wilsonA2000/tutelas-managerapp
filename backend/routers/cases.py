@@ -1,6 +1,8 @@
 """Router de casos de tutela."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from backend.database.database import get_db
@@ -85,6 +87,67 @@ def api_get_case_email_packages(case_id: int, db: Session = Depends(get_db)):
         "case_folder": case.folder_name,
         "packages_count": len(packages),
         "packages": packages,
+    }
+
+
+@router.patch("/{case_id}/pii-mode")
+def api_set_pii_mode(
+    case_id: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    """Cambia el modo de anonimización del caso (v5.3).
+
+    Body: {"mode": "selective" | "aggressive" | null}
+    - null → usa PII_MODE_DEFAULT global.
+    - Cambio invalida processing_status para forzar re-extract.
+    """
+    mode = payload.get("mode")
+    if mode not in (None, "selective", "aggressive"):
+        raise HTTPException(status_code=400, detail="mode debe ser 'selective', 'aggressive' o null")
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Caso no encontrado")
+    prev = case.pii_mode
+    case.pii_mode = mode
+    if prev != mode:
+        case.processing_status = "PENDIENTE"  # señal para re-extract
+    db.commit()
+    return {"case_id": case_id, "pii_mode": mode, "prev": prev, "requires_reextract": prev != mode}
+
+
+@router.get("/{case_id}/pii-hints")
+def api_get_pii_hints(case_id: int, db: Session = Depends(get_db)):
+    """Heurísticas que sugieren activar modo aggressive (v5.3).
+
+    Analiza documentos del caso buscando señales de alta sensibilidad:
+    menor con discapacidad crónica, violencia de género, salud mental.
+    """
+    import re as _re
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Caso no encontrado")
+
+    hints: list[str] = []
+    blob = " ".join(filter(None, [
+        case.observaciones or "", case.asunto or "", case.pretensiones or "",
+        case.derecho_vulnerado or "",
+    ])).lower()
+
+    if _re.search(r"\b(?:menor|niñ[oa]|adolescent)", blob) and _re.search(r"discapacidad|diagn[oó]stic[oa]|s[ií]ndrome|autismo|par[aá]lisis", blob):
+        hints.append("menor_con_condicion_salud")
+    if _re.search(r"violenc|maltrat|abus|agres", blob):
+        hints.append("violencia_detectada")
+    if _re.search(r"salud\s+mental|ansiedad|depresi[oó]n|psiqui[aá]tric", blob):
+        hints.append("salud_mental")
+    if _re.search(r"registro\s+civil|RC\s+\d", blob, _re.IGNORECASE):
+        hints.append("nuip_menor_presente")
+
+    return {
+        "case_id": case_id,
+        "current_mode": case.pii_mode,
+        "hints": hints,
+        "recommend_aggressive": bool(hints),
     }
 
 

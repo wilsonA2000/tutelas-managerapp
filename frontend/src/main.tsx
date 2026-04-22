@@ -11,7 +11,11 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      staleTime: 30_000,
+      // v5.1 Sprint 1: staleTime reducido de 30s a 5s.
+      // 30s provocaba que la UI mostrara datos desactualizados tras mutaciones
+      // (usuario percibia "DB descuadrada"). Con 5s el refetch es casi inmediato
+      // y no satura al backend en uso normal.
+      staleTime: 5_000,
     },
   },
 })

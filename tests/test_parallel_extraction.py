@@ -370,12 +370,12 @@ def test_flag_default_is_off_in_schema():
 
 
 # ============================================================
-# Test 9 (v4.7): Routing post-Gemini — DeepSeek primary, Haiku 3 fallback
+# Test 9 (v4.7+): Routing post-Gemini — DeepSeek primary, Haiku 4.5 fallback
 # ============================================================
 
 def test_routing_v47_deepseek_primary_haiku_fallback(monkeypatch):
-    """v4.7: sin Gemini, el router debe devolver DeepSeek como primary y
-    Claude Haiku 3 como fallback para la tarea 'extraction'."""
+    """Sin Gemini, el router debe devolver DeepSeek como primary y
+    Claude Haiku 4.5 como fallback para la tarea 'extraction'."""
     from backend.agent.smart_router import route, _rate_limit_cooldown
 
     # Asegurar API keys disponibles (sin tocar .env real)
@@ -390,8 +390,8 @@ def test_routing_v47_deepseek_primary_haiku_fallback(monkeypatch):
     assert decision.fallback_provider == "anthropic", (
         f"fallback debe ser anthropic, got {decision.fallback_provider}"
     )
-    assert decision.fallback_model == "claude-3-haiku-20240307", (
-        f"fallback model debe ser haiku 3, got {decision.fallback_model}"
+    assert decision.fallback_model == "claude-haiku-4-5-20251001", (
+        f"fallback model debe ser haiku 4.5, got {decision.fallback_model}"
     )
 
 
@@ -407,15 +407,15 @@ def test_routing_v47_no_gemini_in_any_chain(monkeypatch):
         )
 
 
-def test_routing_v47_haiku_3_is_in_provider_catalog():
-    """v4.7: Claude Haiku 3 (claude-3-haiku-20240307) debe estar en PROVIDERS."""
+def test_routing_haiku_45_is_in_provider_catalog():
+    """Claude Haiku 4.5 debe estar en PROVIDERS (Haiku 3 fue retirado)."""
     from backend.extraction.ai_extractor import PROVIDERS
 
     anthropic_models = PROVIDERS.get("anthropic", {}).get("models", {})
-    assert "claude-3-haiku-20240307" in anthropic_models, (
-        f"claude-3-haiku-20240307 no encontrado. Modelos: {list(anthropic_models.keys())}"
+    assert "claude-haiku-4-5-20251001" in anthropic_models, (
+        f"claude-haiku-4-5-20251001 no encontrado. Modelos: {list(anthropic_models.keys())}"
     )
-    haiku_3 = anthropic_models["claude-3-haiku-20240307"]
+    haiku_45 = anthropic_models["claude-haiku-4-5-20251001"]
     # Verificar precios correctos (oficiales de Anthropic)
-    assert haiku_3["input_price"] == 0.25
-    assert haiku_3["output_price"] == 1.25
+    assert haiku_45["input_price"] == 1.00
+    assert haiku_45["output_price"] == 5.00

@@ -1,0 +1,136 @@
+Analizando 284 casos COMPLETO...
+
+======================================================================
+CATÁLOGO DE ACCIONANTES
+======================================================================
+Formatos:
+  PERSONA_NATURAL            191 ( 67.3%)
+  REPRESENTACION              37 ( 13.0%)
+  AGENTE_OFICIOSO             30 ( 10.6%)
+  PERSONERO_MUNICIPAL         24 (  8.5%)
+  MULTIPLE_Y_OTROS             2 (  0.7%)
+
+Starters comunes (top 8):
+  PERSONERO MUNICIPAL DE                   7
+  PERSONERIA MUNICIPAL DE                  5
+  JHON EDGAR CASTILLO                      3
+  WILLIAM FERNEY SIERRA                    2
+  PERSONERÍA MUNICIPAL DE                  2
+  MARIA LAURA SERRANO                      2
+  HELVIA LUCIA CAMACHO                     2
+  SINDICATO DE PROFESIONALES               2
+
+======================================================================
+CATÁLOGO DE ACCIONADOS
+======================================================================
+Entidades más comunes:
+  SECRETARIA DE EDUCACION                   176 ( 62.0%)
+  GOBERNACION SANTANDER                      56 ( 19.7%)
+  SECRETARIA DE EDUCACIÓN DEPARTAMENTAL      22 (  7.7%)
+  MINISTERIO EDUCACION                       21 (  7.4%)
+  DEPARTAMENTO DE SANTANDER                  14 (  4.9%)
+  ALCALDIA_MUNICIPAL                         14 (  4.9%)
+  SECRETARIA DE EDUCACIÓN DE                 10 (  3.5%)
+  OTRAS_EPS                                   7 (  2.5%)
+  SECRETARIA DE EDUCACIÓN MUNICIPAL           5 (  1.8%)
+  MUNICIPIO DE BUCARAMANGA                    4 (  1.4%)
+  NUEVA EPS                                   4 (  1.4%)
+  FIDUPREVISORA S.A.                          4 (  1.4%)
+  ESCUELA NORMAL SUPERIOR DE                  3 (  1.1%)
+  INSTITUTO TECNICO ISAIAS ARDILA             3 (  1.1%)
+  FONDO NACIONAL DE PRESTACIONES              3 (  1.1%)
+  GRUPO TALENTO HUMANO                        2 (  0.7%)
+
+Accionados por caso (cantidad):
+  1 accionado(s): 139 casos
+  2 accionado(s): 81 casos
+  3 accionado(s): 28 casos
+  4 accionado(s): 12 casos
+  5 accionado(s): 9 casos
+  6 accionado(s): 5 casos
+  7 accionado(s): 1 casos
+  8 accionado(s): 2 casos
+  9 accionado(s): 1 casos
+  11 accionado(s): 2 casos
+  13 accionado(s): 1 casos
+
+======================================================================
+CATÁLOGO DE DERECHOS VULNERADOS
+======================================================================
+Top derechos individuales:
+  SALUD                                      90 ( 31.7%)
+  EDUCACION                                  85 ( 29.9%)
+  IGUALDAD                                   76 ( 26.8%)
+  DIGNIDAD HUMANA                            67 ( 23.6%)
+  DEBIDO PROCESO                             61 ( 21.5%)
+  PETICION                                   48 ( 16.9%)
+  VIDA DIGNA                                 46 ( 16.2%)
+  EDUCACIÓN                                  31 ( 10.9%)
+  TRABAJO                                    31 ( 10.9%)
+  UNIDAD FAMILIAR                            29 ( 10.2%)
+  PETICIÓN                                   24 (  8.5%)
+  MÍNIMO VITAL                               21 (  7.4%)
+  VIDA                                       21 (  7.4%)
+  INTERES SUPERIOR DEL MENOR                 15 (  5.3%)
+  SEGURIDAD SOCIAL                           13 (  4.6%)
+  INTEGRIDAD PERSONAL                        12 (  4.2%)
+
+Combos más frecuentes:
+   12× PETICION
+    8× PETICIÓN
+    6× EDUCACIÓN
+    6× EDUCACION + IGUALDAD + DIGNIDAD HUMANA
+    6× EDUCACION
+    4× EDUCACION + DEBIDO PROCESO
+    4× EDUCACION + DEBIDO PROCESO + IGUALDAD
+    4× EDUCACION + SALUD + IGUALDAD
+
+======================================================================
+CATÁLOGO DE DECISIONES
+======================================================================
+Primera instancia:
+  CONCEDE                   130
+  NIEGA                     45
+  IMPROCEDENTE              38
+  CONCEDE PARCIALMENTE      19
+  DESISTIMIENTO             1
+  HECHO SUPERADO            1
+Segunda instancia:
+  CONFIRMA                  23
+  MODIFICA                  13
+  REVOCA                    11
+  CONFIRMA PARCIALMENTE     1
+  CONFIRMA - REVOCA         1
+Impugnación:
+  NO                        175
+  SI                        96
+
+======================================================================
+CATÁLOGO DE ACCIONES (asunto)
+======================================================================
+   43× 'acción de'
+   39× 'solicitud de'
+   27× 'tutela interpuesta'
+   14× 'docente solicita'
+   13× 'tutela por'
+   12× 'solicita traslado'
+    7× 'incidente de'
+    6× 'solicita amparo'
+    6× 'solicita nombramiento'
+    4× 'la accionante'
+    4× 'accionante solicita'
+    3× 'impugnación de'
+    3× 'menor con'
+    3× 'docente provisional'
+    3× 'docente en'
+    3× 'solicita protección'
+
+======================================================================
+CATÁLOGO DE JUZGADOS (jerarquía)
+======================================================================
+  PENAL_MUNICIPAL            125 ( 44.0%)
+  PROMISCUO_MUNICIPAL        117 ( 41.2%)
+  CIRCUITO                    18 (  6.3%)
+  OTRO                        18 (  6.3%)
+  TRIBUNAL                     2 (  0.7%)
+  CORTE                        1 (  0.4%)

@@ -6,7 +6,7 @@ import {
   ArrowLeft, Save, FileText, ExternalLink, Loader2,
   AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package,
 } from 'lucide-react'
-import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages } from '../services/api'
+import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, setPiiMode, getPiiHints } from '../services/api'
 import StatusBadge from '../components/StatusBadge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -580,6 +580,33 @@ export default function CaseDetail() {
     onError: (e) => { if ((e as Error).message !== 'Cancelado') toast.error('Error al eliminar documento') },
   })
 
+  const piiHintsQ = useQuery({
+    queryKey: ['pii-hints', caseId],
+    queryFn: () => getPiiHints(caseId),
+    enabled: !!caseId,
+    staleTime: 60_000,
+  })
+
+  const piiMut = useMutation({
+    mutationFn: (mode: 'selective' | 'aggressive' | null) => setPiiMode(caseId, mode),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['case', caseId] })
+      qc.invalidateQueries({ queryKey: ['pii-hints', caseId] })
+      toast.success(`Modo PII: ${data.pii_mode ?? 'default'}${data.requires_reextract ? ' — re-extrae el caso' : ''}`)
+    },
+    onError: () => toast.error('Error al cambiar modo PII'),
+  })
+
+  function toggleAggressive() {
+    const current = (caseQ.data as any)?.pii_mode
+    if (current === 'aggressive') {
+      piiMut.mutate(null)
+      return
+    }
+    if (!window.confirm('Activar anonimización AGGRESSIVE?\n\nTokeniza también nombres, diagnósticos y radicados. Reduce calidad de campos narrativos (~5-15%) pero maximiza privacidad. Útil para casos con menores con discapacidad, violencia de género o salud mental.\n\nRequiere re-extraer el caso.')) return
+    piiMut.mutate('aggressive')
+  }
+
   function handleChange(key: string, val: string) { setFields((prev) => ({ ...prev, [key]: val })); setDirty(true) }
 
   if (caseQ.isLoading) {
@@ -617,6 +644,29 @@ export default function CaseDetail() {
         </div>
 
         <div className="flex items-center gap-2">
+          {(caseData as any).pii_mode === 'aggressive' && (
+            <Badge variant="outline" className="text-violet-700 border-violet-200 bg-violet-50" title="Anonimización agresiva: nombres y diagnósticos tokenizados">
+              🔒 PII Aggressive
+            </Badge>
+          )}
+          <Button
+            variant={(caseData as any).pii_mode === 'aggressive' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={toggleAggressive}
+            disabled={piiMut.isPending}
+            title={
+              (caseData as any).pii_mode === 'aggressive'
+                ? 'Desactivar anonimización agresiva'
+                : (piiHintsQ.data?.recommend_aggressive
+                    ? `Sugerencia: ${piiHintsQ.data.hints.join(', ')}`
+                    : 'Activar anonimización agresiva')
+            }
+            className={piiHintsQ.data?.recommend_aggressive && (caseData as any).pii_mode !== 'aggressive'
+              ? 'ring-2 ring-amber-400 animate-pulse'
+              : ''}
+          >
+            🔒 {(caseData as any).pii_mode === 'aggressive' ? 'Aggressive' : 'Selective'}
+          </Button>
           {dirty && <Badge variant="outline" className="text-amber-700 border-amber-200 bg-amber-50">Cambios sin guardar</Badge>}
           <Button variant="ghost" size="icon-sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} title="Sincronizar carpeta">
             <RefreshCw size={14} className={syncMutation.isPending || caseQ.isFetching ? 'animate-spin' : ''} />

@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     KB_ENHANCED_EXTRACTION: bool = True  # True = inyectar contexto KB en prompt IA
     PARALLEL_AI_EXTRACTION: bool = False  # Deshabilitado post-v4.7 (era Gemini+DeepSeek)
 
+    # PII Redaction (v5.3) — anonimización antes de enviar a IA externa
+    PII_REDACTION_ENABLED: bool = True
+    PII_MODE_DEFAULT: str = "selective"  # "selective" | "aggressive"
+    PII_GATE_STRICT: bool = True         # True = bloquear envío si gate detecta PII residual
+    PII_PRESIDIO_MODEL: str = "es_core_news_md"
+    PII_MASTER_KEY: str = ""             # Fernet key. Si vacía y PII_REDACTION_ENABLED, auto-genera en memoria con warning
+
     # CSV
     CSV_DELIMITER: str = ";"
     CSV_COLUMNS: list[str] = [

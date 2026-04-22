@@ -168,16 +168,6 @@ PROVIDERS = {
     "anthropic": {
         "name": "Claude (Anthropic)",
         "models": {
-            "claude-3-haiku-20240307": {
-                "label": "Claude Haiku 3 (Ultra barato)",
-                "input_price": 0.25,
-                "output_price": 1.25,
-                "max_tokens": 4096,
-                "context_window": 200000,
-                "needs_chunking": False,
-                "multimodal": False,
-                "best_for": ["extraction", "general"],
-            },
             "claude-haiku-4-5-20251001": {
                 "label": "Claude Haiku 4.5",
                 "input_price": 1.00,
@@ -186,17 +176,7 @@ PROVIDERS = {
                 "context_window": 200000,
                 "needs_chunking": False,
                 "multimodal": False,
-                "best_for": ["general"],
-            },
-            "claude-sonnet-4-6-20260320": {
-                "label": "Claude Sonnet 4.6",
-                "input_price": 3.00,
-                "output_price": 15.00,
-                "max_tokens": 4096,
-                "context_window": 200000,
-                "needs_chunking": False,
-                "multimodal": False,
-                "best_for": ["complex_reasoning", "legal_analysis"],
+                "best_for": ["extraction", "general", "complex_reasoning", "legal_analysis"],
             },
         },
         "env_key": "ANTHROPIC_API_KEY",
@@ -617,12 +597,53 @@ def _is_critical_pdf(filename: str) -> bool:
     return any(kw in name for kw in CRITICAL_KEYWORDS)
 
 
+def _rad_corto_from_23(rad23: str | None) -> str:
+    """F3: derivar rad_corto (YYYY-NNNNN) del rad23 oficial. Devuelve '' si no valida."""
+    if not rad23:
+        return ""
+    import re as _re
+    digits = _re.sub(r"\D", "", rad23)
+    m = _re.search(r"(20\d{2})(\d{5})(\d{2})$", digits)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    return ""
+
+
+def _build_anti_contamination_block(folder_name: str, radicado_oficial: str = "") -> str:
+    """F3 (v5.0): construir bloque de restriccion con radicado oficial cuando exista.
+    Cuando hay rad23 valido, instruye a la IA a usar el RADICADO OFICIAL en campos
+    narrativos (observaciones, asunto) en lugar del folder_name literal — que puede
+    contener el FOREST o "[PENDIENTE REVISION]".
+    """
+    rc = _rad_corto_from_23(radicado_oficial)
+    if rc and radicado_oficial:
+        return (
+            f"CARPETA FISICA: {folder_name}\n"
+            f"RADICADO OFICIAL DEL CASO: {radicado_oficial} (rad. corto = {rc})\n\n"
+            f"RESTRICCION ANTI-CONTAMINACION: Este caso se identifica UNICAMENTE por su RADICADO OFICIAL '{radicado_oficial}' "
+            f"(equivalente corto: {rc}). La CARPETA FISICA es solo una ruta del sistema de archivos y PUEDE contener "
+            f"numeros temporales, FOREST u otros identificadores — IGNORALOS para identificar el caso.\n"
+            f"Cuando redactes OBSERVACIONES, ASUNTO o cualquier campo narrativo que mencione el numero del caso, "
+            f"USA SIEMPRE el RADICADO OFICIAL ({rc}), NUNCA el nombre de la carpeta si son distintos.\n"
+            f"Si un documento menciona un radicado diferente a {rc} o {radicado_oficial}, IGNORA ese documento."
+        )
+    # Fallback: sin rad23 disponible, usar folder_name como antes
+    return (
+        f"CARPETA DEL CASO: {folder_name}\n\n"
+        f"RESTRICCION ANTI-CONTAMINACION: Este caso es EXCLUSIVAMENTE de la carpeta \"{folder_name}\".\n"
+        f"Solo extrae datos de documentos que pertenezcan a este caso.\n"
+        f"Si un documento menciona un radicado diferente al de esta carpeta, IGNORA ese documento.\n"
+        f"El radicado extraido DEBE contener el numero de caso de la carpeta."
+    )
+
+
 def _extract_multimodal_google(
     documents: list[dict],
     pdf_file_paths: list[dict],
     folder_name: str,
     model: str,
     model_config: dict,
+    radicado_oficial: str = "",
 ) -> AIExtractionResult:
     """Enviar PDFs como archivos multimodal a Gemini + texto de DOCX/emails.
 
@@ -702,7 +723,8 @@ def _extract_multimodal_google(
 
         # Agregar texto (DOCX, emails, PDFs no criticos)
         combined_text = "".join(text_parts)
-        user_text = f"""CARPETA DEL CASO: {folder_name}
+        anti_cont = _build_anti_contamination_block(folder_name, radicado_oficial)
+        user_text = f"""{anti_cont}
 
 DOCUMENTOS ADICIONALES (texto):
 {combined_text}
@@ -792,6 +814,7 @@ def extract_with_ai(
     documents: list[dict],
     folder_name: str,
     pdf_file_paths: list[dict] | None = None,
+    radicado_oficial: str = "",
 ) -> AIExtractionResult:
     """Enviar documentos al proveedor de IA activo para extraer 28 campos.
 
@@ -799,6 +822,10 @@ def extract_with_ai(
         documents: Lista de {"filename": str, "text": str}
         folder_name: Nombre de la carpeta del caso
         pdf_file_paths: Lista de {"filename": str, "file_path": str} para multimodal (solo Google)
+        radicado_oficial: F3 (v5.0) — radicado 23d oficial del caso, usado para anti-contaminacion.
+                          Si se provee, la IA recibe instruccion de usar este radicado en campos
+                          narrativos (obs/asunto) en lugar del folder_name, evitando contaminacion
+                          cuando el folder esta malformado (ej. derivado de FOREST).
     """
     # Seleccion inteligente de proveedor: SIEMPRE consultar Smart Router
     provider = _active_provider
@@ -871,12 +898,8 @@ def extract_with_ai(
 
     try:
         start_time = time.time()
-        user_message = f"""CARPETA DEL CASO: {folder_name}
-
-RESTRICCION ANTI-CONTAMINACION: Este caso es EXCLUSIVAMENTE de la carpeta "{folder_name}".
-Solo extrae datos de documentos que pertenezcan a este caso.
-Si un documento menciona un radicado diferente al de esta carpeta, IGNORA ese documento.
-El radicado extraido DEBE contener el numero de caso de la carpeta.
+        anti_cont = _build_anti_contamination_block(folder_name, radicado_oficial)
+        user_message = f"""{anti_cont}
 
 DOCUMENTOS DEL EXPEDIENTE:
 {all_text}
@@ -995,6 +1018,7 @@ def _run_single_provider(
     documents: list[dict],
     folder_name: str,
     pdf_file_paths: list[dict] | None = None,
+    radicado_oficial: str = "",
 ) -> AIExtractionResult:
     """Ejecutar UN solo provider IA sin pasar por Smart Router.
 
@@ -1052,12 +1076,8 @@ def _run_single_provider(
             )
 
         all_text = "".join(doc_texts)
-        user_message = f"""CARPETA DEL CASO: {folder_name}
-
-RESTRICCION ANTI-CONTAMINACION: Este caso es EXCLUSIVAMENTE de la carpeta "{folder_name}".
-Solo extrae datos de documentos que pertenezcan a este caso.
-Si un documento menciona un radicado diferente al de esta carpeta, IGNORA ese documento.
-El radicado extraido DEBE contener el numero de caso de la carpeta.
+        anti_cont = _build_anti_contamination_block(folder_name, radicado_oficial)
+        user_message = f"""{anti_cont}
 
 DOCUMENTOS DEL EXPEDIENTE:
 {all_text}
@@ -1208,6 +1228,7 @@ def parallel_extract_with_ai(
     folder_name: str,
     pdf_file_paths: list[dict] | None = None,
     case_id: int = 0,
+    radicado_oficial: str = "",
 ) -> tuple[AIExtractionResult, list[AIExtractionResult]]:
     """Ejecutar Gemini + DeepSeek en paralelo con ThreadPoolExecutor.
 
@@ -1232,7 +1253,7 @@ def parallel_extract_with_ai(
         _logger.warning(
             "parallel: PARALLEL_AI_PROVIDERS mal configurado, degradando a secuencial"
         )
-        result = extract_with_ai(documents, folder_name, pdf_file_paths)
+        result = extract_with_ai(documents, folder_name, pdf_file_paths, radicado_oficial=radicado_oficial)
         return (result, [result])
 
     (p1, m1), (p2, m2) = providers[0], providers[1]
@@ -1250,7 +1271,7 @@ def parallel_extract_with_ai(
         _logger.warning(
             "parallel: degraded to sequential (reason=%s)", "; ".join(reasons_to_degrade)
         )
-        result = extract_with_ai(documents, folder_name, pdf_file_paths)
+        result = extract_with_ai(documents, folder_name, pdf_file_paths, radicado_oficial=radicado_oficial)
         return (result, [result])
 
     _logger.info(
@@ -1271,11 +1292,11 @@ def parallel_extract_with_ai(
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="parallel_ai") as executor:
         # Provider 1 (Gemini): ruta multimodal con PDFs
         future1 = executor.submit(
-            _run_single_provider, p1, m1, documents, folder_name, pdf_file_paths,
+            _run_single_provider, p1, m1, documents, folder_name, pdf_file_paths, radicado_oficial,
         )
         # Provider 2 (DeepSeek): ruta texto, sin PDFs multimodal
         future2 = executor.submit(
-            _run_single_provider, p2, m2, documents, folder_name, None,
+            _run_single_provider, p2, m2, documents, folder_name, None, radicado_oficial,
         )
 
         # Timeout wall-clock: descontar el tiempo transcurrido para el segundo
