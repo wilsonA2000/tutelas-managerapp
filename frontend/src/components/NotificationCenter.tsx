@@ -90,12 +90,18 @@ export default function NotificationCenter() {
       <button
         ref={btnRef}
         onClick={() => { if (!open) { setOpen(true); markSeenMut.mutate(); } else { setOpen(false); } }}
-        className="relative p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
-        title="Alertas"
+        className="relative p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 transition-colors"
+        title={newCount > 0 ? `${newCount} alertas nuevas` : 'Alertas'}
+        aria-label={newCount > 0 ? `${newCount} alertas nuevas` : 'Centro de alertas'}
+        aria-haspopup="dialog"
+        aria-expanded={open}
       >
-        <Bell size={18} />
+        <Bell size={20} className={newCount > 0 ? 'animate-pulse' : ''} />
         {newCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
+          <span
+            className="absolute -top-1 -right-1 bg-red-600 ring-2 ring-primary text-white text-[11px] font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center leading-none"
+            aria-hidden="true"
+          >
             {newCount > 99 ? '99+' : newCount}
           </span>
         )}

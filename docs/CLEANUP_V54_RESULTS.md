@@ -17,7 +17,8 @@
 | **Tests files** | 36 | 32 | -4 | -11% |
 | **Tests collected** | 108 (con `sys.exit` bug) | 281 | +173 desenmascarados | +160% |
 | **Docs activos** | 22 | 13 | -9 (archivados) | -41% |
-| **Scripts (sin cambios fase 6)** | 20 | 20 | 0 | — |
+| **Scripts activos** | 20 | 5 | -15 archivados | -75% |
+| **DB size (post-VACUUM)** | 123.8 MB | 122.7 MB | -1.1 MB | -0.9% |
 | **Frontend páginas** | 13 | 13 | 0 | — |
 | **Frontend componentes** | 8 | 8 | 0 | — |
 | **`ai_extractor.py` LOC** | 1,080 | 534 | -546 | **-50.5%** |
@@ -60,9 +61,33 @@
 - Eliminado de `cleanup.py`: `/audit` (duplicado de `/diagnosis`)
 - Eliminado de `extraction.py`: `/docs/{id}/move-preview`
 
-### ⏭ Fases pendientes (próxima sesión v5.5)
-- **Fase 4 — WCAG accesibilidad**: contraste, focus visible, dark mode, aria labels (no destructivo, mejor con tiempo dedicado)
-- **Fase 6 — Scripts archive + DB cleanup + logs**: mover scripts one-shot a `scripts/archive/`, VACUUM DB, retención `audit_log`, niveles log
+### ✅ Fase 6 — Scripts + DB + logs
+- **Scripts archivados** (15 → `scripts/archive/`):
+  - cleanup_p1-p7 (cadena ya ejecutada, purity 68→74)
+  - setup_privacy (one-shot deploy v5.3)
+  - benchmark_v47, v52_vs_v53, versions_compared, cognition (snapshots)
+  - compare_purity, catalog_variants, db_purity_audit (snapshots)
+- **Activos** (5 recurrentes): `active_learning`, `diagnosis`, `reconcile_by_accionante`, `reocr_pending`, `reverify_sospechosos`
+- README en `scripts/archive/README.md` con contexto histórico
+- **DB VACUUM + ANALYZE**: 123.8 MB → 122.7 MB (-1.1 MB / -0.9%)
+- **Logs**: ya estaban bien (JSON estructurado, rotación 5MB×5, niveles WARNING para libs ruidosas). Sin cambios.
+- **audit_log**: 8,924 entries en ~30 días. Sin purga (preservar audit trail completo).
+
+### ✅ Fase 4 — WCAG accesibilidad
+- **Skip link** "Saltar al contenido principal" (WCAG 2.4.1) on-focus
+- **NotificationCenter más visible**:
+  - Bell aumentada (16 → 20px)
+  - Badge agrandado (16×16 → 18×18 con ring)
+  - `animate-pulse` cuando hay alertas nuevas
+  - `aria-label` dinámico con conteo, `aria-haspopup`, `aria-expanded`
+- **NavLinks sidebar**:
+  - `aria-current="page"` para link activo
+  - `aria-label` cuando colapsado (icon-only)
+  - Focus visible con ring blanco
+  - Contraste mejorado: text-white/60 → text-white/70 (AA compliant)
+- **Botones icon-only**: aria-label en logout, colapsar, scroll-to-top, menú móvil
+- **`<main>`**: tabIndex=-1 + outline-none para skip-link funcional
+- **Iconos decorativos**: aria-hidden="true" donde no aportan info
 
 ---
 

@@ -70,6 +70,13 @@ export default function App() {
 
   return (
     <TooltipProvider>
+      {/* Skip link para navegación por teclado (WCAG 2.4.1) */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:px-3 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-md focus:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        Saltar al contenido principal
+      </a>
       <div className="flex h-screen bg-background overflow-hidden">
         <ProgressModal />
         <AgentChat />
@@ -128,17 +135,20 @@ export default function App() {
                     key={to}
                     to={to}
                     onClick={() => setMobileOpen(false)}
+                    aria-current={isActive ? 'page' : undefined}
+                    aria-label={collapsed ? label : undefined}
                     className={`
                       flex items-center gap-2.5 px-2.5 py-2 rounded-md text-[13px] font-medium
                       transition-colors duration-100
+                      focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60
                       ${isActive
                         ? 'bg-white/15 text-white'
-                        : 'text-white/60 hover:bg-white/8 hover:text-white/90'
+                        : 'text-white/70 hover:bg-white/10 hover:text-white'
                       }
                       ${collapsed ? 'justify-center' : ''}
                     `}
                   >
-                    <Icon size={16} className="flex-shrink-0" />
+                    <Icon size={16} className="flex-shrink-0" aria-hidden="true" />
                     {!collapsed && <span className="truncate">{label}</span>}
                   </NavLink>
                 )
@@ -170,28 +180,32 @@ export default function App() {
               variant="ghost"
               size="sm"
               onClick={logout}
+              aria-label="Cerrar sesión"
               className={`
-                w-full text-red-300/70 hover:text-red-200 hover:bg-red-500/20
+                w-full text-red-300/80 hover:text-red-200 hover:bg-red-500/20
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300
                 text-xs font-medium
                 ${collapsed ? 'justify-center px-0' : 'justify-start'}
               `}
             >
-              <LogOut size={14} />
+              <LogOut size={14} aria-hidden="true" />
               {!collapsed && <span>Cerrar sesion</span>}
             </Button>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setCollapsed(!collapsed)}
+              aria-label={collapsed ? 'Expandir menú lateral' : 'Colapsar menú lateral'}
               className={`
-                w-full text-white/50 hover:text-white hover:bg-white/10
+                w-full text-white/60 hover:text-white hover:bg-white/10
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60
                 text-xs font-medium
                 ${collapsed ? 'justify-center px-0' : 'justify-start'}
               `}
             >
-              {collapsed ? <ChevronRight size={14} /> : (
+              {collapsed ? <ChevronRight size={14} aria-hidden="true" /> : (
                 <>
-                  <ChevronLeft size={14} />
+                  <ChevronLeft size={14} aria-hidden="true" />
                   <span>Colapsar</span>
                 </>
               )}
@@ -207,8 +221,11 @@ export default function App() {
               variant="ghost"
               size="icon-sm"
               onClick={() => setMobileOpen(true)}
+              aria-label="Abrir menú lateral"
+              aria-expanded={mobileOpen}
+              aria-controls="main-content"
             >
-              <Menu size={18} />
+              <Menu size={18} aria-hidden="true" />
             </Button>
             <div className="flex items-center gap-2">
               <Building2 size={16} className="text-primary" />
@@ -219,7 +236,7 @@ export default function App() {
           </header>
 
           {/* Page content */}
-          <main id="main-content" className="flex-1 overflow-y-auto">
+          <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none">
             <AnimatePresence mode="wait">
               <motion.div
                 key={location.pathname}
@@ -249,10 +266,11 @@ export default function App() {
           {/* Scroll to top */}
           <button
             onClick={() => document.getElementById('main-content')?.scrollTo({ top: 0, behavior: 'smooth' })}
-            className="fixed bottom-6 right-6 z-40 w-9 h-9 bg-primary text-primary-foreground rounded-lg shadow-md hover:shadow-lg transition-all flex items-center justify-center opacity-60 hover:opacity-100"
+            className="fixed bottom-6 right-6 z-40 w-9 h-9 bg-primary text-primary-foreground rounded-lg shadow-md hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 transition-all flex items-center justify-center opacity-70 hover:opacity-100"
             title="Ir arriba"
+            aria-label="Volver al inicio de la página"
           >
-            <ArrowUp size={16} />
+            <ArrowUp size={16} aria-hidden="true" />
           </button>
         </div>
       </div>
