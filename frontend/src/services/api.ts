@@ -112,9 +112,6 @@ export const getEmailPackage = (id: number) =>
 export const getCaseEmailPackages = (caseId: number) =>
   api.get(`/cases/${caseId}/email-packages`).then(r => r.data);
 
-export const previewMoveDoc = (docId: number) =>
-  api.get(`/extraction/docs/${docId}/move-preview`).then(r => r.data);
-
 export const checkInbox = () =>
   api.post('/emails/check', {}, { timeout: 10000 }).then(r => r.data);
 
@@ -147,17 +144,6 @@ export const getExtractionProgress = () =>
 // Monitor
 export const getMonitorStatus = () =>
   api.get('/monitor/status').then(r => r.data);
-
-// AI Provider
-export const getAIProviders = () =>
-  api.get('/ai/providers').then(r => r.data);
-
-export const setAIProvider = (provider: string, model: string) =>
-  api.put('/ai/provider', { provider, model }).then(r => r.data);
-
-// Token Metrics
-export const getTokenMetrics = () =>
-  api.get('/tokens/metrics').then(r => r.data);
 
 // Sync
 export const syncFolders = () =>
@@ -234,28 +220,6 @@ export const runAgent = (instruction: string) =>
 export const getAgentTools = () =>
   api.get('/agent/tools').then(r => r.data);
 
-export const getAgentTokenStats = () =>
-  api.get('/agent/tokens').then(r => r.data);
-
-// DB Management
-export const createBackup = () =>
-  api.post('/db/backup').then(r => r.data);
-
-export const listBackups = () =>
-  api.get('/db/backups').then(r => r.data);
-
-export const restoreBackup = (filename: string) =>
-  api.post('/db/restore', null, { params: { filename } }).then(r => r.data);
-
-export const startRebuild = (extractText = true, importCsv = true) =>
-  api.post('/db/rebuild', null, { params: { extract_text: extractText, import_csv: importCsv } }).then(r => r.data);
-
-export const getRebuildStatus = () =>
-  api.get('/db/rebuild/status').then(r => r.data);
-
-export const getSandboxCompare = () =>
-  api.get('/db/sandbox/compare').then(r => r.data);
-
 // Document management
 export const suggestDocTarget = (docId: number) =>
   api.get(`/extraction/docs/${docId}/suggest-target`).then(r => r.data);
@@ -279,9 +243,6 @@ export const runMoveNoPertenece = (dryRun = true, minConfidence = 'ALTA') =>
 export const runMergeIdentity = (dryRun = true, onlyAutoMergeable = true) =>
   api.post('/cleanup/merge-identity', { dry_run: dryRun, only_auto_mergeable: onlyAutoMergeable }).then(r => r.data);
 
-// v5.0 Audit
-export const getFullAudit = () =>
-  api.get('/cleanup/audit').then(r => r.data);
 
 // v5.0 Salud de Datos (post-audit KPIs)
 export const getHealthV50 = () =>
