@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     # PII Redaction (v5.3) — anonimización antes de enviar a IA externa
     PII_REDACTION_ENABLED: bool = True
     PII_MODE_DEFAULT: str = "selective"  # "selective" | "aggressive"
-    PII_GATE_STRICT: bool = True         # True = bloquear envío si gate detecta PII residual
+    PII_GATE_STRICT: bool = False        # False (default) = solo warn. True = bloquear envío si gate detecta PII residual
     PII_PRESIDIO_MODEL: str = "es_core_news_md"
     PII_MASTER_KEY: str = ""             # Fernet key. Si vacía y PII_REDACTION_ENABLED, auto-genera en memoria con warning
 

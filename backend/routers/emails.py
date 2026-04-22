@@ -84,7 +84,7 @@ def api_get_email_package(email_id: int, db: Session = Depends(get_db)):
             "message_id": email.message_id,
             "subject": email.subject,
             "sender": email.sender,
-            "date_received": email.date_received.isoformat() if email.date_received else None,
+            "date_received": email.date_received.isoformat() + "Z" if email.date_received else None,
             "body": email.body_preview or "",
             "case_id": email.case_id,
             "status": email.status,

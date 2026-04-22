@@ -913,13 +913,37 @@ def api_settings_status():
 
 
 def _run_extraction_background():
-    """Ejecutar extraccion masiva en background thread."""
+    """Ejecutar extraccion masiva en background thread con pool de 3 workers paralelos."""
     global extraction_in_progress, extraction_progress
-    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from backend.services.backup_service import auto_backup
 
+    # v5.4: 3 workers paralelos. Conservador por RAM (~93% usada en baseline).
+    # DeepSeek soporta bien esa concurrencia y smart_router maneja rate limits 429.
+    MAX_WORKERS = 3
+
+    def _process_one_case(case_id: int) -> dict:
+        """Worker que procesa 1 caso con su propia sesión DB (thread-safe)."""
+        thread_db = SessionLocal()
+        case_folder = f"ID {case_id}"
+        try:
+            case = thread_db.query(Case).filter(Case.id == case_id).first()
+            if not case:
+                return {"case_id": case_id, "folder": case_folder, "error": "case no encontrado"}
+            case_folder = case.folder_name or case_folder
+            stats = process_folder(thread_db, case)
+            return {"case_id": case_id, "folder": case_folder, "stats": stats}
+        except Exception as e:
+            try:
+                thread_db.rollback()
+            except Exception:
+                pass
+            return {"case_id": case_id, "folder": case_folder, "error": str(e)[:120]}
+        finally:
+            thread_db.close()
+
+    db = None
     try:
-        # Backup automatico antes de extraccion masiva
         auto_backup("pre_extraction")
 
         db = SessionLocal()
@@ -927,47 +951,61 @@ def _run_extraction_background():
             Case.processing_status.in_(["PENDIENTE", "REVISION"]),
             Case.folder_path.isnot(None),
         ).all()
+        case_ids = [c.id for c in pending]
+        total = len(case_ids)
 
-        extraction_progress["total"] = len(pending)
+        extraction_progress["total"] = total
         extraction_progress["success"] = 0
         extraction_progress["errors"] = 0
-        add_monitor_log(f"Extraccion masiva iniciada: {len(pending)} casos")
+        extraction_progress["progress_pct"] = 0
+        add_monitor_log(f"Extraccion masiva iniciada: {total} casos (pool={MAX_WORKERS})")
 
-        for i, case in enumerate(pending):
-            if not extraction_in_progress:
-                add_monitor_log("Extraccion masiva cancelada por usuario")
-                break
+        failed_cases = []
+        completed = 0
 
-            extraction_progress["current"] = i + 1
-            extraction_progress["case_name"] = case.folder_name or f"ID {case.id}"
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(_process_one_case, cid): cid for cid in case_ids}
+            for fut in as_completed(futures):
+                if not extraction_in_progress:
+                    add_monitor_log("Extraccion masiva cancelada por usuario")
+                    for f in futures:
+                        f.cancel()
+                    break
 
-            try:
-                stats = process_folder(db, case)
-                if stats.get("ai_error"):
+                result = fut.result()
+                completed += 1
+                extraction_progress["current"] = completed
+                extraction_progress["case_name"] = result.get("folder") or f"ID {result['case_id']}"
+                extraction_progress["phase"] = f"Caso {completed}/{total}: {result.get('folder', '')}"
+                extraction_progress["progress_pct"] = int((completed / total) * 100) if total else 0
+
+                err = result.get("error")
+                stats = result.get("stats") or {}
+                ai_error = stats.get("ai_error")
+                if err or ai_error:
                     extraction_progress["errors"] += 1
+                    reason = err or str(ai_error)[:120]
+                    failed_cases.append({"id": result["case_id"], "folder": result.get("folder", ""), "reason": reason})
+                    add_monitor_log(f"Error en {result.get('folder', '')}: {reason}", level="error")
                 else:
                     extraction_progress["success"] += 1
-            except Exception as e:
-                extraction_progress["errors"] += 1
-                add_monitor_log(f"Error en {case.folder_name}: {str(e)[:80]}", level="error")
-
-            # Pausa entre casos para respetar rate limits del provider
-            if i < len(pending) - 1:
-                _time.sleep(5)
 
         ok = extraction_progress["success"]
-        total = extraction_progress["total"]
         extraction_progress["case_name"] = f"Completado: {ok}/{total} exitosos"
+        extraction_progress["phase"] = "Completado"
+        extraction_progress["progress_pct"] = 100
+        extraction_progress["failed_cases"] = failed_cases
         add_monitor_log(f"Extraccion masiva terminada: {ok}/{total} exitosos")
 
     except Exception as e:
         add_monitor_log(f"Error en extraccion masiva: {e}", level="error")
     finally:
         extraction_in_progress = False
-        try:
-            db.close()
-        except Exception:
-            pass
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 @app.post("/api/extraction/run-all")

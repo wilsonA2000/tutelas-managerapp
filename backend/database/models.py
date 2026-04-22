@@ -229,7 +229,7 @@ class Email(Base):
             "message_id": self.message_id,
             "subject": self.subject,
             "sender": self.sender,
-            "date_received": self.date_received.isoformat() if self.date_received else None,
+            "date_received": self.date_received.isoformat() + "Z" if self.date_received else None,
             "body_preview": self.body_preview,
             "case_id": self.case_id,
             "attachments": self.attachments or [],

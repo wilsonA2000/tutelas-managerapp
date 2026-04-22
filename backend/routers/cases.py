@@ -81,7 +81,7 @@ def api_get_case_email_packages(case_id: int, db: Session = Depends(get_db)):
     # Serializar datetimes
     for pkg in packages:
         if pkg.get("date_received"):
-            pkg["date_received"] = pkg["date_received"].isoformat()
+            pkg["date_received"] = pkg["date_received"].isoformat() + "Z"
     return {
         "case_id": case_id,
         "case_folder": case.folder_name,

@@ -79,6 +79,7 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
         "current": 0, "total": len(case_ids), "case_name": "Iniciando...",
         "success": 0, "errors": 0, "progress_pct": 0, "elapsed_seconds": 0,
         "step": "Preparando extraccion...", "phase": "",
+        "failed_cases": [],
     }
 
     def _update_progress(**kwargs):
@@ -107,20 +108,20 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
     # Lock para operaciones de archivo (rename, move) — evita race conditions
     _file_ops_lock = threading.Lock()
 
-    def _process_one_case(cid: int) -> bool:
-        """Procesar un caso en su propio thread con su propia Session."""
+    def _process_one_case(cid: int) -> tuple[bool, str, str | None]:
+        """Procesar un caso en su propio thread. Retorna (ok, folder_name, error_reason)."""
         db = SessionLocal()
+        folder_name = f"ID {cid}"
         try:
             case = db.query(Case).filter(Case.id == cid).first()
             if not case:
-                return False
+                return False, folder_name, "case no encontrado"
 
-            folder_name = (case.folder_name or f"ID {cid}")[:40]
+            folder_name = (case.folder_name or folder_name)[:60]
             with _progress_lock:
                 _main.extraction_progress["step"] = f"Procesando: {folder_name}..."
                 _main.extraction_progress["phase"] = "Clasificando..." if classify_docs else "Extrayendo..."
 
-            # Clasificación de documentos (si se pidió) — serializada para evitar colisiones de archivos
             if classify_docs:
                 try:
                     with _file_ops_lock:
@@ -132,14 +133,12 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
             with _progress_lock:
                 _main.extraction_progress["phase"] = "Extrayendo..."
 
-            # Extracción — paralela (cada thread tiene su propia DB session)
             if settings.UNIFIED_EXTRACTOR_ENABLED:
                 from backend.extraction.unified import unified_extract
                 stats = unified_extract(db, case, settings.BASE_DIR)
             else:
                 stats = process_folder(db, case)
 
-            # Rename de carpeta — serializado para evitar race conditions del filesystem
             if stats.get("renamed"):
                 with _file_ops_lock:
                     db.refresh(case)
@@ -147,11 +146,12 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
             if stats.get("ai_error") and case.processing_status != "COMPLETO":
                 case.processing_status = "REVISION"
                 db.commit()
-                return False
+                return False, folder_name, str(stats.get("ai_error"))[:120]
 
-            return True
+            return True, folder_name, None
         except Exception as e:
             try:
+                db.rollback()
                 case = db.query(Case).filter(Case.id == cid).first()
                 if case:
                     case.processing_status = "REVISION"
@@ -159,7 +159,7 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
             except Exception:
                 pass
             _main.add_monitor_log(f"Error caso {cid}: {str(e)[:100]}", level="error")
-            return False
+            return False, folder_name, str(e)[:120]
         finally:
             db.close()
 
@@ -188,17 +188,27 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
 
                 cid = futures[future]
                 try:
-                    ok = future.result()
+                    result = future.result()
+                    if isinstance(result, tuple) and len(result) == 3:
+                        ok, folder_name, reason = result
+                    else:
+                        ok, folder_name, reason = bool(result), f"ID {cid}", None
                     with _progress_lock:
                         _main.extraction_progress["current"] += 1
                         if ok:
                             _main.extraction_progress["success"] += 1
                         else:
                             _main.extraction_progress["errors"] += 1
-                except Exception:
+                            _main.extraction_progress["failed_cases"].append({
+                                "id": cid, "folder": folder_name, "reason": reason or "desconocido",
+                            })
+                except Exception as e:
                     with _progress_lock:
                         _main.extraction_progress["current"] += 1
                         _main.extraction_progress["errors"] += 1
+                        _main.extraction_progress["failed_cases"].append({
+                            "id": cid, "folder": f"ID {cid}", "reason": str(e)[:120],
+                        })
 
                 _update_progress()
 
