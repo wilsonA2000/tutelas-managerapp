@@ -749,18 +749,6 @@ def api_move_doc(doc_id: int, target_case_id: int, db: Session = Depends(get_db)
         }
 
 
-@router.get("/docs/{doc_id}/move-preview")
-def api_preview_move(doc_id: int, db: Session = Depends(get_db)):
-    """Preview de que pasaria al mover un doc (cuantos hermanos lo acompañan)."""
-    from backend.services.sibling_mover import preview_package_move
-
-    result = preview_package_move(db, doc_id)
-    if "error" in result:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=result["error"])
-    return result
-
-
 @router.get("/docs/{doc_id}/suggest-target")
 def api_suggest_target(doc_id: int, db: Session = Depends(get_db)):
     """Sugerir caso destino para un documento NO_PERTENECE.

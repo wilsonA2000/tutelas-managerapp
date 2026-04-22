@@ -36,16 +36,6 @@ class DryRunBody(BaseModel):
     dry_run: bool = True
 
 
-@router.get("/audit")
-def api_cleanup_audit(db: Session = Depends(get_db)):
-    """v5.0: Auditoria completa con detectores ampliados.
-
-    Incluye: diagnostico base + fragmentos FOREST + radicados incompletos
-    + propuesta duplicados + candidatos re-extraccion.
-    """
-    return diagnose(db)
-
-
 @router.get("/diagnosis")
 def api_cleanup_diagnosis(db: Session = Depends(get_db)):
     """F1: Diagnostico read-only del desorden actual."""
