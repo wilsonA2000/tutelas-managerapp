@@ -1,8 +1,14 @@
 """Smart Router: selección de proveedor/modelo según tipo de tarea.
 
-Estrategia v5.4 (2 providers):
-1. Primary: DeepSeek V3.2 (extraction / general) o Reasoner (legal_analysis).
-2. Fallback pagado: Claude Haiku 4.5 (Anthropic).
+Estrategia v5.4.3 (2 providers, flip 2026-04-22):
+1. Primary: Claude Haiku 4.5 (Anthropic) — DPA formal, SOC 2 / HIPAA / ISO 27001.
+2. Fallback: DeepSeek V3.2 — resiliencia si Anthropic tiene outage o rate limit.
+
+Razón del flip (v5.4.3): proyecto maneja datos sensibles (menores, salud,
+educación) de ciudadanos de Santander. Habeas Data Ley 1581/2012 exige
+salvaguardas en transferencia internacional; Anthropic ofrece DPA y
+certificaciones auditable, DeepSeek no. Costo diferencial ~$35 USD/año
+para 350 tutelas — despreciable para una entidad pública.
 
 Providers legacy (Gemini / Groq / Cerebras / HuggingFace / OpenAI) eliminados
 en v5.4 tras confirmar 0 llamadas útiles en token_usage. Registros históricos
@@ -61,33 +67,34 @@ class RouteDecision:
     fallback_model: str | None = None
 
 
-# Cadena de prioridad por tipo de tarea: DeepSeek → Anthropic fallback.
+# Cadena de prioridad por tipo de tarea: Anthropic Haiku primary, DeepSeek fallback.
+# v5.4.3 flip (2026-04-22): Habeas Data Ley 1581/2012 + DPA Anthropic.
 ROUTING_CHAINS = {
     "pdf_multimodal": [
         # Ruta multimodal deprecada: el texto viene del normalizer local
         # (pdfplumber + PaddleOCR). La clave se deja por compat hacia atras.
-        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
+        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
     ],
     "extraction": [
-        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
+        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
     ],
     "complex_reasoning": [
-        ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
+        ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
     ],
     "legal_analysis": [
-        ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
+        ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
     ],
     "general": [
-        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
+        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
     ],
     "multilingual": [
-        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
+        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
     ],
 }
 

@@ -64,15 +64,17 @@ RAD_LABEL = RegexPattern(
     pattern=re.compile(
         r"(?:RAD\.?|RADICADO(?:\s+No\.?|\s*:)|Rad(?:icado)?\.|Rad(?:icado)?:)"
         r"\s*#?\s*(?:No\.?\s*)?"
-        r"(20\d{2})[-\u2013\u2014/]\s*0*(\d{2,5})(?!\d)",
+        # v5.4.3: secuencia mínimo 3 dígitos (con marcador "RAD" hay contexto)
+        r"(20\d{2})[-\u2013\u2014/]\s*0*(\d{3,5})(?!\d)",
         re.IGNORECASE,
     ),
     description="RAD./Radicado No./Radicado: 2026-00095 con separador guion obligatorio",
     test_positive=[
         ("RAD. 2026-00095", "00095"),
-        ("Radicado No. 2026-030", "030"),
+        ("Radicado No. 2026-030", "030"),  # 3d ok con marcador RAD
         ("RADICADO: 2026-00115", "00115"),
         ("Rad. 2026-00057", "00057"),
+        ("Rad. 2026-10021", "10021"),  # 5d completo (caso Ronald Diaz)
     ],
     test_negative=[
         "texto sin radicado",
@@ -86,13 +88,19 @@ RAD_LABEL = RegexPattern(
 RAD_GENERIC = RegexPattern(
     name="radicado_generic",
     # F1 (v5.0): negative lookahead agregado para rechazar FOREST continuo (20260066132)
-    pattern=re.compile(r"(20\d{2})[-\u2013\u2014]\s*0*(\d{2,5})(?!\d)"),
-    description="Patrón genérico 20XX-NNNNN con separador obligatorio (fallback)",
-    test_positive=[("caso 2026-00095", "00095"), ("ref 2026-030 ok", "030")],
+    # v5.4.3: secuencia exige EXACTAMENTE 5 dígitos (era {2,5} → causaba zfill
+    # bug: "2026-1002" capturaba "1002" → rad_corto "2026-01002" cuando el
+    # rad23 oficial tenía secuencia "10021"). El shape canónico colombiano de
+    # rad_corto es 5 dígitos. Como fallback sin marcador "RAD", ser estricto.
+    pattern=re.compile(r"(20\d{2})[-\u2013\u2014](\d{5})(?!\d)"),
+    description="Patrón genérico 20XX-NNNNN con secuencia estricta de 5 dígitos (fallback)",
+    test_positive=[("caso 2026-00095", "00095"), ("ref 2026-10021 ok", "10021")],
     test_negative=[
         "fecha 2026",
         "radicado 20260066132",  # FOREST 11d (B1)
         "20260069467",  # FOREST continuo (B1)
+        "caso 2026-1002",  # 4 dígitos — era el bug, ahora rechazado
+        "ref 2026-030 ok",  # 3 dígitos — ambiguo, rechazado
     ],
 )
 

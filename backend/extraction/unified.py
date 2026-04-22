@@ -723,27 +723,62 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
             case.processing_status = "COMPLETO"
             case.updated_at = datetime.utcnow()
 
-        # Renombrar carpeta si aplica (serializado para thread-safety)
+        # Renombrar carpeta si aplica (serializado para thread-safety).
+        # Si falla (p.ej. IntegrityError por folder_name UNIQUE colisión con
+        # caso que comparte rad23), el flush deja la sesión sucia: obligatorio
+        # db.rollback() antes de continuar, de lo contrario el db.commit() final
+        # explota con "Session rolled back due to previous exception during flush".
         try:
             with _io_lock:
                 _rename_folder_if_needed(db, case, stats)
                 stats["renamed"] = True
-        except Exception:
-            pass
+        except Exception as _e_rename:
+            logger.warning("F9 rename falló caso %d: %s — rollback defensivo", case.id, _e_rename)
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
         # Link a caso base
         try:
             _check_and_link_to_base_case(db, case, stats)
-        except Exception:
-            pass
+        except Exception as _e_link:
+            logger.warning("link_base falló caso %d: %s — rollback defensivo", case.id, _e_link)
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
         # Knowledge Base (serializado — SQLite FTS5 single-writer)
         try:
             with _io_lock:
                 from backend.knowledge.indexer import index_case_fields
                 index_case_fields(db, case.id, final_fields)
-        except Exception:
-            pass
+        except Exception as _e_kb:
+            logger.warning("KB index falló caso %d: %s — rollback defensivo", case.id, _e_kb)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+        # Re-aplicar processing_status y updated_at después de posibles rollbacks
+        # (el rollback revierte estos cambios si venían en la misma transacción).
+        _rad23 = (case.radicado_23_digitos or "").strip()
+        _rad23_digits = re.sub(r"\D", "", _rad23) if _rad23 else ""
+        _has_valid_rad23 = len(_rad23_digits) >= 18
+        _has_named_folder = bool(
+            case.folder_name
+            and "[PENDIENTE" not in (case.folder_name or "")
+            and re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}", case.folder_name or "")
+        )
+        _has_accionante = bool((case.accionante or "").strip())
+        if stats.get("ai_error") and saved_regex < 5:
+            case.processing_status = "REVISION"
+        elif not _has_valid_rad23 and not (_has_named_folder and _has_accionante):
+            case.processing_status = "REVISION"
+        else:
+            case.processing_status = "COMPLETO"
+            case.updated_at = datetime.utcnow()
 
         db.commit()
 

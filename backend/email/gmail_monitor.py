@@ -1000,7 +1000,15 @@ def check_inbox(db: Session) -> list[dict]:
                 })
 
             except Exception as e:
-                logger.error(f"Error procesando email: {e}")
+                logger.error(f"Error procesando email: {e}", exc_info=True)
+                # v5.4.3: rollback defensivo — una excepción en un email puede
+                # dejar la sesión contaminada y hacer que el siguiente email falle
+                # con "Session rolled back due to previous exception during flush".
+                # Mismo patrón que v5.4.2 aplicó a unified.py.
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
                 results.append({"subject": "", "accion": "ERROR", "error": str(e)[:100]})
                 continue
 
