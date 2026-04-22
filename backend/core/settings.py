@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     PII_PRESIDIO_MODEL: str = "es_core_news_md"
     PII_MASTER_KEY: str = ""             # Fernet key. Si vacía y PII_REDACTION_ENABLED, auto-genera en memoria con warning
 
+    # v5.5 Experiment mode — probar ingesta completa desde Gmail en workspace paralelo
+    EXPERIMENT_MODE: bool = False         # True = modo experimento (DB fresh, workspace vacío)
+    GMAIL_READ_ONLY: bool = False         # True = NO marca emails como leído en Gmail (preserva estado)
+    GMAIL_HISTORICAL_QUERY: str = ""      # Query Gmail alternativa (ej. "in:inbox") para sync histórico
+    SYNC_BATCH_SIZE: int = 100            # Tamaño por defecto de batch en /api/emails/sync-batch
+    AI_PROVIDER_PRIMARY: str = ""         # Override del router. "deepseek" o "anthropic". Vacío = respetar ROUTING_CHAINS
+
     # CSV
     CSV_DELIMITER: str = ";"
     CSV_COLUMNS: list[str] = [

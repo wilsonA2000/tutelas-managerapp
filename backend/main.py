@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 # Asegurar que el directorio padre este en el path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -514,6 +515,77 @@ def api_check_emails_status():
         "in_progress": gmail_check_in_progress,
         **gmail_check_result,
     }
+
+
+# ═══════════════════════════════════════════════════════════
+# v5.5 EXPERIMENT: sync histórico batcheable (DB fresh + workspace vacío)
+# ═══════════════════════════════════════════════════════════
+
+class SyncBatchBody(BaseModel):
+    batch_size: int = 100
+    resume_cursor: str | None = None
+    query: str | None = None  # default: settings.GMAIL_HISTORICAL_QUERY o "in:inbox"
+    read_only: bool | None = None  # default: settings.GMAIL_READ_ONLY
+
+
+@app.post("/api/emails/sync-batch")
+def api_sync_batch(body: SyncBatchBody):
+    """v5.5: procesa un batch de emails de Gmail con paginación explícita.
+
+    NO usa is:unread. Diseñado para el experimento: leer TODO el inbox con
+    query custom, procesarlo en lotes controlados, pausar entre batches para
+    auditar, preservar el estado de Gmail (read_only por defecto).
+
+    Body: {batch_size, resume_cursor, query, read_only}
+    """
+    if not settings.EXPERIMENT_MODE:
+        return {
+            "error": "EXPERIMENT_MODE=false. Este endpoint solo opera en workspace experimento (.env.experiment)",
+        }
+    try:
+        from backend.email.sync_batch import check_inbox_batch
+    except Exception as e:
+        return {"error": f"import fail: {e}"}
+
+    effective_read_only = body.read_only if body.read_only is not None else settings.GMAIL_READ_ONLY
+    db = SessionLocal()
+    try:
+        result = check_inbox_batch(
+            db=db,
+            batch_size=body.batch_size or settings.SYNC_BATCH_SIZE,
+            resume_cursor=body.resume_cursor,
+            query=body.query,
+            read_only=effective_read_only,
+        )
+        return result
+    except Exception as e:
+        add_monitor_log(f"sync_batch error: {e}", level="error")
+        return {"error": str(e)}
+    finally:
+        db.close()
+
+
+@app.get("/api/emails/sync-status")
+def api_sync_status():
+    """v5.5: estado acumulado del experimento (contadores + cursor)."""
+    try:
+        from backend.email.sync_batch import get_cumulative
+        return {"experiment_mode": settings.EXPERIMENT_MODE, "cumulative": get_cumulative()}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/emails/sync-reset")
+def api_sync_reset():
+    """v5.5: resetea contadores acumulados del experimento (no borra DB)."""
+    if not settings.EXPERIMENT_MODE:
+        return {"error": "EXPERIMENT_MODE=false"}
+    try:
+        from backend.email.sync_batch import reset_cumulative
+        reset_cumulative()
+        return {"status": "reset", "cumulative": 0}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/api/emails/check-cancel")

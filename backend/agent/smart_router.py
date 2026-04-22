@@ -124,8 +124,16 @@ def route(task_type: str = "general") -> RouteDecision:
         RouteDecision con proveedor, modelo y razón.
     """
     from backend.extraction.ai_extractor import PROVIDERS
+    from backend.core.settings import settings as _s
 
-    chain = ROUTING_CHAINS.get(task_type, ROUTING_CHAINS["general"])
+    chain = list(ROUTING_CHAINS.get(task_type, ROUTING_CHAINS["general"]))
+
+    # v5.5: override de primary por env (AI_PROVIDER_PRIMARY). Útil para el
+    # experimento donde queremos DeepSeek barato sin modificar ROUTING_CHAINS.
+    primary_override = (_s.AI_PROVIDER_PRIMARY or "").strip().lower()
+    if primary_override:
+        # Mover el provider override al frente de la chain si existe
+        chain.sort(key=lambda entry: 0 if entry[0].lower() == primary_override else 1)
 
     # Recopilar todos los providers disponibles en orden (skip rate-limited)
     available = []
