@@ -20,11 +20,10 @@ marker-pdf>=1.10.0
 paddlepaddle>=3.3.0
 paddleocr>=2.10,<3.0
 
-# AI extraction
-groq>=0.4.0
+# AI extraction (v5.4: solo DeepSeek + Anthropic)
+# openai SDK se reutiliza para DeepSeek (compatible vía base_url)
 anthropic>=0.40.0
 openai>=1.50.0
-google-genai>=1.0.0
 
 # Excel & data
 openpyxl>=3.1.2

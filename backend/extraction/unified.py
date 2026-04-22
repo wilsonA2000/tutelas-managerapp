@@ -435,15 +435,6 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
             if ia_doc_texts is None:
                 ai_result = None
                 raw_ai_results = []
-            elif _ai_settings.PARALLEL_AI_EXTRACTION:
-                from backend.extraction.ai_extractor import parallel_extract_with_ai
-                ai_result, raw_ai_results = parallel_extract_with_ai(
-                    ia_doc_texts,
-                    case.folder_name or "",
-                    pdf_file_paths=pdf_file_paths[:4] if pdf_file_paths else None,
-                    case_id=case.id,
-                    radicado_oficial=rad_oficial,
-                )
             else:
                 ai_result = extract_with_ai(
                     ia_doc_texts,
@@ -524,14 +515,6 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
                 db.add(pii_stats)
                 db.commit()
 
-            # Observabilidad extra para modo paralelo
-            if _ai_settings.PARALLEL_AI_EXTRACTION and len(raw_ai_results) == 2:
-                stats["providers"] = [f"{r.provider}/{r.model}" for r in raw_ai_results]
-                stats["gemini_ms"] = raw_ai_results[0].duration_ms
-                stats["deepseek_ms"] = raw_ai_results[1].duration_ms
-                stats["cv_fields_count"] = sum(
-                    1 for f in ai_result.fields.values() if "_cv" in (f.source or "")
-                )
         else:
             logger.info("Fase 4: Todos los campos ya cubiertos por regex, IA no necesaria")
 

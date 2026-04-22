@@ -29,7 +29,7 @@ const SERVICES: StatusItem[] = [
     iconColor: 'text-red-500',
   },
   {
-    key: 'groq',
+    key: 'deepseek',
     label: 'Inteligencia Artificial',
     description: 'DeepSeek V3.2 + Claude Haiku 4.5 para extraccion de campos',
     icon: Cpu,

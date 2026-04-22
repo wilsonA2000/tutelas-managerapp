@@ -291,7 +291,7 @@ def process_folder(db: Session, case: Case) -> dict:
                 source=f"verificacion_2_pasos",
             ))
 
-    # Paso 1.7: Recolectar paths de PDFs para multimodal (solo Google)
+    # Paso 1.7: Recolectar paths de PDFs (se pasan al prompt texto para verify)
     pdf_file_paths = []
     for doc in case.documents:
         if doc.file_path and Path(doc.file_path).suffix.lower() == ".pdf" and Path(doc.file_path).exists():
@@ -370,7 +370,7 @@ def process_folder(db: Session, case: Case) -> dict:
         cost_out = ai_result.tokens_output * out_price / 1_000_000
 
         token_record = TokenUsage(
-            provider=ai_result.provider or "groq",
+            provider=ai_result.provider or "deepseek",
             model=ai_result.model or "unknown",
             tokens_input=ai_result.tokens_input,
             tokens_output=ai_result.tokens_output,
@@ -718,7 +718,7 @@ def process_new_document(db: Session, case: Case, doc: Document) -> dict:
             field_name=field_name,
             extracted_value=field_result.value,
             confidence=field_result.confidence,
-            extraction_method="ai_groq_incremental",
+            extraction_method="ai_incremental",
             raw_context=field_result.source,
             created_at=datetime.utcnow(),
         )

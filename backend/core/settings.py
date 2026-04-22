@@ -29,15 +29,9 @@ class Settings(BaseSettings):
     # JWT Auth
     JWT_SECRET: str = ""  # Auto-generated if empty
 
-    # AI Providers
-    GOOGLE_API_KEY: str = ""
-    ANTHROPIC_API_KEY: str = ""
-    OPENAI_API_KEY: str = ""
-    GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    # AI Providers (v5.4: solo DeepSeek + Anthropic)
     DEEPSEEK_API_KEY: str = ""
-    HF_TOKEN: str = ""
-    CEREBRAS_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
 
     # Document Normalizer
     NORMALIZER_ENABLED: bool = True
@@ -47,7 +41,6 @@ class Settings(BaseSettings):
     # Unified Extractor (IR-based)
     UNIFIED_EXTRACTOR_ENABLED: bool = True  # True = usar extractor unificado IR
     KB_ENHANCED_EXTRACTION: bool = True  # True = inyectar contexto KB en prompt IA
-    PARALLEL_AI_EXTRACTION: bool = False  # Deshabilitado post-v4.7 (era Gemini+DeepSeek)
 
     # PII Redaction (v5.3) — anonimización antes de enviar a IA externa
     PII_REDACTION_ENABLED: bool = True
@@ -92,14 +85,11 @@ class Settings(BaseSettings):
     def has_gmail(self) -> bool:
         return bool(self.GMAIL_USER and self.GMAIL_APP_PASSWORD)
 
-    def has_google_ai(self) -> bool:
-        return bool(self.GOOGLE_API_KEY)
+    def has_deepseek(self) -> bool:
+        return bool(self.DEEPSEEK_API_KEY)
 
     def has_anthropic(self) -> bool:
         return bool(self.ANTHROPIC_API_KEY)
-
-    def has_openai(self) -> bool:
-        return bool(self.OPENAI_API_KEY)
 
 
 @lru_cache

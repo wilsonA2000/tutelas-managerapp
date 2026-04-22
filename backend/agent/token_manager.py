@@ -4,7 +4,7 @@ Estrategias de ahorro:
 1. Cache de respuestas recientes (no repetir misma consulta)
 2. Contexto progresivo (empezar con regex, solo llamar IA si hace falta)
 3. Budget control (límite diario/mensual configurable)
-4. Selección inteligente de modelo via Smart Router (DeepSeek → Haiku → Groq)
+4. Selección inteligente de modelo via Smart Router (DeepSeek → Claude Haiku 4.5)
 5. Compresión de contexto (solo enviar lo necesario, no todo)
 6. Batch optimization (agrupar extracciones para reducir overhead)
 """
@@ -22,18 +22,15 @@ from backend.database.models import TokenUsage
 
 logger = logging.getLogger("tutelas.tokens")
 
-# Precios por proveedor (USD por 1M tokens)
+# Precios por proveedor (USD por 1M tokens). Solo providers activos v5.4.
+# Para cálculos sobre registros históricos (Gemini/OpenAI/etc.) se devuelve 0.
 PRICING = {
-    "google": {
-        "gemini-2.5-flash": {"input": 0, "output": 0},  # GRATIS
-        "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
+    "deepseek": {
+        "deepseek-chat": {"input": 0.28, "output": 0.42},
+        "deepseek-reasoner": {"input": 0.28, "output": 0.42},
     },
     "anthropic": {
         "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00},
-    },
-    "openai": {
-        "gpt-4o-mini": {"input": 0.15, "output": 0.60},
-        "gpt-4o": {"input": 2.50, "output": 10.00},
     },
 }
 
@@ -242,12 +239,11 @@ def get_savings_report(db: Session) -> dict:
     """Reporte de ahorro de tokens."""
     stats = get_token_stats(db)
 
-    # Estimate how much would have cost with paid models
+    # Estimate how much would have cost con fallback pagado (Claude Haiku 4.5)
     if stats.total_tokens > 0:
-        cost_if_gpt4o = estimate_cost("openai", "gpt-4o", stats.total_tokens // 2, stats.total_tokens // 2)
         cost_if_haiku = estimate_cost("anthropic", "claude-haiku-4-5-20251001", stats.total_tokens // 2, stats.total_tokens // 2)
     else:
-        cost_if_gpt4o = cost_if_haiku = 0
+        cost_if_haiku = 0
 
     return {
         "actual_cost": stats.total_cost_usd,
@@ -255,7 +251,6 @@ def get_savings_report(db: Session) -> dict:
         "calls_made": stats.calls_month,
         "model_used": stats.top_model,
         "savings": {
-            "vs_gpt4o": round(cost_if_gpt4o - stats.total_cost_usd, 2),
             "vs_claude_haiku": round(cost_if_haiku - stats.total_cost_usd, 2),
         },
         "cache_hits": len(_RESPONSE_CACHE),

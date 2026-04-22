@@ -18,10 +18,6 @@ EXPORTS_DIR = settings.exports_dir
 GMAIL_USER = settings.GMAIL_USER
 GMAIL_APP_PASSWORD = settings.GMAIL_APP_PASSWORD
 
-# Groq AI
-GROQ_API_KEY = settings.GROQ_API_KEY
-GROQ_MODEL = settings.GROQ_MODEL
-
 # CSV
 CSV_DELIMITER = ";"
 CSV_COLUMNS = [

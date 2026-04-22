@@ -1,12 +1,12 @@
-"""Smart Router: selección inteligente de proveedor/modelo según tipo de tarea.
+"""Smart Router: selección de proveedor/modelo según tipo de tarea.
 
-Estrategia multi-modelo (v5.1 — sin Gemini):
-1. Extracción de campos → DeepSeek V3.2 (barato, rápido, sin límite RPD)
-2. Razonamiento legal complejo → Qwen 3 235B (thinking mode, gratis en Cerebras)
-3. Fallback pagado → Claude Haiku 4.5 (Anthropic)
-4. Fallback gratis → Groq Llama 3.3 70B
+Estrategia v5.4 (2 providers):
+1. Primary: DeepSeek V3.2 (extraction / general) o Reasoner (legal_analysis).
+2. Fallback pagado: Claude Haiku 4.5 (Anthropic).
 
-El router verifica qué API keys están disponibles y selecciona la mejor opción.
+Providers legacy (Gemini / Groq / Cerebras / HuggingFace / OpenAI) eliminados
+en v5.4 tras confirmar 0 llamadas útiles en token_usage. Registros históricos
+de Gemini (297 llamadas pre-v4.7) preservados en tabla token_usage como audit.
 """
 
 import os
@@ -61,18 +61,10 @@ class RouteDecision:
     fallback_model: str | None = None
 
 
-# Cadena de prioridad por tipo de tarea
-# Cada lista es [proveedor, modelo, env_key] en orden de preferencia
-#
-# NOTA v4.7: Gemini fue eliminado de todas las cadenas tras auditoria del
-# 9 abril 2026. Razones:
-# - 97% de los PDFs son nativos (pdfplumber extrae texto correctamente)
-# - Gemini multimodal consumia 17x mas tokens input que DeepSeek
-# - DeepSeek V3.2 produce igual o mejor calidad en campos semanticos
-# - Claude Haiku 4.5 es ahora el fallback pagado (~$8/mes)
+# Cadena de prioridad por tipo de tarea: DeepSeek → Anthropic fallback.
 ROUTING_CHAINS = {
     "pdf_multimodal": [
-        # Ya no hay ruta multimodal: el texto viene del normalizer local
+        # Ruta multimodal deprecada: el texto viene del normalizer local
         # (pdfplumber + PaddleOCR). La clave se deja por compat hacia atras.
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
@@ -80,33 +72,20 @@ ROUTING_CHAINS = {
     "extraction": [
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
-        ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
-        ("huggingface", "meta-llama/Llama-3.3-70B-Instruct", "HF_TOKEN"),
-        ("cerebras", "llama-3.3-70b", "CEREBRAS_API_KEY"),
     ],
     "complex_reasoning": [
-        ("cerebras", "qwen-3-235b-a22b-instruct-2507", "CEREBRAS_API_KEY"),
-        ("huggingface", "Qwen/Qwen3-235B-A22B-Instruct-2507", "HF_TOKEN"),
         ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
-        ("groq", "qwen-qwq-32b", "GROQ_API_KEY"),
     ],
     "legal_analysis": [
-        ("cerebras", "qwen-3-235b-a22b-instruct-2507", "CEREBRAS_API_KEY"),
-        ("huggingface", "Qwen/Qwen3-235B-A22B-Instruct-2507", "HF_TOKEN"),
         ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
     ],
     "general": [
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-        ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
-        ("cerebras", "llama-3.3-70b", "CEREBRAS_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
-        ("huggingface", "meta-llama/Llama-3.3-70B-Instruct", "HF_TOKEN"),
     ],
     "multilingual": [
-        ("cerebras", "qwen-3-235b-a22b-instruct-2507", "CEREBRAS_API_KEY"),
-        ("huggingface", "Qwen/Qwen3-235B-A22B-Instruct-2507", "HF_TOKEN"),
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
         ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
     ],

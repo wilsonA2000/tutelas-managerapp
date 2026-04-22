@@ -71,7 +71,7 @@ Responde SOLO JSON válido."""
 
 
 def _call_ai_classify(prompt: str, max_retries: int = 3) -> dict:
-    """Clasificar documentos usando Smart Router (DeepSeek/Haiku/Groq)."""
+    """Clasificar documentos usando Smart Router (DeepSeek primary, Haiku fallback)."""
     try:
         from backend.agent.smart_router import route
         from backend.extraction.ai_extractor import PROVIDERS
@@ -88,17 +88,14 @@ def _call_ai_classify(prompt: str, max_retries: int = 3) -> dict:
 
         for attempt in range(max_retries):
             try:
-                if provider in ("deepseek", "groq", "cerebras"):
+                if provider == "deepseek":
                     from openai import OpenAI
-                    base_urls = {"deepseek": "https://api.deepseek.com",
-                                 "groq": "https://api.groq.com/openai/v1",
-                                 "cerebras": "https://api.cerebras.ai/v1"}
-                    client = OpenAI(api_key=api_key, base_url=base_urls[provider])
+                    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
                     r = client.chat.completions.create(
                         model=model,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.1, max_tokens=4000,
-                        response_format={"type": "json_object"} if provider != "cerebras" else None,
+                        response_format={"type": "json_object"},
                     )
                     text = r.choices[0].message.content.strip()
                 elif provider == "anthropic":
@@ -184,7 +181,7 @@ def classify_and_clean_folder(db: Session, case, base_dir: str) -> dict:
 
     db.commit()
 
-    # Llamar a Gemini para clasificar
+    # Llamar a IA (Smart Router) para clasificar
     docs_combined = "\n\n".join(docs_text_parts)
     prompt = CLASSIFY_PROMPT.format(
         folder_name=case.folder_name,
@@ -299,7 +296,7 @@ def smart_extract_case(db: Session, case_id: int, base_dir: str, classify_docs: 
 
     logger.info(f"Pre-extracted {len(regex_results)} fields with regex for case {case_id}")
 
-    # 3. RAZONAR: llamar a Gemini con contexto completo
+    # 3. RAZONAR: llamar a IA (Smart Router) con contexto completo
     ai_results = _call_ai_extraction(context, regex_results)
 
     # 4. DECIDIR: fusionar regex + IA por campo

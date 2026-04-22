@@ -187,38 +187,6 @@ def _plan_with_ai(instruction: str) -> dict:
             json_match = re.search(r'\{[\s\S]*\}', text)
             return json.loads(json_match.group()) if json_match else _fallback_plan(instruction)
 
-        elif provider == "groq":
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=0.1,
-                max_tokens=2000,
-                response_format={"type": "json_object"},
-            )
-            return json.loads(resp.choices[0].message.content)
-
-        elif provider == "cerebras":
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key, base_url="https://api.cerebras.ai/v1")
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=0.1,
-                max_tokens=2000,
-            )
-            text = resp.choices[0].message.content
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', text)
-            return json.loads(json_match.group()) if json_match else _fallback_plan(instruction)
-
         else:
             return _fallback_plan(instruction)
 
@@ -386,8 +354,8 @@ def _summarize_with_ai(execution: AgentExecution) -> str:
         from backend.agent.smart_router import route
 
         decision = route("general")
-        env_key = {"deepseek": "DEEPSEEK_API_KEY", "groq": "GROQ_API_KEY",
-                    "cerebras": "CEREBRAS_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}.get(decision.provider, "")
+        env_key = {"deepseek": "DEEPSEEK_API_KEY",
+                    "anthropic": "ANTHROPIC_API_KEY"}.get(decision.provider, "")
         api_key = os.getenv(env_key, "")
 
         if not api_key:
@@ -408,11 +376,9 @@ def _summarize_with_ai(execution: AgentExecution) -> str:
             "Maximo 200 palabras."
         )
 
-        if decision.provider in ("deepseek", "groq", "cerebras"):
+        if decision.provider == "deepseek":
             from openai import OpenAI
-            base_urls = {"deepseek": "https://api.deepseek.com", "groq": "https://api.groq.com/openai/v1",
-                         "cerebras": "https://api.cerebras.ai/v1"}
-            client = OpenAI(api_key=api_key, base_url=base_urls[decision.provider])
+            client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
             resp = client.chat.completions.create(
                 model=decision.model,
                 messages=[{"role": "user", "content": prompt}],

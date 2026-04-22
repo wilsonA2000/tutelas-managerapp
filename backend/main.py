@@ -870,10 +870,11 @@ def api_sync_cancel():
 def api_settings_status():
     """Estado de la configuracion."""
     import os
-    from backend.config import GMAIL_USER, GMAIL_APP_PASSWORD, GROQ_API_KEY, DB_PATH, BASE_DIR
+    from backend.config import GMAIL_USER, GMAIL_APP_PASSWORD, DB_PATH, BASE_DIR
 
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY", "")
     gmail_ok = bool(GMAIL_USER and GMAIL_APP_PASSWORD)
-    groq_ok = bool(GROQ_API_KEY)
+    deepseek_ok = bool(deepseek_key)
     db_ok = DB_PATH.exists()
     folders_ok = BASE_DIR.exists()
 
@@ -892,26 +893,24 @@ def api_settings_status():
     return {
         # Campos que el frontend espera para los 4 servicios
         "gmail": gmail_ok,
-        "groq": groq_ok,
+        "deepseek": deepseek_ok,
         "database": db_ok,
         "folders": folders_ok,
         # Detalles extra
         "gmail_detail": f"Usuario: {GMAIL_USER}" if gmail_ok else "No configurado en .env",
-        "groq_detail": f"Key: {GROQ_API_KEY[:12]}..." if groq_ok else "No configurado en .env",
+        "deepseek_detail": f"Key: {deepseek_key[:12]}..." if deepseek_ok else "No configurado en .env",
         "database_detail": f"SQLite: {DB_PATH}",
         "folders_detail": f"Ruta: {BASE_DIR}",
         # Info adicional
         "gmail_configured": gmail_ok,
-        "groq_configured": groq_ok,
+        "deepseek_configured": deepseek_ok,
         "monitor_enabled": gmail_monitor_enabled,
         "monitor_interval_minutes": GMAIL_CHECK_INTERVAL // 60,
         "last_gmail_check": last_gmail_check,
         "cases_count": cases_count,
         "documents_count": documents_count,
-        # APIs adicionales configuradas
+        # API fallback pagada
         "anthropic_configured": bool(os.getenv("ANTHROPIC_API_KEY", "")),
-        "openai_configured": bool(os.getenv("OPENAI_API_KEY", "")),
-        "google_configured": bool(os.getenv("GOOGLE_API_KEY", "")),
     }
 
 
@@ -954,7 +953,7 @@ def _run_extraction_background():
                 extraction_progress["errors"] += 1
                 add_monitor_log(f"Error en {case.folder_name}: {str(e)[:80]}", level="error")
 
-            # Pausa entre casos para respetar rate limits de Groq free
+            # Pausa entre casos para respetar rate limits del provider
             if i < len(pending) - 1:
                 _time.sleep(5)
 

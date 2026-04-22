@@ -196,7 +196,7 @@ class Extraction(Base):
     confidence = Column(String, default="MEDIA", index=True)  # ALTA / MEDIA / BAJA
     source_page = Column(Integer)
     raw_context = Column(Text)  # Texto circundante para verificacion
-    extraction_method = Column(String)  # regex / ai_groq / manual
+    extraction_method = Column(String)  # regex / ai / manual
     created_at = Column(DateTime, default=datetime.utcnow)
 
     document = relationship("Document", back_populates="extractions")
@@ -296,8 +296,8 @@ class TokenUsage(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-    provider = Column(String, nullable=False)       # groq / anthropic / openai / google
-    model = Column(String, nullable=False)           # llama-3.3-70b-versatile / claude-haiku-4-5 / etc
+    provider = Column(String, nullable=False)       # deepseek / anthropic (+ legacy histórico: google/openai/groq/cerebras/huggingface)
+    model = Column(String, nullable=False)           # deepseek-chat / claude-haiku-4-5-20251001 / etc
     tokens_input = Column(Integer, default=0)
     tokens_output = Column(Integer, default=0)
     cost_input = Column(String, default="0")         # USD como string para precision
