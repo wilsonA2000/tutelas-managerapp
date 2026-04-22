@@ -215,8 +215,15 @@ class Email(Base):
     body_preview = Column(Text)
     case_id = Column(Integer, ForeignKey("cases.id"), nullable=True, index=True)
     attachments = Column(JSON, default=list)  # [{filename, saved_path}]
-    status = Column(String, default="PENDIENTE")  # PENDIENTE / ASIGNADO / IGNORADO
+    status = Column(String, default="PENDIENTE")  # PENDIENTE / ASIGNADO / IGNORADO / AMBIGUO
     processed_at = Column(DateTime)
+
+    # v5.4.4: threading por In-Reply-To/References + observabilidad del matcher
+    in_reply_to = Column(String, index=True, nullable=True)
+    references_header = Column(Text, nullable=True)
+    match_score = Column(Integer, nullable=True)
+    match_signals_json = Column(Text, nullable=True)
+    match_confidence = Column(String, nullable=True)  # HIGH / MEDIUM / LOW
 
     case = relationship("Case", back_populates="emails")
     # v4.8 Provenance: reverso del vinculo inmutable. Un Email tiene N Documents hijos

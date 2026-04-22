@@ -220,6 +220,22 @@ async def lifespan(app: FastAPI):
     warmup_thread = threading.Thread(target=_warmup_presidio, daemon=True, name="presidio-warmup")
     warmup_thread.start()
 
+    # v5.4.4: construir CaseLookupCache al startup (KB en memoria del monitor Gmail)
+    def _build_case_cache():
+        try:
+            from backend.email.case_lookup_cache import get_cache
+            _db = SessionLocal()
+            try:
+                stats = get_cache().build(_db)
+                add_monitor_log(f"CaseLookupCache built: {stats['cases_indexed']} casos indexados")
+            finally:
+                _db.close()
+        except Exception as e:
+            add_monitor_log(f"CaseLookupCache build fallo: {e}", level="warning")
+
+    cache_thread = threading.Thread(target=_build_case_cache, daemon=True, name="case-cache-build")
+    cache_thread.start()
+
     yield
 
     # Cleanup

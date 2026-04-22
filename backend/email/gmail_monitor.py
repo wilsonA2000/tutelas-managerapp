@@ -869,6 +869,9 @@ def check_inbox(db: Session) -> list[dict]:
                 subject = _normalize_typos(headers.get("Subject", ""))
                 sender = headers.get("From", "")
                 date_str = headers.get("Date", "")
+                # v5.4.4: threading headers (RFC 5322)
+                in_reply_to_hdr = headers.get("In-Reply-To", "") or headers.get("In-reply-to", "")
+                references_hdr = headers.get("References", "") or headers.get("references", "")
 
                 # Ignorar emails no jurídicos
                 if _should_ignore(subject, sender):
@@ -913,33 +916,106 @@ def check_inbox(db: Session) -> list[dict]:
                 except Exception:
                     pass
 
+                # v5.4.4: aplicar rad_utils.reconcile para fix zfill bug
+                # Si rad23 es válido, descartar rad_corto extraído por regex y re-derivar
+                from backend.email.rad_utils import reconcile as _rad_reconcile
+                _rc23, _rc_corto = _rad_reconcile(
+                    radicado_data.get("radicado_23", ""),
+                    radicado_data.get("radicado_corto", ""),
+                )
+                radicado_data["radicado_23"] = _rc23
+                radicado_data["radicado_corto"] = _rc_corto
+
                 logger.info(f"Email: tipo={tipo} rad={radicado_data.get('radicado_corto','')} forest={forest} cc={radicado_data.get('cc_accionante','-')} acc={accionante[:20]}")
 
-                # ── MATCH O CREAR ──
-                case = match_to_case(db, radicado_data, accionante)
+                # ── MATCH MULTI-CRITERIO (v5.4.4) ──
+                # Resolver thread parent desde headers In-Reply-To/References
+                thread_parent_case_id = None
+                if in_reply_to_hdr or references_hdr:
+                    try:
+                        from backend.email.matcher import resolve_thread_parent
+                        thread_parent_case_id = resolve_thread_parent(
+                            db, in_reply_to_hdr, references_hdr,
+                        )
+                        if thread_parent_case_id:
+                            logger.info(f"Thread parent detectado: email→caso {thread_parent_case_id}")
+                    except Exception as _e:
+                        logger.warning(f"Thread resolver fallo: {_e}")
+
+                # Construir señales y scoring
+                from backend.email.case_lookup_cache import get_cache
+                from backend.email.matcher import EmailSignals, score_case_match
+
+                signals = EmailSignals(
+                    rad23=radicado_data.get("radicado_23", ""),
+                    rad_corto=radicado_data.get("radicado_corto", ""),
+                    forest=forest,
+                    cc_accionante=radicado_data.get("cc_accionante", ""),
+                    accionante_name=accionante,
+                    sender=sender,
+                    thread_parent_case_id=thread_parent_case_id,
+                )
+
+                case = None
+                match_score = 0
+                match_confidence = "NONE"
+                match_signals_json = None
                 created_new = False
                 accion = "CASO_EXISTENTE"
 
                 if tipo == "SALIENTE":
                     accion = "SALIENTE"
-                elif not case:
+                elif signals.has_any():
+                    cache = get_cache()
+                    if cache.is_built:
+                        match = score_case_match(db, cache, signals)
+                        match_score = match.score
+                        match_confidence = match.confidence
+                        match_signals_json = match.to_signals_json()
+                        logger.info(
+                            f"Matcher: score={match.score} conf={match.confidence} "
+                            f"case_id={match.case_id} breakdown={match.breakdown}"
+                        )
+                        if match.is_auto_match:
+                            case = db.query(Case).filter(Case.id == match.case_id).first()
+                        elif match.confidence == "MEDIUM":
+                            # Ambiguo — guardar email sin asignar, para revisión manual (quarantine v5.5a)
+                            case = None
+                            accion = "AMBIGUO"
+                    else:
+                        # Fallback a matcher secuencial v5.3 si cache no está listo (cold start)
+                        case = match_to_case(db, radicado_data, accionante)
+
+                # Si no se encontró caso y no es SALIENTE/AMBIGUO → crear nuevo
+                if accion not in ("SALIENTE", "AMBIGUO") and not case:
                     case = create_new_case(db, radicado_data, accionante)
                     if case:
                         created_new = True
                         accion = "CASO_NUEVO"
+                        # Refrescar cache con el nuevo caso
+                        try:
+                            get_cache().refresh_one(db, case.id)
+                        except Exception:
+                            pass
 
                 # ── REGISTRAR EMAIL EN DB PRIMERO (v4.8 Provenance) ──
                 # Creamos el Email antes que los Documents para tener email_id
                 # disponible al crear los hijos (adjuntos + .md). Esto garantiza
                 # que todos los docs del mismo email queden vinculados y viajen
                 # juntos al reasignar entre casos.
+                _email_status = "ASIGNADO" if case else ("AMBIGUO" if accion == "AMBIGUO" else "PENDIENTE")
                 email_record = Email(
                     message_id=message_id, subject=subject, sender=sender,
                     date_received=date_received, body_preview=body or "",
                     case_id=case.id if case else None,
                     attachments=[],  # se actualiza despues de download
-                    status="ASIGNADO" if case else "PENDIENTE",
+                    status=_email_status,
                     processed_at=datetime.utcnow(),
+                    in_reply_to=in_reply_to_hdr or None,
+                    references_header=references_hdr or None,
+                    match_score=match_score or None,
+                    match_confidence=match_confidence if match_confidence != "NONE" else None,
+                    match_signals_json=match_signals_json,
                 )
                 db.add(email_record)
                 db.flush()  # obtener email_record.id sin commit

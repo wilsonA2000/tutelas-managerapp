@@ -301,6 +301,69 @@ def analyze_document(file_path: Path | str) -> DocumentAnalysis:
     return analysis
 
 
+def analyze_text_blob(
+    text: str,
+    attachment_filenames: list[str] | None = None,
+    forwarded_blocks: list[str] | None = None,
+) -> DocumentAnalysis:
+    """v5.4.4: análisis forense sobre texto plano + filenames (sin file IO, sin DB).
+
+    Diseñado para el monitor Gmail: recibe subject+body del email + nombres de
+    adjuntos detectados (sin descargar aún) + bloques forwarded opcionales para
+    priorizar el bloque raíz.
+
+    Args:
+        text: subject + body completo del email.
+        attachment_filenames: nombres de archivos adjuntos (se añaden al texto
+            de identificadores porque PDFs de juzgado frecuentemente traen el
+            rad23 en el nombre, ej. "8001333300820230026700_Auto.pdf").
+        forwarded_blocks: si se proveen, se priorizan los 2 primeros para
+            extracción de entidades (el bloque raíz tiene menor probabilidad
+            de contaminación cruzada).
+
+    Returns:
+        DocumentAnalysis con identifiers + entities. text_length = len(text).
+    """
+    analysis = DocumentAnalysis(file_path="<email-blob>", filename="<email>")
+
+    text_full = text or ""
+    analysis.text_length = len(text_full)
+    analysis.has_text = len(text_full.strip()) > 20
+
+    if not analysis.has_text and not attachment_filenames:
+        analysis.doc_types = [("EMPTY_BLOB", 100)]
+        return analysis
+
+    # Etapa 2: clasificar (solo sobre el cuerpo del email)
+    if analysis.has_text:
+        analysis.doc_types = classify_by_content(text_full)
+    else:
+        analysis.doc_types = [("EMAIL", 50)]
+
+    # Etapa 4: identificadores.
+    # Concatenamos text + filenames para que los regex de rad23/CC/FOREST
+    # también minen los nombres de archivo adjunto.
+    search_text = text_full
+    if attachment_filenames:
+        search_text = search_text + "\n" + "\n".join(attachment_filenames)
+    analysis.identifiers = extract_all_identifiers(search_text)
+
+    # Etapa 3: entidades. Priorizar bloque raíz si se provee.
+    if forwarded_blocks:
+        # Tomar los 2 primeros bloques (más cercanos al remitente original)
+        priority_text = "\n".join(forwarded_blocks[:2])
+        analysis.entities = extract_entities(priority_text)
+        # Fallback: si no se encontró accionante en prioridad, buscar en todo
+        if not analysis.entities.get("accionante"):
+            fallback = extract_entities(text_full)
+            for k, v in fallback.items():
+                analysis.entities.setdefault(k, v)
+    else:
+        analysis.entities = extract_entities(text_full)
+
+    return analysis
+
+
 def _extract_text(path: Path, max_chars: int = 8000) -> str:
     """v5.2: Extrae texto de PDF/DOCX/DOC/MD/TXT/XLSX + footers DOCX + OCR imágenes."""
     ext = path.suffix.lower()
