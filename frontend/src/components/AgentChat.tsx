@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  MessageCircle, Send, X, Loader2, HelpCircle, Bot, User,
+  Send, X, HelpCircle, Bot, User,
   Sparkles, Zap, RotateCcw, Minimize2, Maximize2,
   Search, BarChart3, Shield, Brain,
 } from 'lucide-react'

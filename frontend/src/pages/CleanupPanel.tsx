@@ -231,7 +231,6 @@ export default function CleanupPanel() {
   const missingRads = (incompleteRads?.missing_count as number) ?? 0
   const dupCleanup = diag?.duplicate_cleanup as Record<string, unknown> | undefined
   const intraDups = ((dupCleanup?.intra_case as Record<string, unknown>)?.removable_docs as number) ?? 0
-  const reextCandidates = ((diag?.reextraction_candidates as Record<string, unknown>)?.total as number) ?? 0
 
   const healthScore = Math.max(5, 100 - ((docsNoHash + autoMergeable + noPertenece + fragments + intraDups) / Math.max(totalDocs, 1)) * 100)
   const healthLabel = docsNoHash === 0 && autoMergeable === 0 && noPertenece === 0

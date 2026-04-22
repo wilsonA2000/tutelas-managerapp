@@ -4,8 +4,7 @@ import toast from 'react-hot-toast'
 import { motion } from 'motion/react'
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis,
-  Tooltip as RechartsTooltip, ResponsiveContainer, Legend,
-  RadialBarChart, RadialBar,
+  Tooltip as RechartsTooltip, ResponsiveContainer,
 } from 'recharts'
 import {
   FileText, CheckCircle, XCircle, BarChart2,
@@ -90,16 +89,6 @@ function CustomTooltip({ active, payload, label }: any) {
       ))}
     </div>
   )
-}
-
-// Gradient colors for horizontal bars
-const BAR_GRADIENTS = {
-  blue: ['#3b82f6', '#1d4ed8'],
-  teal: ['#14b8a6', '#0d9488'],
-  violet: ['#8b5cf6', '#6d28d9'],
-  rose: ['#f43f5e', '#e11d48'],
-  emerald: ['#10b981', '#059669'],
-  amber: ['#f59e0b', '#d97706'],
 }
 
 function LoadingChart() {
