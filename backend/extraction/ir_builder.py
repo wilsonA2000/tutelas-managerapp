@@ -18,7 +18,9 @@ from backend.extraction.ir_models import (
     TextSpan, DocumentZone, DocumentIR, CaseIR,
 )
 from backend.extraction.pipeline import classify_doc_type
-from backend.extraction.pdf_visual_analyzer import analyze_pdf_visual, report_to_zone_metadata
+from backend.extraction.pdf_visual_analyzer import (
+    analyze_pdf_visual, report_to_zone_metadata, VisualSignature,
+)
 
 logger = logging.getLogger("tutelas.ir_builder")
 
@@ -356,8 +358,9 @@ def _build_pdf_ir(file_path: str, doc_type: str) -> DocumentIR:
 
     doc.close()
 
-    # v5.5: análisis visual determinista (sin IA) — detecta logos, sellos, watermarks,
-    # firmas y texto rotado. Enriquece el IR con señales de institucionalidad.
+    # v5.5-v6.0: análisis visual determinista (sin IA) — detecta logos, sellos,
+    # watermarks, firmas y texto rotado. Enriquece el IR con zona VISUAL y signature.
+    visual_signature_dict: dict | None = None
     try:
         visual = analyze_pdf_visual(str(path))
         if visual.findings or visual.images_count > 0:
@@ -369,6 +372,8 @@ def _build_pdf_ir(file_path: str, doc_type: str) -> DocumentIR:
                 confidence=visual.institutional_score,
                 metadata=report_to_zone_metadata(visual),
             ))
+        # v6.0: signature compacta para persistir en DB (Capa 0)
+        visual_signature_dict = VisualSignature.from_report(visual).to_dict()
     except Exception as e:
         logger.debug("Visual analyzer falló para %s: %s", path.name, e)
 
@@ -382,6 +387,7 @@ def _build_pdf_ir(file_path: str, doc_type: str) -> DocumentIR:
         page_count=page_count,
         has_ocr_pages=has_ocr,
         extraction_method="fitz",
+        visual_signature=visual_signature_dict,
     )
 
 

@@ -49,6 +49,63 @@ class PDFVisualReport:
     rotated_text_snippets: list[str] = field(default_factory=list)  # p.ej. sellos de radicación
 
 
+@dataclass
+class VisualSignature:
+    """v6.0 Capa 0: signature canónica y compacta de la percepción física del doc.
+
+    Se deriva del PDFVisualReport pero está pensada para persistirse en DB
+    y ser consultada por capas superiores (Bayesian assignment, live consolidator).
+    """
+    has_official_logo: bool = False      # logo repetido en ≥2 páginas (membrete)
+    has_radicador_stamp: bool = False    # texto rotado compatible con sello radicación
+    has_juzgado_seal: bool = False       # findings tipo 'sello'
+    has_signature: bool = False          # findings tipo 'firma' o annotation 'sig'
+    has_watermark: bool = False
+    institutional_score: float = 0.0
+    repeated_logo_phashes: list[str] = field(default_factory=list)
+    rotated_snippets: list[str] = field(default_factory=list)
+    images_count: int = 0
+    annotations_count: int = 0
+    page_count: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "has_official_logo": self.has_official_logo,
+            "has_radicador_stamp": self.has_radicador_stamp,
+            "has_juzgado_seal": self.has_juzgado_seal,
+            "has_signature": self.has_signature,
+            "has_watermark": self.has_watermark,
+            "institutional_score": round(self.institutional_score, 3),
+            "repeated_logo_phashes": self.repeated_logo_phashes[:10],
+            "rotated_snippets": [s[:200] for s in self.rotated_snippets[:10]],
+            "images_count": self.images_count,
+            "annotations_count": self.annotations_count,
+            "page_count": self.page_count,
+        }
+
+    @classmethod
+    def from_report(cls, report: "PDFVisualReport") -> "VisualSignature":
+        kinds = {f.kind for f in report.findings}
+        rotated_keywords = ("radicad", "juzgado", "tribunal", "recibid", "fecha")
+        has_radicador = any(
+            any(kw in snip.lower() for kw in rotated_keywords)
+            for snip in report.rotated_text_snippets
+        )
+        return cls(
+            has_official_logo=bool(report.repeated_logos),
+            has_radicador_stamp=has_radicador or any(f.kind == "texto_rotado" for f in report.findings),
+            has_juzgado_seal="sello" in kinds,
+            has_signature=("firma" in kinds) or ("stamp" in kinds),
+            has_watermark="watermark" in kinds,
+            institutional_score=report.institutional_score,
+            repeated_logo_phashes=list(report.repeated_logos),
+            rotated_snippets=list(report.rotated_text_snippets),
+            images_count=report.images_count,
+            annotations_count=report.annotations_count,
+            page_count=report.page_count,
+        )
+
+
 def _phash_bytes(img_bytes: bytes, hash_size: int = 8) -> str:
     """pHash simple sobre bytes: reduce a 8x8 gris y compara con mediana.
 

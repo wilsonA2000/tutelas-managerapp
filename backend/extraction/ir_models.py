@@ -61,6 +61,7 @@ class DocumentIR:
     page_count: int = 0
     has_ocr_pages: bool = False
     extraction_method: str = ""
+    visual_signature: dict | None = None  # v6.0 Capa 0: VisualSignature.to_dict()
 
     def get_zones(self, zone_type: str) -> list[DocumentZone]:
         """Obtener todas las zonas de un tipo."""

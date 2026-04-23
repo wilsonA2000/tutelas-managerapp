@@ -150,6 +150,17 @@ def unified_extract(db: Session, case: Case, base_dir: str = "",
         logger.info("Fase 2: Construyendo IR estructurado")
         case_ir = build_case_ir(db, case)
 
+        # v6.0 Capa 0: persistir VisualSignature en los Document de la DB
+        import json as _json
+        _doc_by_filename = {d.filename: d for d in case.documents}
+        for doc_ir in case_ir.documents:
+            if doc_ir.visual_signature:
+                target = _doc_by_filename.get(doc_ir.filename)
+                if target is not None:
+                    target.institutional_score = float(doc_ir.visual_signature.get("institutional_score") or 0.0)
+                    target.visual_signature_json = _json.dumps(doc_ir.visual_signature, ensure_ascii=False)
+        db.commit()
+
         # =================================================================
         # FASE 3: REGEX — extracción mecánica sobre zonas IR
         # =================================================================

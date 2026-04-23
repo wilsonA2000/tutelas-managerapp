@@ -3,7 +3,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, JSON, Index,
-    LargeBinary, UniqueConstraint, Boolean,
+    LargeBinary, UniqueConstraint, Boolean, Float,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -161,6 +161,10 @@ class Document(Base):
     # NULL = doc legacy o ingestado por sync de carpeta (no vino por Gmail).
     email_id = Column(Integer, ForeignKey("emails.id"), nullable=True, index=True)
     email_message_id = Column(String, nullable=True, index=True)  # gmail message_id para backfill/debug
+
+    # v6.0: percepción física del documento (Capa 0)
+    institutional_score = Column(Float, nullable=True)         # 0-1, confiabilidad institucional
+    visual_signature_json = Column(Text, nullable=True)         # JSON serializado del VisualSignature
 
     case = relationship("Case", back_populates="documents")
     email = relationship("Email", back_populates="documents")
