@@ -1,0 +1,1223 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tutelas Manager v5.5 — Arquitectura del Agente Jurídico</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+      colors: {
+        brand: { 50:'#eef2ff', 400:'#818cf8', 500:'#6366f1', 600:'#4f46e5', 700:'#4338ca', 900:'#312e81' }
+      },
+      animation: { 'fade-in': 'fadeIn 0.6s ease-out' },
+      keyframes: { fadeIn: { '0%':{opacity:0, transform:'translateY(10px)'}, '100%':{opacity:1, transform:'translateY(0)'} } }
+    }
+  }
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+<style>
+  html { scroll-behavior: smooth; }
+  body { font-family: 'Inter', system-ui, sans-serif; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .mermaid { background: transparent !important; }
+  .section-anchor { scroll-margin-top: 1.5rem; }
+  .card { @apply bg-slate-800/60 border border-slate-700/60 rounded-xl p-6 backdrop-blur-sm; transition: transform .2s, box-shadow .2s, border-color .2s; }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 10px 40px -10px rgba(99,102,241,.25); border-color: rgb(99 102 241 / .4); }
+  .nav-link.active { @apply text-brand-400 bg-brand-500/10 border-l-2 border-brand-500; }
+  .badge { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium; }
+  .fade-in { animation: fadeIn 0.6s ease-out; }
+  .gradient-text { background: linear-gradient(135deg,#818cf8,#c084fc); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .hero-bg { background: radial-gradient(ellipse at top, rgb(49 46 129 / .4), transparent 60%), radial-gradient(ellipse at bottom right, rgb(76 29 149 / .3), transparent 60%); }
+  pre[class*="language-"] { border-radius: 0.5rem; font-size: 0.85rem; }
+  .donut { --p:0; --b:12px; --c:#6366f1; width:160px; aspect-ratio:1; position:relative; display:grid; place-items:center; font-weight:700; font-size:1.4rem; }
+  .donut::before { content:""; position:absolute; inset:0; border-radius:50%; background: conic-gradient(var(--c) calc(var(--p)*1%), rgb(51 65 85) 0); -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - var(--b)), #000 calc(100% - var(--b) + 1px)); mask: radial-gradient(farthest-side, transparent calc(100% - var(--b)), #000 calc(100% - var(--b) + 1px)); }
+  @media print { .sidebar, .toc-toggle { display:none !important; } main { margin-left:0 !important; } .card { break-inside: avoid; } }
+  html:not(.dark) body { @apply bg-slate-50 text-slate-900; }
+  html:not(.dark) .card { @apply bg-white border-slate-200; }
+  html:not(.dark) .hero-bg { background: radial-gradient(ellipse at top, rgb(224 231 255 / .8), transparent 60%); }
+  html:not(.dark) .nav-link { @apply text-slate-600; }
+  html:not(.dark) .nav-link:hover { @apply bg-slate-100; }
+</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen antialiased" x-data="{ dark: true, section: 'overview', mobileNav: false }" x-init="$watch('dark', v => document.documentElement.classList.toggle('dark', v))">
+
+<!-- ================================================================= -->
+<!--  SIDEBAR                                                           -->
+<!-- ================================================================= -->
+<aside class="sidebar fixed top-0 left-0 h-screen w-64 border-r border-slate-800 bg-slate-950/70 backdrop-blur-md overflow-y-auto z-40 transition-transform" :class="mobileNav ? 'translate-x-0' : '-translate-x-full md:translate-x-0'">
+  <div class="p-5 border-b border-slate-800">
+    <div class="flex items-center gap-2">
+      <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-purple-500 flex items-center justify-center font-bold">⚖️</div>
+      <div>
+        <div class="font-bold text-sm">Tutelas Manager</div>
+        <div class="text-xs text-slate-400">v5.5 · Gobernación Santander</div>
+      </div>
+    </div>
+  </div>
+  <nav class="p-3 text-sm space-y-0.5">
+    <a href="#overview" class="nav-link block px-3 py-2 rounded hover:bg-slate-800/60">🎯 Overview</a>
+    <a href="#pipeline-1" class="nav-link block px-3 py-2 rounded hover:bg-slate-800/60">📥 1. Ingesta Gmail</a>
+    <a href="#pipeline-2" class="nav-link block px-3 py-2 rounded hover:bg-slate-800/60">⚡ 2. Extracción (6 fases)</a>
+    <a href="#pipeline-3" class="nav-link block px-3 py-2 rounded hover:bg-slate-800/60">🔍 3. Verificación</a>
+    <a href="#pipeline-4" class="nav-link block px-3 py-2 rounded hover:bg-slate-800/60">🧹 4. Reconcile</a>
+    <a href="#pipeline-5" class="nav-link block px-3 py-2 rounded hover:bg-slate-800/60">👁️ 5. Forense Visual</a>
+    <a href="#privacy" class="nav-link block px-3 py-2 rounded hover:bg-slate-800/60">🔐 Capa PII</a>
+    <a href="#campos" class="nav-link block px-3 py-2 rounded hover:bg-slate-800/60">📋 28 Campos</a>
+    <a href="#router" class="nav-link block px-3 py-2 rounded hover:bg-slate-800/60">🧭 Smart Router</a>
+    <a href="#metricas" class="nav-link block px-3 py-2 rounded hover:bg-slate-800/60">📊 Métricas</a>
+  </nav>
+  <div class="p-3 border-t border-slate-800 mt-auto">
+    <button @click="dark = !dark" class="w-full px-3 py-2 rounded bg-slate-800/60 hover:bg-slate-800 text-xs flex items-center justify-between">
+      <span x-text="dark ? '🌙 Modo oscuro' : '☀️ Modo claro'"></span>
+      <span class="text-slate-500">toggle</span>
+    </button>
+  </div>
+</aside>
+
+<!-- Mobile toggle -->
+<button @click="mobileNav = !mobileNav" class="toc-toggle md:hidden fixed top-4 left-4 z-50 p-2 bg-slate-800 rounded-lg">☰</button>
+
+<!-- ================================================================= -->
+<!--  MAIN                                                              -->
+<!-- ================================================================= -->
+<main class="md:ml-64 p-6 md:p-10 max-w-5xl">
+
+<!-- HERO -->
+<section id="overview" class="section-anchor mb-16 hero-bg rounded-2xl p-8 md:p-12 border border-slate-800 fade-in">
+  <div class="badge bg-brand-500/15 text-brand-400 border border-brand-500/30 mb-4">
+    <span class="w-1.5 h-1.5 rounded-full bg-brand-500"></span>
+    Sistema en producción · Abril 2026
+  </div>
+  <h1 class="text-4xl md:text-5xl font-extrabold leading-tight mb-4">
+    Tutelas Manager <span class="gradient-text">v5.5</span>
+  </h1>
+  <p class="text-lg md:text-xl text-slate-300 mb-6 max-w-3xl">
+    Arquitectura del Agente Jurídico Analizador de Tutelas para la <strong>Gobernación de Santander, Secretaría de Educación</strong>.
+    Inteligencia local primero, IA solo donde agrega valor semántico.
+  </p>
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+    <div class="card text-center"><div class="text-2xl font-bold text-brand-400">197</div><div class="text-xs text-slate-400">casos</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-brand-400">5,194</div><div class="text-xs text-slate-400">documentos</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-brand-400">1,528</div><div class="text-xs text-slate-400">emails</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-brand-400">97</div><div class="text-xs text-slate-400">tests ✓</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-purple-400">21</div><div class="text-xs text-slate-400">regex patterns</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-purple-400">27</div><div class="text-xs text-slate-400">tools agente</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-purple-400">80%</div><div class="text-xs text-slate-400">local (sin IA)</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-purple-400">28</div><div class="text-xs text-slate-400">campos protocolo</div></div>
+  </div>
+
+  <h3 class="text-lg font-semibold mb-3 text-slate-200">Pipeline de alto nivel</h3>
+  <div class="card !p-4">
+<pre class="mermaid">
+flowchart LR
+  A[📧 Gmail<br/>OAuth2 REST] --> B[📥 Ingesta<br/>matcher multi-criterio]
+  B --> C[⚡ Extracción<br/>6 fases IR]
+  C --> D[🔍 Verificación<br/>5 criterios]
+  D --> E[🧹 Reconcile<br/>merge canónicos]
+  E --> F[📊 Cuadro final<br/>28 campos]
+  C -.-> V[👁️ Forense Visual<br/>sellos · watermarks]
+  V -.-> C
+  classDef local fill:#312e81,stroke:#818cf8,color:#fff
+  classDef ai fill:#581c87,stroke:#c084fc,color:#fff
+  class A,B,D,E,V local
+  class C ai
+</pre>
+  </div>
+  <p class="text-sm text-slate-400 mt-4">
+    💡 <strong>Por qué esto importa:</strong> el 80% del trabajo se hace sin IA (regex, forensic, cognición local).
+    La IA solo interviene donde hay razonamiento semántico irreductible (~6 campos de 28). Esto reduce costos,
+    preserva privacidad y cumple con Ley 1581/2012 de Habeas Data.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<!-- SECTION-1-PLACEHOLDER -->
+<!-- ============================================================ -->
+<section id="pipeline-1" class="section-anchor mb-16 fade-in">
+  <div class="flex items-center gap-3 mb-5">
+    <span class="text-3xl">📥</span>
+    <div>
+      <h2 class="text-3xl font-bold">Pipeline 1 — Ingesta Gmail</h2>
+      <p class="text-slate-400">Del correo del juzgado al caso correcto en la base de datos.</p>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3 flex items-center gap-2">🔐 Gmail API REST · OAuth2</h3>
+    <p class="text-slate-300 mb-3">
+      La ingesta usa <strong>Gmail API REST con OAuth2</strong>, nunca IMAP.
+      Esto nos da acceso granular a hilos (threads), headers RFC 5322 (<code class="mono text-brand-400">In-Reply-To</code>,
+      <code class="mono text-brand-400">References</code>) y lectura sin borrar en servidor.
+    </p>
+    <div class="bg-slate-900/60 border border-slate-700 rounded p-3 text-xs mono text-slate-300">
+      <span class="text-green-400">✓</span> OAuth2 con refresh token &nbsp;
+      <span class="text-green-400">✓</span> Modo read-only opcional (<code>GMAIL_READ_ONLY=true</code>) &nbsp;
+      <span class="text-red-400">✗</span> IMAP (prohibido en esta arquitectura)
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3 flex items-center gap-2">⚡ CaseLookupCache · KB en memoria</h3>
+    <p class="text-slate-300 mb-3">
+      Antes de procesar cada email, el sistema carga un índice en memoria con <strong>4 diccionarios</strong>
+      para resolución O(1) de cada señal:
+    </p>
+    <div class="grid md:grid-cols-4 gap-3 mb-4">
+      <div class="bg-slate-900/60 border border-slate-700 rounded p-3">
+        <div class="text-brand-400 font-semibold text-sm">rad23</div>
+        <div class="text-xs text-slate-400 mt-1">Radicado 23 dígitos canónico → case_id</div>
+      </div>
+      <div class="bg-slate-900/60 border border-slate-700 rounded p-3">
+        <div class="text-brand-400 font-semibold text-sm">rad_corto</div>
+        <div class="text-xs text-slate-400 mt-1">"2026-00095" → case_id</div>
+      </div>
+      <div class="bg-slate-900/60 border border-slate-700 rounded p-3">
+        <div class="text-brand-400 font-semibold text-sm">FOREST</div>
+        <div class="text-xs text-slate-400 mt-1">Nº interno Gobernación → case_id</div>
+      </div>
+      <div class="bg-slate-900/60 border border-slate-700 rounded p-3">
+        <div class="text-brand-400 font-semibold text-sm">CC hash</div>
+        <div class="text-xs text-slate-400 mt-1">Hash SHA de cédula → case_id</div>
+      </div>
+    </div>
+    <p class="text-sm text-slate-400">
+      💡 <strong>Por qué esto importa:</strong> con 403+ casos activos, un scan lineal es lento.
+      El cache levanta el matching de O(n) a O(1).
+    </p>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3 flex items-center gap-2">🎯 Matcher multi-criterio · scoring 0-160</h3>
+    <p class="text-slate-300 mb-4">
+      Cada email se evalúa contra <strong>6 señales independientes</strong>. La suma de puntajes determina la confianza.
+    </p>
+
+    <div class="overflow-x-auto mb-4">
+      <table class="w-full text-sm">
+        <thead class="border-b border-slate-700 text-left">
+          <tr class="text-slate-400">
+            <th class="py-2 pr-3">Señal</th>
+            <th class="py-2 pr-3 text-right">Peso</th>
+            <th class="py-2">Qué detecta</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+          <tr><td class="py-2 pr-3 mono">thread_parent</td><td class="py-2 pr-3 text-right font-bold text-brand-400">+50</td><td class="py-2 text-slate-300">Email hereda case_id del padre del hilo RFC 5322</td></tr>
+          <tr><td class="py-2 pr-3 mono">rad23</td><td class="py-2 pr-3 text-right font-bold text-brand-400">+40</td><td class="py-2 text-slate-300">Radicado 23 dígitos canónico en subject o body</td></tr>
+          <tr><td class="py-2 pr-3 mono">FOREST (subject)</td><td class="py-2 pr-3 text-right font-bold text-brand-400">+25</td><td class="py-2 text-slate-300">Nº FOREST encontrado en subject</td></tr>
+          <tr><td class="py-2 pr-3 mono">FOREST (body)</td><td class="py-2 pr-3 text-right font-bold text-brand-400">+15</td><td class="py-2 text-slate-300">Nº FOREST encontrado en body (menos determinista)</td></tr>
+          <tr><td class="py-2 pr-3 mono">CC_hash</td><td class="py-2 pr-3 text-right font-bold text-brand-400">+20</td><td class="py-2 text-slate-300">Cédula del accionante (hash SHA)</td></tr>
+          <tr><td class="py-2 pr-3 mono">rad_corto + juzgado</td><td class="py-2 pr-3 text-right font-bold text-brand-400">+15</td><td class="py-2 text-slate-300">"2026-00095" con juzgado que coincide</td></tr>
+          <tr><td class="py-2 pr-3 mono">nombre accionante</td><td class="py-2 pr-3 text-right font-bold text-brand-400">+10</td><td class="py-2 text-slate-300">Fuzzy match del nombre con tolerancia a acentos</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid grid-cols-3 gap-3 text-center text-sm">
+      <div class="rounded-lg border border-green-500/40 bg-green-500/10 p-3">
+        <div class="font-bold text-green-400">HIGH ≥ 70</div>
+        <div class="text-xs text-slate-400 mt-1">auto-asignado al caso</div>
+      </div>
+      <div class="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3">
+        <div class="font-bold text-yellow-400">MEDIUM 40-69</div>
+        <div class="text-xs text-slate-400 mt-1">marcado AMBIGUO, revisión humana</div>
+      </div>
+      <div class="rounded-lg border border-red-500/40 bg-red-500/10 p-3">
+        <div class="font-bold text-red-400">LOW &lt; 40</div>
+        <div class="text-xs text-slate-400 mt-1">caso nuevo creado</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3 flex items-center gap-2">📬 Threading RFC 5322</h3>
+    <p class="text-slate-300 mb-3">
+      Los emails guardan <code class="mono text-brand-400">in_reply_to</code> y
+      <code class="mono text-brand-400">references_header</code>. Un email de respuesta hereda automáticamente
+      el <code class="mono text-brand-400">case_id</code> de su padre, sin tener que re-matchear desde cero.
+    </p>
+    <div class="card !p-4 !bg-slate-950/60">
+<pre class="mermaid">
+sequenceDiagram
+  participant J as Juzgado
+  participant G as Gmail
+  participant M as Monitor
+  participant C as Cache
+  participant DB as Database
+  J->>G: Envía auto admisorio
+  M->>G: Poll (OAuth2)
+  G-->>M: Email nuevo + headers RFC 5322
+  M->>C: Extrae señales (rad23, FOREST, CC, nombre)
+  C-->>M: case_id candidato + score
+  alt score ≥ 70
+    M->>DB: Guarda email con case_id
+  else score 40-69
+    M->>DB: Guarda como AMBIGUO (revisar)
+  else score &lt; 40
+    M->>DB: Crea caso nuevo
+  end
+</pre>
+    </div>
+  </div>
+
+  <p class="text-sm text-slate-400">
+    💡 <strong>Por qué esto importa:</strong> en producción hay emails con subject genérico ("RV: NOTIFICACIÓN")
+    que solo se pueden asignar bien combinando múltiples señales. Un solo regex de radicado no basta.
+  </p>
+</section>
+
+<section id="pipeline-2" class="section-anchor mb-16 fade-in" x-data="{ fase: 2 }">
+  <div class="flex items-center gap-3 mb-5">
+    <span class="text-3xl">⚡</span>
+    <div>
+      <h2 class="text-3xl font-bold">Pipeline 2 — Extracción Unificada</h2>
+      <p class="text-slate-400">6 fases que convierten documentos crudos en 28 campos estructurados.</p>
+    </div>
+  </div>
+
+  <div class="flex items-center gap-3 mb-6">
+    <span class="badge bg-brand-500/20 text-brand-400 border border-brand-500/40">🏠 80% local</span>
+    <span class="badge bg-purple-500/20 text-purple-400 border border-purple-500/40">🤖 20% IA</span>
+    <span class="badge bg-slate-700/40 text-slate-300 border border-slate-600">backend/extraction/unified.py</span>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3">Flujo de las 6 fases</h3>
+<pre class="mermaid">
+flowchart TD
+  F1[Fase 1: Ingest<br/>recolecta docs del folder] --> F2[Fase 2: IR Builder<br/>zonas HEADER/RADICADO/PARTIES/RIGHTS/<br/>DATES/BODY/RESOLUTION/FOOTER<br/>🆕 FOOTER_TAIL · VISUAL]
+  F2 --> F3[Fase 3: Regex<br/>21 patterns locales]
+  F3 --> F35[Fase 3.5: Forensic<br/>7 etapas sin IA<br/>🆕 lee 150K chars · todas las páginas]
+  F35 --> F36[Fase 3.6: Cognición<br/>llenado semántico local<br/>7 campos narrativos]
+  F36 --> F4[Fase 4: IA<br/>DeepSeek primary<br/>Haiku 4.5 fallback<br/>~6 campos restantes]
+  F4 --> F5[Fase 5: Merge<br/>regex prevalece sobre IA]
+  F5 --> F6[Fase 6: Persist<br/>SQLite FK=ON · WAL<br/>post_validator 10 reglas]
+  classDef local fill:#312e81,stroke:#818cf8,color:#fff
+  classDef ai fill:#581c87,stroke:#c084fc,color:#fff
+  class F1,F2,F3,F35,F36,F5,F6 local
+  class F4 ai
+</pre>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mb-6">
+
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold">Fase 1 · Ingest</h4>
+        <span class="badge bg-slate-700 text-slate-300">local</span>
+      </div>
+      <p class="text-sm text-slate-300">
+        Recolecta todos los documentos del folder del caso (PDFs, DOCX, .doc, .md emails) y los pasa a la siguiente fase junto con los emails asociados.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold">Fase 2 · IR Builder</h4>
+        <span class="badge bg-brand-500/20 text-brand-400">local</span>
+      </div>
+      <p class="text-sm text-slate-300 mb-3">
+        Construye un <strong>Intermediate Representation</strong> por documento, detectando zonas semánticas:
+      </p>
+      <div class="flex flex-wrap gap-1.5 text-xs">
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">HEADER</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">RADICADO</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">PARTIES</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">RIGHTS</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">DATES</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">BODY</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">RESOLUTION</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">FOOTER</span>
+        <span class="mono bg-green-500/20 text-green-400 px-2 py-0.5 rounded">🆕 FOOTER_TAIL</span>
+        <span class="mono bg-green-500/20 text-green-400 px-2 py-0.5 rounded">🆕 VISUAL</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold">Fase 3 · Regex (21 patterns)</h4>
+        <span class="badge bg-brand-500/20 text-brand-400">local</span>
+      </div>
+      <p class="text-sm text-slate-300 mb-2">
+        Biblioteca centralizada (<code class="mono text-brand-400">agent/regex_library.py</code>) con patrones testados:
+      </p>
+      <ul class="text-xs text-slate-400 space-y-0.5">
+        <li>• Radicados (23 dígitos, corto, T-, genérico)</li>
+        <li>• FOREST (específico, keyword)</li>
+        <li>• Accionante (explícito, demandante, promovida)</li>
+        <li>• CC accionante, Tutela Online, Acta reparto</li>
+        <li>• Abogado footer (Proyectó/Elaboró/Revisó)</li>
+        <li class="text-green-400">🆕 SELLO_RADICADOR · FECHA_RECIBIDO</li>
+        <li class="text-green-400">🆕 PROC_GOBERNACION · SELLO_JUZGADO</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold">Fase 3.5 · Forensic</h4>
+        <span class="badge bg-brand-500/20 text-brand-400">local</span>
+      </div>
+      <p class="text-sm text-slate-300 mb-2">
+        7 etapas cognitivas sin IA (<code class="mono text-brand-400">forensic_analyzer.py</code>, 414 LOC):
+      </p>
+      <ol class="text-xs text-slate-400 space-y-0.5 list-decimal list-inside">
+        <li>Extracción de texto (v5.5: 150K chars, todas las páginas)</li>
+        <li>Clasificación por contenido</li>
+        <li>Entidades (accionante, accionado, juzgado)</li>
+        <li>Identificadores (CC, NUIP, tutela online)</li>
+        <li>Minería en attachment filenames</li>
+        <li>Priorización de bloque raíz en forwarded</li>
+        <li>Abogado proyector (Proyectó/Elaboró)</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold">Fase 3.6 · Cognición</h4>
+        <span class="badge bg-brand-500/20 text-brand-400">local</span>
+      </div>
+      <p class="text-sm text-slate-300 mb-2">
+        Llenado semántico sin IA (<code class="mono text-brand-400">cognition/cognitive_fill.py</code>):
+      </p>
+      <div class="flex flex-wrap gap-1 text-xs">
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">accionados</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">accionante</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">asunto</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">derecho_vulnerado</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">observaciones</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">pretensiones</span>
+        <span class="mono bg-slate-800 px-2 py-0.5 rounded">vinculados</span>
+      </div>
+      <p class="text-xs text-slate-500 mt-2">80-95% de precisión sin enviar datos a IA externa.</p>
+    </div>
+
+    <div class="card border-purple-500/30">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold">Fase 4 · IA (solo ~6 campos)</h4>
+        <span class="badge bg-purple-500/20 text-purple-400">IA</span>
+      </div>
+      <p class="text-sm text-slate-300 mb-2">
+        Solo se invoca para campos donde la cognición local no alcanza:
+      </p>
+      <div class="flex flex-wrap gap-1 text-xs mb-2">
+        <span class="mono bg-purple-500/10 border border-purple-500/30 px-2 py-0.5 rounded">sentido_fallo_1st</span>
+        <span class="mono bg-purple-500/10 border border-purple-500/30 px-2 py-0.5 rounded">sentido_fallo_2nd</span>
+        <span class="mono bg-purple-500/10 border border-purple-500/30 px-2 py-0.5 rounded">quien_impugno</span>
+        <span class="mono bg-purple-500/10 border border-purple-500/30 px-2 py-0.5 rounded">oficina_responsable</span>
+        <span class="mono bg-purple-500/10 border border-purple-500/30 px-2 py-0.5 rounded">decision_incidente</span>
+      </div>
+      <p class="text-xs text-slate-400">
+        Prompt compacto: 3K chars × 2 docs máximo. Datos PII <strong>redactados antes de enviar</strong>.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold">Fase 5 · Merge</h4>
+        <span class="badge bg-brand-500/20 text-brand-400">local</span>
+      </div>
+      <p class="text-sm text-slate-300">
+        Consolida resultados. <strong>El regex determinista siempre prevalece sobre la IA</strong> si ambos dieron valor.
+        La IA solo se usa como fallback donde el regex no encontró nada válido.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold">Fase 6 · Persist + Validar</h4>
+        <span class="badge bg-brand-500/20 text-brand-400">local</span>
+      </div>
+      <p class="text-sm text-slate-300 mb-2">
+        Guarda en SQLite (<code class="mono">FK=ON</code>, <code class="mono">WAL</code> con checkpoint cada 5 min) y aplica
+        <strong>post_validator</strong> con 10 reglas:
+      </p>
+      <ul class="text-xs text-slate-400 space-y-0.5">
+        <li>• <strong>F4</strong>: detecta radicados ajenos al folder</li>
+        <li>• <strong>F8</strong>: sin rad23 válido + sin folder nombrado → REVISION</li>
+        <li>• <strong>F9</strong>: rad23 duplicado con otro caso → alerta consolidación</li>
+        <li>• Fechas DD/MM/YYYY, fallos válidos, cross-field, FOREST blacklist</li>
+      </ul>
+    </div>
+
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3">Ejemplo de código: Fase 3 (Regex extractors)</h3>
+<pre class="language-python"><code class="language-python"># backend/extraction/unified.py — Fase 3
+logger.info("Fase 3: Extracción regex sobre %d zonas",
+            sum(len(d.zones) for d in case_ir.documents))
+
+regex_results = {}
+for field_name, extractor in _EXTRACTORS.items():
+    result = extractor.extract_regex(doc_dicts, case_emails)
+    if result:
+        is_valid, reason = extractor.validate(result.value)
+        if is_valid:
+            regex_results[field_name] = result
+
+# Guardar directamente — protección si IA falla después
+save_regex_fields_to_case(case, regex_results)</code></pre>
+  </div>
+
+  <p class="text-sm text-slate-400">
+    💡 <strong>Por qué esto importa:</strong> separar extracción en fases permite auditar en qué paso falló cada campo.
+    Si un caso queda incompleto, el log dice exactamente si fue por regex, cognición o IA.
+  </p>
+</section>
+
+<section id="pipeline-3" class="section-anchor mb-16 fade-in">
+  <div class="flex items-center gap-3 mb-5">
+    <span class="text-3xl">🔍</span>
+    <div>
+      <h2 class="text-3xl font-bold">Pipeline 3 — Verificación Documental</h2>
+      <p class="text-slate-400">¿Este documento realmente pertenece a este caso?</p>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <p class="text-slate-300 mb-4">
+      Cada documento que llega a un caso debe superar la función
+      <code class="mono text-brand-400">verify_document_belongs()</code>. Se aplican <strong>5 criterios independientes</strong>
+      y el resultado combina sus veredictos en una decisión final.
+    </p>
+
+<pre class="mermaid">
+flowchart LR
+  DOC[📄 Documento<br/>+ caso objetivo] --> C1{Rad23<br/>coincide?}
+  DOC --> C2{Rad corto<br/>+ juzgado?}
+  DOC --> C3{FOREST<br/>coincide?}
+  DOC --> C4{CC accionante<br/>hash?}
+  DOC --> C5{Nombre<br/>fuzzy?}
+  C1 --> M[🧮 Decisor<br/>multi-criterio]
+  C2 --> M
+  C3 --> M
+  C4 --> M
+  C5 --> M
+  M --> OK[✅ OK<br/>pertenece]
+  M --> SO[⚠️ SOSPECHOSO<br/>señales mixtas]
+  M --> NO[❌ NO_PERTENECE<br/>mover a otro caso]
+  M --> RV[🔎 REVISAR<br/>humano decide]
+  classDef local fill:#312e81,stroke:#818cf8,color:#fff
+  class DOC,M local
+</pre>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-3 mb-6">
+    <div class="card">
+      <div class="font-semibold text-sm mb-1">① rad23</div>
+      <p class="text-xs text-slate-400">El doc menciona el radicado 23 dígitos exacto del caso. Confianza máxima.</p>
+    </div>
+    <div class="card">
+      <div class="font-semibold text-sm mb-1">② rad_corto + juzgado</div>
+      <p class="text-xs text-slate-400">"2026-00095" + nombre del juzgado. Evita falsos positivos con radicados homónimos.</p>
+    </div>
+    <div class="card">
+      <div class="font-semibold text-sm mb-1">③ FOREST</div>
+      <p class="text-xs text-slate-400">Número interno Gobernación. Solo fiable si viene de email oficial.</p>
+    </div>
+    <div class="card">
+      <div class="font-semibold text-sm mb-1">④ CC accionante (hash)</div>
+      <p class="text-xs text-slate-400">Cédula del accionante → SHA → comparación. Protege PII.</p>
+    </div>
+    <div class="card md:col-span-2">
+      <div class="font-semibold text-sm mb-1">⑤ Nombre fuzzy</div>
+      <p class="text-xs text-slate-400">Coincidencia del nombre con tolerancia a acentos y errores ortográficos. Menor peso (muchos homónimos).</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div class="rounded-lg border border-green-500/40 bg-green-500/10 p-3 text-center">
+      <div class="text-2xl mb-1">✅</div>
+      <div class="font-bold text-green-400 text-sm">OK</div>
+      <div class="text-xs text-slate-400 mt-1">≥2 criterios fuertes</div>
+    </div>
+    <div class="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-3 text-center">
+      <div class="text-2xl mb-1">⚠️</div>
+      <div class="font-bold text-yellow-400 text-sm">SOSPECHOSO</div>
+      <div class="text-xs text-slate-400 mt-1">1 criterio + señales débiles</div>
+    </div>
+    <div class="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-center">
+      <div class="text-2xl mb-1">❌</div>
+      <div class="font-bold text-red-400 text-sm">NO_PERTENECE</div>
+      <div class="text-xs text-slate-400 mt-1">criterios de otro caso activos</div>
+    </div>
+    <div class="rounded-lg border border-slate-500/40 bg-slate-500/10 p-3 text-center">
+      <div class="text-2xl mb-1">🔎</div>
+      <div class="font-bold text-slate-300 text-sm">REVISAR</div>
+      <div class="text-xs text-slate-400 mt-1">ambiguo · humano decide</div>
+    </div>
+  </div>
+
+  <p class="text-sm text-slate-400 mt-4">
+    💡 <strong>Por qué esto importa:</strong> en el día a día el juzgado a veces adjunta documentos de otros casos por error.
+    El verificador protege la integridad del cuadro final detectando estos "intrusos".
+  </p>
+</section>
+
+<section id="pipeline-4" class="section-anchor mb-16 fade-in">
+  <div class="flex items-center gap-3 mb-5">
+    <span class="text-3xl">🧹</span>
+    <div>
+      <h2 class="text-3xl font-bold">Pipeline 4 — Reconcile & Cleanup</h2>
+      <p class="text-slate-400">Consolidar duplicados sin perder historia.</p>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <p class="text-slate-300 mb-4">
+      Un mismo caso puede entrar dos veces: una por email inicial del juzgado y otra por un fallo con radicado distinto que resulta ser el mismo proceso.
+      El <strong>reconcile</strong> (<code class="mono text-brand-400">services/reconcile_db.py</code>) detecta estos duplicados y los fusiona preservando documentos, emails y audit log.
+    </p>
+
+<pre class="mermaid">
+flowchart TD
+  START[Trigger reconcile] --> BK[💾 Backup DB<br/>pre-sprint automático]
+  BK --> WAL[🔄 WAL checkpoint<br/>TRUNCATE]
+  WAL --> SCAN[Escaneo por rad23 canónico]
+  SCAN --> GROUP[Grupos de casos con<br/>mismo radicado canónico]
+  GROUP --> KEEP[Elegir case_id más antiguo<br/>= canónico]
+  KEEP --> MOVE[Mover docs, emails, eventos<br/>del duplicado → canónico]
+  MOVE --> MARK[Marcar duplicado<br/>processing_status=DUPLICATE_MERGED]
+  MARK --> AUDIT[Entrada en audit_log<br/>con source_case_id]
+  AUDIT --> DONE[✅ Consolidación completa]
+  classDef local fill:#312e81,stroke:#818cf8,color:#fff
+  class START,BK,WAL,SCAN,GROUP,KEEP,MOVE,MARK,AUDIT,DONE local
+</pre>
+  </div>
+
+  <div class="grid md:grid-cols-3 gap-4 mb-6">
+    <div class="card">
+      <div class="font-semibold mb-2 flex items-center gap-2">💾 Seguridad</div>
+      <ul class="text-xs text-slate-400 space-y-1">
+        <li>• Backup pre-operación</li>
+        <li>• WAL checkpoint TRUNCATE</li>
+        <li>• Transacción atómica</li>
+        <li>• Rollback si falla</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="font-semibold mb-2 flex items-center gap-2">🔗 Preservación</div>
+      <ul class="text-xs text-slate-400 space-y-1">
+        <li>• Documentos → canónico</li>
+        <li>• Emails → canónico</li>
+        <li>• Audit log preservado</li>
+        <li>• Token usage intacto</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="font-semibold mb-2 flex items-center gap-2">📊 Trazabilidad</div>
+      <ul class="text-xs text-slate-400 space-y-1">
+        <li>• source_case_id en cada merge</li>
+        <li>• Reversible desde audit_log</li>
+        <li>• Reporte por sprint</li>
+        <li>• Stats: 108 merged en v5.4</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="text-sm text-slate-400">
+    💡 <strong>Por qué esto importa:</strong> la Gobernación maneja ~350 tutelas/año. Sin reconcile, el cuadro final tendría
+    duplicados que confunden el seguimiento de impugnaciones e incidentes de desacato.
+  </p>
+</section>
+
+<section id="pipeline-5" class="section-anchor mb-16 fade-in" x-data="{ score: 0.35 }">
+  <div class="flex items-center gap-3 mb-5">
+    <span class="text-3xl">👁️</span>
+    <div>
+      <h2 class="text-3xl font-bold">Pipeline 5 — Forense Visual v5.5</h2>
+      <p class="text-slate-400">Detección determinista de sellos, logos y watermarks. Sin IA.</p>
+    </div>
+  </div>
+
+  <div class="card mb-6 border-green-500/30">
+    <div class="flex items-start gap-3">
+      <span class="text-2xl">🆕</span>
+      <div>
+        <h3 class="font-semibold mb-2">¿Por qué un analizador visual?</h3>
+        <p class="text-slate-300 text-sm">
+          Mucha información crítica de una tutela vive fuera del texto: el <strong>logo del juzgado</strong> en el
+          header, el <strong>sello de radicación</strong> con fecha rotada, el <strong>watermark "FOREST" diagonal</strong>,
+          la <strong>firma del abogado proyector</strong>. Un extractor de texto puro los pierde.
+          El <code class="mono text-brand-400">pdf_visual_analyzer.py</code> los detecta con heurística determinista
+          + hashing perceptual — <strong>cero IA, cero llamadas externas</strong>.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3">Flujo del análisis visual</h3>
+<pre class="mermaid">
+flowchart LR
+  PDF[📄 PDF] --> F[fitz PyMuPDF]
+  F --> IMG[🖼️ Imágenes<br/>embebidas]
+  F --> ANN[📌 Annotations<br/>stamp/freetext/sig]
+  F --> ROT[🔄 Texto rotado<br/>ángulo ≠ 0]
+  IMG --> PH[pHash perceptual<br/>8×8 gris]
+  PH --> CLS[Clasificador heurístico<br/>forma · posición · aspecto]
+  CLS --> L[logo]
+  CLS --> S[sello]
+  CLS --> W[watermark]
+  CLS --> FI[firma]
+  ANN --> ST[stamp / sig]
+  ROT --> SR[sello radicación]
+  L --> SC[🎯 institutional_score 0-1]
+  S --> SC
+  W --> SC
+  FI --> SC
+  ST --> SC
+  SR --> SC
+  SC --> IR[Zona VISUAL<br/>en el IR]
+  classDef local fill:#312e81,stroke:#818cf8,color:#fff
+  class PDF,F,IMG,ANN,ROT,PH,CLS,L,S,W,FI,ST,SR,SC,IR local
+</pre>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mb-6">
+    <div class="card">
+      <div class="font-semibold mb-2">🏢 Logos institucionales</div>
+      <p class="text-xs text-slate-400 mb-2">
+        Imágenes que se <strong>repiten en ≥2 páginas</strong> con el mismo pHash = membrete oficial.
+      </p>
+      <div class="mono text-xs bg-slate-950/60 border border-slate-800 rounded p-2">
+        phash_counter[phash] >= 2 → logo_repetido
+      </div>
+    </div>
+    <div class="card">
+      <div class="font-semibold mb-2">🔖 Sellos circulares</div>
+      <p class="text-xs text-slate-400 mb-2">
+        Aspecto <code class="mono">0.8 ≤ w/h ≤ 1.25</code>, área &lt; 6% de página, esquina o pie.
+      </p>
+      <div class="mono text-xs bg-slate-950/60 border border-slate-800 rounded p-2">
+        aspect≈1 · area_ratio&lt;.06 · bottom_page
+      </div>
+    </div>
+    <div class="card">
+      <div class="font-semibold mb-2">💧 Watermarks</div>
+      <p class="text-xs text-slate-400 mb-2">
+        Imagen grande (&gt;40% de la página) que sugiere marca de agua diagonal o sello de agua.
+      </p>
+      <div class="mono text-xs bg-slate-950/60 border border-slate-800 rounded p-2">
+        area_ratio > 0.4 · aspect ∈ [0.5, 2.0]
+      </div>
+    </div>
+    <div class="card">
+      <div class="font-semibold mb-2">✍️ Firmas manuscritas</div>
+      <p class="text-xs text-slate-400 mb-2">
+        Imagen <strong>alargada horizontal</strong> en el pie de página (escaneo de rúbrica).
+      </p>
+      <div class="mono text-xs bg-slate-950/60 border border-slate-800 rounded p-2">
+        aspect > 2.0 · area_ratio &lt; .1 · bottom
+      </div>
+    </div>
+    <div class="card">
+      <div class="font-semibold mb-2">📌 Annotations PDF</div>
+      <p class="text-xs text-slate-400 mb-2">
+        Stamps, firmas digitales, FreeText: objetos PDF con metadata explícita.
+      </p>
+      <div class="mono text-xs bg-slate-950/60 border border-slate-800 rounded p-2">
+        annot.type ∈ {stamp, freetext, sig}
+      </div>
+    </div>
+    <div class="card">
+      <div class="font-semibold mb-2">🔄 Texto rotado</div>
+      <p class="text-xs text-slate-400 mb-2">
+        Líneas con <code class="mono">dir ≠ (1,0)</code>. Típico del sello de radicación del juzgado.
+      </p>
+      <div class="mono text-xs bg-slate-950/60 border border-slate-800 rounded p-2">
+        abs(angle) > 5° → rotated_snippet
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3">Widget: institutional_score</h3>
+    <p class="text-sm text-slate-400 mb-4">
+      Combina todas las señales en un puntaje 0-1. Mueve el slider para ver cómo se interpreta:
+    </p>
+    <div class="flex items-center gap-4 mb-4">
+      <input type="range" min="0" max="100" x-model.number="score" @input="score = $event.target.value/100" class="flex-1 accent-indigo-500">
+      <div class="text-2xl font-bold text-brand-400 w-20 text-right mono" x-text="Number(score).toFixed(2)"></div>
+    </div>
+    <template x-if="score < 0.2">
+      <div class="rounded-lg border border-slate-600 bg-slate-800/40 p-4">
+        <strong class="text-slate-300">📄 Documento común</strong>
+        <p class="text-xs text-slate-400 mt-1">Sin señales institucionales fuertes. Puede ser un email, un texto plano o un PDF sin membretes. Procede con extracción estándar.</p>
+      </div>
+    </template>
+    <template x-if="score >= 0.2 && score < 0.5">
+      <div class="rounded-lg border border-yellow-500/40 bg-yellow-500/10 p-4">
+        <strong class="text-yellow-400">⚠️ Oficial moderado</strong>
+        <p class="text-xs text-slate-400 mt-1">Tiene logo repetido o algunas señales pero no todas. Típico de autos de trámite del juzgado. Confiable para extracción pero revisar si hay dudas.</p>
+      </div>
+    </template>
+    <template x-if="score >= 0.5 && score < 0.8">
+      <div class="rounded-lg border border-green-500/40 bg-green-500/10 p-4">
+        <strong class="text-green-400">✅ Oficial fuerte</strong>
+        <p class="text-xs text-slate-400 mt-1">Logo + sello + firma. Documento oficial con alta probabilidad (sentencia, auto admisorio). Usar para verificación cruzada de campos.</p>
+      </div>
+    </template>
+    <template x-if="score >= 0.8">
+      <div class="rounded-lg border border-brand-500/40 bg-brand-500/10 p-4">
+        <strong class="text-brand-400">⭐ Institucional total</strong>
+        <p class="text-xs text-slate-400 mt-1">Todas las señales presentes. Sentencia firmada con sello de radicación, logo oficial, annotations digitales. Documento más confiable del caso.</p>
+      </div>
+    </template>
+  </div>
+
+  <p class="text-sm text-slate-400">
+    💡 <strong>Por qué esto importa:</strong> distingue un escrito de tutela del accionante (sin sellos) de la sentencia oficial
+    del juzgado (con membrete + sello + firma). Alimenta al regex con señales que antes se perdían.
+  </p>
+</section>
+
+<section id="privacy" class="section-anchor mb-16 fade-in">
+  <div class="flex items-center gap-3 mb-5">
+    <span class="text-3xl">🔐</span>
+    <div>
+      <h2 class="text-3xl font-bold">Capa PII (v5.3)</h2>
+      <p class="text-slate-400">Protección de datos personales antes de salir de la máquina.</p>
+    </div>
+  </div>
+
+  <div class="card mb-6 border-brand-500/30">
+    <div class="flex items-start gap-3">
+      <span class="text-2xl">🔒</span>
+      <p class="text-slate-200">
+        <strong>Los datos del accionante nunca salen sin anonimizar.</strong> Cumplimiento
+        Ley 1581/2012 de Habeas Data y DPA con Anthropic.
+      </p>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3">Flujo de redacción + rehidratación</h3>
+<pre class="mermaid">
+sequenceDiagram
+  participant D as Documento
+  participant R as Redactor<br/>(Presidio + regex)
+  participant T as Token map<br/>(local)
+  participant AI as IA externa<br/>(DeepSeek/Haiku)
+  participant H as Rehidratador
+  D->>R: texto con PII<br/>"Juan Pérez CC 1234"
+  R->>T: genera tokens<br/>{PERSON_1, CC_1}
+  R-->>AI: "[PERSON_1] CC [CC_1]"
+  AI-->>R: respuesta con tokens
+  R->>H: cruza con token map
+  H-->>D: texto final con PII<br/>restaurado localmente
+</pre>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mb-6">
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold">Modo: selective</h4>
+        <span class="badge bg-green-500/20 text-green-400">default</span>
+      </div>
+      <p class="text-sm text-slate-300 mb-2">Redacta lo crítico:</p>
+      <ul class="text-xs text-slate-400 space-y-0.5 mb-3">
+        <li>✓ Nombres completos de personas</li>
+        <li>✓ Cédulas, NUIPs</li>
+        <li>✓ Direcciones residenciales</li>
+        <li>✓ Teléfonos, emails personales</li>
+      </ul>
+      <div class="text-sm"><strong class="text-green-400">99.2%</strong> <span class="text-slate-400">reducción PII</span></div>
+    </div>
+    <div class="card">
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold">Modo: aggressive</h4>
+        <span class="badge bg-orange-500/20 text-orange-400">casos sensibles</span>
+      </div>
+      <p class="text-sm text-slate-300 mb-2">Todo lo anterior +</p>
+      <ul class="text-xs text-slate-400 space-y-0.5 mb-3">
+        <li>✓ Fechas específicas</li>
+        <li>✓ Nombres de juzgados</li>
+        <li>✓ Rangos de edad</li>
+        <li>✓ Ubicaciones geográficas</li>
+      </ul>
+      <div class="text-sm"><strong class="text-orange-400">99.8%</strong> <span class="text-slate-400">reducción PII (menor calidad semántica)</span></div>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3">Zero-PII Gate</h3>
+    <p class="text-sm text-slate-300 mb-3">
+      Antes de cada envío a IA externa, un <strong>gate de validación</strong> escanea el payload en busca de PII residual.
+      En <code class="mono">PII_GATE_STRICT=true</code> el envío se bloquea; en modo default se emite warning y se continúa.
+    </p>
+    <div class="mono text-xs bg-slate-950/60 border border-slate-800 rounded p-3 text-slate-300">
+      zero_pii_gate.scan(redacted_payload) → { safe: bool, residual_pii: [...] }
+    </div>
+  </div>
+
+  <p class="text-sm text-slate-400">
+    💡 <strong>Por qué esto importa:</strong> un accionante es una persona con derechos.
+    La anonimización no es un capricho técnico — es un requisito legal y ético.
+  </p>
+</section>
+
+<section id="campos" class="section-anchor mb-16 fade-in" x-data="camposTable()">
+  <div class="flex items-center gap-3 mb-5">
+    <span class="text-3xl">📋</span>
+    <div>
+      <h2 class="text-3xl font-bold">Protocolo de 28 Campos</h2>
+      <p class="text-slate-400">El cuadro final del seguimiento de tutelas.</p>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <p class="text-slate-300 mb-4">
+      El objetivo del agente es llenar un cuadro estandarizado de <strong>28 campos</strong> por cada caso.
+      Estos campos vienen del protocolo de la Secretaría de Educación. Cada uno tiene una fuente preferente:
+      <strong>regex</strong> (determinista), <strong>cognición local</strong> (sin IA), o <strong>IA</strong> (solo si las otras no alcanzan).
+    </p>
+
+    <div class="flex flex-wrap gap-2 mb-4">
+      <button @click="filterGroup = 'all'" :class="filterGroup === 'all' ? 'bg-brand-500 text-white' : 'bg-slate-800 text-slate-300'" class="px-3 py-1.5 rounded text-xs font-medium hover:bg-brand-600 transition">Todos (28)</button>
+      <button @click="filterGroup = 'identidad'" :class="filterGroup === 'identidad' ? 'bg-brand-500 text-white' : 'bg-slate-800 text-slate-300'" class="px-3 py-1.5 rounded text-xs font-medium hover:bg-brand-600 transition">Identidad (4)</button>
+      <button @click="filterGroup = 'partes'" :class="filterGroup === 'partes' ? 'bg-brand-500 text-white' : 'bg-slate-800 text-slate-300'" class="px-3 py-1.5 rounded text-xs font-medium hover:bg-brand-600 transition">Partes (4)</button>
+      <button @click="filterGroup = 'contenido'" :class="filterGroup === 'contenido' ? 'bg-brand-500 text-white' : 'bg-slate-800 text-slate-300'" class="px-3 py-1.5 rounded text-xs font-medium hover:bg-brand-600 transition">Contenido (3)</button>
+      <button @click="filterGroup = 'ubicacion'" :class="filterGroup === 'ubicacion' ? 'bg-brand-500 text-white' : 'bg-slate-800 text-slate-300'" class="px-3 py-1.5 rounded text-xs font-medium hover:bg-brand-600 transition">Ubicación (3)</button>
+      <button @click="filterGroup = 'instancia1'" :class="filterGroup === 'instancia1' ? 'bg-brand-500 text-white' : 'bg-slate-800 text-slate-300'" class="px-3 py-1.5 rounded text-xs font-medium hover:bg-brand-600 transition">1ª instancia (3)</button>
+      <button @click="filterGroup = 'impugnacion'" :class="filterGroup === 'impugnacion' ? 'bg-brand-500 text-white' : 'bg-slate-800 text-slate-300'" class="px-3 py-1.5 rounded text-xs font-medium hover:bg-brand-600 transition">Impugnación (4)</button>
+      <button @click="filterGroup = 'instancia2'" :class="filterGroup === 'instancia2' ? 'bg-brand-500 text-white' : 'bg-slate-800 text-slate-300'" class="px-3 py-1.5 rounded text-xs font-medium hover:bg-brand-600 transition">2ª instancia (2)</button>
+      <button @click="filterGroup = 'desacato'" :class="filterGroup === 'desacato' ? 'bg-brand-500 text-white' : 'bg-slate-800 text-slate-300'" class="px-3 py-1.5 rounded text-xs font-medium hover:bg-brand-600 transition">Desacato (8)</button>
+      <button @click="filterGroup = 'observaciones'" :class="filterGroup === 'observaciones' ? 'bg-brand-500 text-white' : 'bg-slate-800 text-slate-300'" class="px-3 py-1.5 rounded text-xs font-medium hover:bg-brand-600 transition">Observaciones (1)</button>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="border-b border-slate-700 text-left text-slate-400 text-xs uppercase">
+          <tr>
+            <th class="py-2 pr-3">Campo</th>
+            <th class="py-2 pr-3">Grupo</th>
+            <th class="py-2 pr-3">Fuente</th>
+            <th class="py-2">Ejemplo</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+          <template x-for="f in campos.filter(c => filterGroup === 'all' || c.grupo === filterGroup)" :key="f.campo">
+            <tr class="hover:bg-slate-800/40">
+              <td class="py-2 pr-3 mono text-brand-400 text-xs" x-text="f.campo"></td>
+              <td class="py-2 pr-3">
+                <span class="badge bg-slate-700/60 text-slate-300" x-text="f.grupoLabel"></span>
+              </td>
+              <td class="py-2 pr-3">
+                <span :class="{
+                  'bg-brand-500/20 text-brand-400': f.fuente === 'regex',
+                  'bg-green-500/20 text-green-400': f.fuente === 'cognición',
+                  'bg-purple-500/20 text-purple-400': f.fuente === 'IA',
+                  'bg-slate-700 text-slate-300': f.fuente === 'mixto'
+                }" class="badge" x-text="f.fuente"></span>
+              </td>
+              <td class="py-2 text-xs text-slate-400" x-text="f.ejemplo"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-3 gap-3">
+    <div class="card text-center">
+      <div class="donut mx-auto mb-2" style="--p:50; --c:#6366f1"><span>50%</span></div>
+      <div class="font-semibold text-brand-400">14 campos</div>
+      <div class="text-xs text-slate-400">por regex determinista</div>
+    </div>
+    <div class="card text-center">
+      <div class="donut mx-auto mb-2" style="--p:28; --c:#10b981"><span>28%</span></div>
+      <div class="font-semibold text-green-400">8 campos</div>
+      <div class="text-xs text-slate-400">por cognición local</div>
+    </div>
+    <div class="card text-center">
+      <div class="donut mx-auto mb-2" style="--p:22; --c:#a855f7"><span>22%</span></div>
+      <div class="font-semibold text-purple-400">6 campos</div>
+      <div class="text-xs text-slate-400">por IA (semánticos)</div>
+    </div>
+  </div>
+
+  <p class="text-sm text-slate-400 mt-6">
+    💡 <strong>Por qué esto importa:</strong> cuando un campo falta, el log indica exactamente qué fase debió haberlo obtenido.
+    Esto hace auditables las fallas y permite mejoras quirúrgicas (más regex vs. mejor prompt IA).
+  </p>
+</section>
+
+<script>
+function camposTable() {
+  return {
+    filterGroup: 'all',
+    campos: [
+      { campo: 'radicado_23_digitos', grupo: 'identidad', grupoLabel: 'Identidad', fuente: 'regex', ejemplo: '68001400902720260003400' },
+      { campo: 'radicado_forest', grupo: 'identidad', grupoLabel: 'Identidad', fuente: 'regex', ejemplo: '3410516' },
+      { campo: 'abogado_responsable', grupo: 'identidad', grupoLabel: 'Identidad', fuente: 'regex', ejemplo: 'Juan Diego Cruz Lizcano' },
+      { campo: 'fecha_ingreso', grupo: 'identidad', grupoLabel: 'Identidad', fuente: 'regex', ejemplo: '15/03/2026' },
+      { campo: 'accionante', grupo: 'partes', grupoLabel: 'Partes', fuente: 'cognición', ejemplo: 'Paola Andrea García Núñez' },
+      { campo: 'accionados', grupo: 'partes', grupoLabel: 'Partes', fuente: 'cognición', ejemplo: 'Gobernación de Santander, SED' },
+      { campo: 'vinculados', grupo: 'partes', grupoLabel: 'Partes', fuente: 'cognición', ejemplo: 'Rector IE Normal Superior' },
+      { campo: 'ciudad', grupo: 'partes', grupoLabel: 'Partes', fuente: 'regex', ejemplo: 'Bucaramanga' },
+      { campo: 'asunto', grupo: 'contenido', grupoLabel: 'Contenido', fuente: 'cognición', ejemplo: 'Traslado docente por salud' },
+      { campo: 'derecho_vulnerado', grupo: 'contenido', grupoLabel: 'Contenido', fuente: 'cognición', ejemplo: 'Salud, trabajo en condiciones dignas' },
+      { campo: 'pretensiones', grupo: 'contenido', grupoLabel: 'Contenido', fuente: 'cognición', ejemplo: 'Ordenar reubicación laboral' },
+      { campo: 'juzgado', grupo: 'ubicacion', grupoLabel: 'Ubicación', fuente: 'regex', ejemplo: 'Juzgado 9 Civil del Circuito de Bucaramanga' },
+      { campo: 'oficina_responsable', grupo: 'ubicacion', grupoLabel: 'Ubicación', fuente: 'IA', ejemplo: 'Desarrollo Docente' },
+      { campo: 'estado', grupo: 'ubicacion', grupoLabel: 'Ubicación', fuente: 'mixto', ejemplo: 'FALLADO / IMPUGNADO / DESACATADO' },
+      { campo: 'sentido_fallo_1st', grupo: 'instancia1', grupoLabel: '1ª inst.', fuente: 'IA', ejemplo: 'CONCEDE / NIEGA / IMPROCEDENTE' },
+      { campo: 'fecha_fallo_1st', grupo: 'instancia1', grupoLabel: '1ª inst.', fuente: 'regex', ejemplo: '28/03/2026' },
+      { campo: 'fecha_respuesta', grupo: 'instancia1', grupoLabel: '1ª inst.', fuente: 'regex', ejemplo: '22/03/2026' },
+      { campo: 'impugnacion', grupo: 'impugnacion', grupoLabel: 'Impugnación', fuente: 'cognición', ejemplo: 'SI / NO' },
+      { campo: 'quien_impugno', grupo: 'impugnacion', grupoLabel: 'Impugnación', fuente: 'IA', ejemplo: 'Accionante / Accionado' },
+      { campo: 'forest_impugnacion', grupo: 'impugnacion', grupoLabel: 'Impugnación', fuente: 'regex', ejemplo: '3415892' },
+      { campo: 'juzgado_2nd', grupo: 'impugnacion', grupoLabel: 'Impugnación', fuente: 'regex', ejemplo: 'Tribunal Superior Bucaramanga' },
+      { campo: 'sentido_fallo_2nd', grupo: 'instancia2', grupoLabel: '2ª inst.', fuente: 'IA', ejemplo: 'CONFIRMA / REVOCA / MODIFICA' },
+      { campo: 'fecha_fallo_2nd', grupo: 'instancia2', grupoLabel: '2ª inst.', fuente: 'regex', ejemplo: '15/04/2026' },
+      { campo: 'incidente', grupo: 'desacato', grupoLabel: 'Desacato', fuente: 'cognición', ejemplo: 'Abierto / Cerrado / N/A' },
+      { campo: 'fecha_apertura_incidente', grupo: 'desacato', grupoLabel: 'Desacato', fuente: 'regex', ejemplo: '02/05/2026' },
+      { campo: 'responsable_desacato', grupo: 'desacato', grupoLabel: 'Desacato', fuente: 'IA', ejemplo: 'Secretario de Educación' },
+      { campo: 'decision_incidente', grupo: 'desacato', grupoLabel: 'Desacato', fuente: 'IA', ejemplo: 'Sanciona / Archiva / Requiere' },
+      { campo: 'observaciones', grupo: 'observaciones', grupoLabel: 'Obs.', fuente: 'cognición', ejemplo: 'Pendiente cumplimiento al 90%' }
+    ]
+  }
+}
+</script>
+
+<section id="router" class="section-anchor mb-16 fade-in">
+  <div class="flex items-center gap-3 mb-5">
+    <span class="text-3xl">🧭</span>
+    <div>
+      <h2 class="text-3xl font-bold">Smart Router</h2>
+      <p class="text-slate-400">Routing inteligente entre proveedores IA con fallback automático.</p>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <p class="text-slate-300 mb-4">
+      Cuando la Fase 4 necesita IA, el <code class="mono text-brand-400">smart_router.py</code> decide qué proveedor usar.
+      El <strong>flip v5.4.3</strong> puso a <strong>DeepSeek primary</strong> (barato, ultra-rápido) y dejó a <strong>Claude Haiku 4.5</strong> como fallback pagado.
+    </p>
+
+<pre class="mermaid">
+flowchart TD
+  R[Petición IA] --> P{Tipo de tarea}
+  P -->|extraction| D1[DeepSeek chat]
+  P -->|pdf_multimodal| D1
+  P -->|classification| D1
+  P -->|reasoning| D1
+  D1 -->|éxito| OK[✅ Respuesta]
+  D1 -->|Connection error<br/>timeout<br/>rate limit| FB[Claude Haiku 4.5<br/>fallback]
+  FB -->|éxito| OK
+  FB -->|fallo| LOG[📝 log ai_error<br/>caso → REVISION]
+  classDef primary fill:#1e40af,stroke:#60a5fa,color:#fff
+  classDef fallback fill:#7c2d12,stroke:#fb923c,color:#fff
+  class D1 primary
+  class FB fallback
+</pre>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4 mb-6">
+    <div class="card border-blue-500/30">
+      <div class="flex items-center justify-between mb-3">
+        <h4 class="font-semibold">DeepSeek · primary</h4>
+        <span class="badge bg-blue-500/20 text-blue-400">137 llamadas</span>
+      </div>
+      <ul class="text-sm text-slate-300 space-y-1">
+        <li>💰 <strong>$0.28/M tokens input</strong></li>
+        <li>⚡ Latencia 2-4s</li>
+        <li>🌍 Endpoint CN (habeas data via PII redacción)</li>
+        <li>📏 Context window 64K tokens</li>
+        <li>🎯 Fuerte en español jurídico</li>
+      </ul>
+    </div>
+    <div class="card border-orange-500/30">
+      <div class="flex items-center justify-between mb-3">
+        <h4 class="font-semibold">Claude Haiku 4.5 · fallback</h4>
+        <span class="badge bg-orange-500/20 text-orange-400">2 fallbacks</span>
+      </div>
+      <ul class="text-sm text-slate-300 space-y-1">
+        <li>💰 <strong>$1.00/M tokens input</strong></li>
+        <li>⚡ Latencia 1-2s</li>
+        <li>🔐 DPA Anthropic vigente</li>
+        <li>📏 Context window 200K tokens</li>
+        <li>🎯 Respaldo cuando DeepSeek falla</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3">Routing chains por tarea</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="border-b border-slate-700 text-left text-slate-400 text-xs uppercase">
+          <tr>
+            <th class="py-2 pr-3">Tarea</th>
+            <th class="py-2 pr-3">Primary</th>
+            <th class="py-2">Fallback</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+          <tr><td class="py-2 pr-3 mono text-brand-400">extraction</td><td class="py-2 pr-3">deepseek-chat</td><td class="py-2">claude-haiku-4-5-20251001</td></tr>
+          <tr><td class="py-2 pr-3 mono text-brand-400">classification</td><td class="py-2 pr-3">deepseek-chat</td><td class="py-2">claude-haiku-4-5-20251001</td></tr>
+          <tr><td class="py-2 pr-3 mono text-brand-400">reasoning</td><td class="py-2 pr-3">deepseek-chat</td><td class="py-2">claude-haiku-4-5-20251001</td></tr>
+          <tr><td class="py-2 pr-3 mono text-brand-400">pdf_multimodal</td><td class="py-2 pr-3">deepseek-chat</td><td class="py-2">claude-haiku-4-5-20251001</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="text-sm text-slate-400">
+    💡 <strong>Por qué esto importa:</strong> cuando DeepSeek tiene caídas regionales, el sistema no se detiene.
+    El fallback es automático y transparente.
+  </p>
+</section>
+
+<section id="metricas" class="section-anchor mb-16 fade-in">
+  <div class="flex items-center gap-3 mb-5">
+    <span class="text-3xl">📊</span>
+    <div>
+      <h2 class="text-3xl font-bold">Métricas del Experimento</h2>
+      <p class="text-slate-400">Datos reales de la corrida v5.5 sobre 197 casos.</p>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-3 gap-3 mb-6">
+    <div class="card text-center">
+      <div class="text-3xl font-bold text-brand-400">197</div>
+      <div class="text-sm text-slate-400">casos procesados</div>
+      <div class="text-xs text-slate-500 mt-1">100% completados</div>
+    </div>
+    <div class="card text-center">
+      <div class="text-3xl font-bold text-brand-400">10h</div>
+      <div class="text-sm text-slate-400">duración total (v5.4)</div>
+      <div class="text-xs text-slate-500 mt-1">88.6s promedio/caso</div>
+    </div>
+    <div class="card text-center">
+      <div class="text-3xl font-bold text-green-400">3x</div>
+      <div class="text-sm text-slate-400">más rápido en v5.5</div>
+      <div class="text-xs text-slate-500 mt-1">~26s promedio/caso</div>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-4 gap-3 mb-6">
+    <div class="card text-center"><div class="text-2xl font-bold text-brand-400">1,528</div><div class="text-xs text-slate-400">emails ingresados</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-brand-400">5,194</div><div class="text-xs text-slate-400">documentos</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-purple-400">137</div><div class="text-xs text-slate-400">llamadas DeepSeek</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-orange-400">2</div><div class="text-xs text-slate-400">fallbacks Haiku</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-green-400">0</div><div class="text-xs text-slate-400">errores fatales</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-green-400">0</div><div class="text-xs text-slate-400">OOM / kills</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-yellow-400">6</div><div class="text-xs text-slate-400">warnings F9</div></div>
+    <div class="card text-center"><div class="text-2xl font-bold text-green-400">9/10</div><div class="text-xs text-slate-400">DOCX legacy recuperados</div></div>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-4">Hallazgos y mitigaciones v5.5</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="border-b border-slate-700 text-left text-slate-400 text-xs uppercase">
+          <tr>
+            <th class="py-2 pr-3">Hallazgo</th>
+            <th class="py-2 pr-3">Cantidad</th>
+            <th class="py-2">Mitigación aplicada</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+          <tr>
+            <td class="py-2 pr-3">BODY truncado (&gt; 30K chars)</td>
+            <td class="py-2 pr-3"><span class="badge bg-yellow-500/20 text-yellow-400">194</span></td>
+            <td class="py-2 text-slate-300">Límite subido a 150K + zona FOOTER_TAIL garantizada</td>
+          </tr>
+          <tr>
+            <td class="py-2 pr-3">DOCX/.doc no legibles</td>
+            <td class="py-2 pr-3"><span class="badge bg-red-500/20 text-red-400">33</span></td>
+            <td class="py-2 text-slate-300">Cadena fallback python-docx → LibreOffice → antiword → olefile. 9/10 recuperados</td>
+          </tr>
+          <tr>
+            <td class="py-2 pr-3">Forensic leía solo 8K / 3 páginas</td>
+            <td class="py-2 pr-3"><span class="badge bg-yellow-500/20 text-yellow-400">~50% docs largos</span></td>
+            <td class="py-2 text-slate-300">v5.5 lee 150K chars recorriendo todas las páginas</td>
+          </tr>
+          <tr>
+            <td class="py-2 pr-3">F9: rad23 duplicado</td>
+            <td class="py-2 pr-3"><span class="badge bg-yellow-500/20 text-yellow-400">6</span></td>
+            <td class="py-2 text-slate-300">Script <code class="mono text-xs">review_f9_candidates.py</code> pendiente — revisión humana</td>
+          </tr>
+          <tr>
+            <td class="py-2 pr-3">Señales visuales ignoradas</td>
+            <td class="py-2 pr-3"><span class="badge bg-red-500/20 text-red-400">100%</span></td>
+            <td class="py-2 text-slate-300">Nuevo <code class="mono text-xs">pdf_visual_analyzer.py</code> — logos/sellos/firmas detectados</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mb-6">
+    <h3 class="font-semibold text-lg mb-3">Distribución de fuentes de campos</h3>
+    <p class="text-sm text-slate-400 mb-4">
+      De los 28 campos del protocolo, así se reparten las fuentes en promedio:
+    </p>
+    <div class="flex items-center justify-center gap-8 flex-wrap">
+      <div class="text-center">
+        <div class="donut" style="--p:50; --c:#6366f1"><span>14</span></div>
+        <div class="text-sm font-semibold text-brand-400 mt-2">Regex</div>
+        <div class="text-xs text-slate-500">determinista local</div>
+      </div>
+      <div class="text-center">
+        <div class="donut" style="--p:28; --c:#10b981"><span>8</span></div>
+        <div class="text-sm font-semibold text-green-400 mt-2">Cognición</div>
+        <div class="text-xs text-slate-500">semántica local</div>
+      </div>
+      <div class="text-center">
+        <div class="donut" style="--p:22; --c:#a855f7"><span>6</span></div>
+        <div class="text-sm font-semibold text-purple-400 mt-2">IA</div>
+        <div class="text-xs text-slate-500">razonamiento externo</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="text-sm text-slate-400">
+    💡 <strong>Por qué esto importa:</strong> el objetivo de v5.5 no es reducir las llamadas IA a cero —
+    es reducir los casos donde la IA es <em>necesaria</em> porque la inteligencia local no alcanzó. Cada mejora
+    determinista (zona nueva, pattern nuevo, fallback nuevo) mueve campos de la columna IA a la columna local.
+  </p>
+</section>
+
+<footer class="mt-20 pt-8 border-t border-slate-800 text-sm text-slate-500">
+  <p>Tutelas Manager v5.5 · Gobernación de Santander · Secretaría de Educación</p>
+  <p class="text-xs mt-1">Documento técnico-didáctico · Generado 2026-04-23</p>
+</footer>
+
+</main>
+
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+    primaryColor: '#312e81', primaryTextColor: '#e0e7ff', primaryBorderColor: '#6366f1',
+    lineColor: '#818cf8', secondaryColor: '#581c87', tertiaryColor: '#1e293b'
+  }, securityLevel: 'loose' });
+
+  // Scroll-spy
+  const sections = document.querySelectorAll('section[id]');
+  const navLinks = document.querySelectorAll('.nav-link');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        const id = e.target.id;
+        navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
+      }
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+  sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>
