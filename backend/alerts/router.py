@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 from backend.database.database import get_db
 from backend.alerts.detector import run_detection, get_alerts, dismiss_alert, get_alert_counts, mark_alerts_seen
+from backend.alerts.early_warning import run_early_warning, score_case, LEVEL_RED, LEVEL_YELLOW
+from backend.database.models import Case
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -40,3 +42,44 @@ def api_mark_seen(db: Session = Depends(get_db)):
 def api_dismiss(alert_id: int, db: Session = Depends(get_db)):
     dismiss_alert(db, alert_id)
     return {"message": "Alerta descartada"}
+
+
+# =============================================================
+# v6.0 Propuesta 9.4 — Early Warning System (semáforo institucional)
+# =============================================================
+
+@router.get("/early-warning")
+def api_early_warning(
+    level: str | None = Query(None, description="Filtrar por nivel: ROJO / AMARILLO / VERDE"),
+    origen: str | None = Query(None, description="Filtrar por origen: TUTELA / INCIDENTE_HUERFANO / AMBIGUO"),
+    db: Session = Depends(get_db),
+):
+    """Dashboard de alertas tempranas: semáforo de riesgo por caso.
+
+    Retorna conteos por nivel (ROJO/AMARILLO/VERDE), lista ordenada de
+    casos críticos con razones explícitas, y metadata operativa.
+    """
+    summary = run_early_warning(db)
+    payload = summary.to_dict()
+    if level:
+        level = level.upper()
+        if level == LEVEL_RED:
+            payload["filtered"] = {"level": LEVEL_RED, "cases": payload["red"]}
+        elif level == LEVEL_YELLOW:
+            payload["filtered"] = {"level": LEVEL_YELLOW, "cases": payload["yellow"]}
+        else:
+            payload["filtered"] = {"level": level, "cases": []}
+    if origen:
+        origen = origen.upper()
+        payload["red"] = [c for c in payload["red"] if c["origen"] == origen]
+        payload["yellow"] = [c for c in payload["yellow"] if c["origen"] == origen]
+    return payload
+
+
+@router.get("/early-warning/{case_id}")
+def api_early_warning_case(case_id: int, db: Session = Depends(get_db)):
+    """Score detallado de un caso individual con razones."""
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        return {"error": "caso no encontrado"}, 404
+    return score_case(case).to_dict()

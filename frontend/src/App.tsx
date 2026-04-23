@@ -18,6 +18,7 @@ import {
   Brain,
   Wrench,
   Sparkles,
+  AlertTriangle,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 
@@ -33,6 +34,7 @@ import Cuadro from './pages/Cuadro'
 import Intelligence from './pages/Intelligence'
 import AgentTools from './pages/AgentTools'
 import CleanupPanel from './pages/CleanupPanel'
+import EarlyWarning from './pages/EarlyWarning'
 import Login from './pages/Login'
 import ProgressModal from './components/ProgressModal'
 import NotificationCenter from './components/NotificationCenter'
@@ -47,6 +49,7 @@ const navItems = [
   { to: '/cases', label: 'Tutelas', icon: Scale },
   { to: '/cuadro', label: 'Cuadro', icon: Table2 },
   { to: '/seguimiento', label: 'Seguimiento', icon: ShieldAlert },
+  { to: '/alertas', label: 'Alertas', icon: AlertTriangle },
   { to: '/emails', label: 'Correos', icon: Mail },
   { to: '/intelligence', label: 'Inteligencia', icon: Brain },
   { to: '/reports', label: 'Reportes', icon: FileSpreadsheet },
@@ -258,6 +261,7 @@ export default function App() {
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/seguimiento" element={<Seguimiento />} />
                   <Route path="/cleanup" element={<CleanupPanel />} />
+                  <Route path="/alertas" element={<EarlyWarning />} />
                 </Routes>
               </motion.div>
             </AnimatePresence>
