@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""Monitor v5.5 experiment: observa extracción, registra eventos, auto-relanza huérfanos."""
+"""Monitor v5.5 experiment: observa extracción, registra eventos, auto-relanza huérfanos.
+
+Detecta automáticamente el log de backend más reciente en logs/. Override con
+BACKEND_LOG=ruta env var.
+"""
 import json
+import os
 import re
 import sqlite3
 import time
@@ -9,8 +14,22 @@ from datetime import datetime
 from pathlib import Path
 
 DB = "/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026 A/tutelas-app/data/tutelas.db"
-LOG_PATH = "/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026/tutelas-app/logs/backend_experiment_9.log"
 BASE_LOGS = Path("/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026/tutelas-app/logs")
+
+
+def _resolve_backend_log() -> str:
+    """Elige el log de backend más reciente, o usa BACKEND_LOG si se define."""
+    override = os.environ.get("BACKEND_LOG")
+    if override and Path(override).exists():
+        return override
+    # Patrones que usamos para el backend: backend_*.log (excluye monitor_* y frontend_*)
+    candidates = [p for p in BASE_LOGS.glob("backend_*.log") if p.is_file()]
+    if not candidates:
+        return str(BASE_LOGS / "backend.log")
+    return str(max(candidates, key=lambda p: p.stat().st_mtime))
+
+
+LOG_PATH = _resolve_backend_log()
 EVENTS_JSONL = BASE_LOGS / "experiment_monitor.jsonl"
 REPORT_MD = BASE_LOGS / "experiment_monitor.md"
 BACKEND_URL = "http://localhost:8000"
