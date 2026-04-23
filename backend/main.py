@@ -11,6 +11,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from backend.core.settings import settings  # noqa: E402 — necesario para flags v5.5
+
 # Asegurar que el directorio padre este en el path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

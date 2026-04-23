@@ -2,19 +2,30 @@
 
 Carga variables desde .env con validación automática.
 Uso: from backend.core.settings import settings
+
+v5.5: respeta la env var TUTELAS_ENV_FILE para seleccionar un archivo .env
+alterno (ej. .env.experiment) sin tocar el .env de producción.
 """
 
+import os
 from pathlib import Path
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+_DEFAULT_ENV_FILE = str(Path(__file__).resolve().parent.parent.parent / ".env")
+_ENV_FILE_OVERRIDE = os.environ.get("TUTELAS_ENV_FILE")
+_EFFECTIVE_ENV_FILE = (
+    str(Path(_ENV_FILE_OVERRIDE).resolve()) if _ENV_FILE_OVERRIDE else _DEFAULT_ENV_FILE
+)
+
+
 class Settings(BaseSettings):
     """Configuración de la aplicación con validación."""
 
     model_config = SettingsConfigDict(
-        env_file=str(Path(__file__).resolve().parent.parent.parent / ".env"),
+        env_file=_EFFECTIVE_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )
