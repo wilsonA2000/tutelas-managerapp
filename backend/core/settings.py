@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     AI_PROVIDER_PRIMARY: str = ""         # Override del router. "deepseek" o "anthropic". Vacío = respetar ROUTING_CHAINS
     EXTRACTION_MAX_WORKERS: int = 3       # Workers paralelos en /api/extraction/batch. En WSL usar 2 para no saturar.
 
+    # v6.0 Refactor cognitivo — feature flags
+    USE_COGNITIVE_PIPELINE: bool = False  # True = pipeline de 7 capas cognitivas; False = v5.5 legacy
+    COGNITIVE_ENTROPY_THRESHOLD: float = 2.2  # Umbral H(caso) sobre el cual marcar REVISION_HUMANA
+
     # CSV
     CSV_DELIMITER: str = ";"
     CSV_COLUMNS: list[str] = [

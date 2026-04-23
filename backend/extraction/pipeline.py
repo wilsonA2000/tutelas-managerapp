@@ -1102,19 +1102,60 @@ def _auto_reassign_document(db, source_case: Case, doc: Document, detalle: str, 
 
 
 def verify_document_belongs(case: Case, doc: Document) -> tuple[str, str]:
-    """Verificar si un documento pertenece al caso usando multi-criterio.
+    """Verificar si un documento pertenece al caso.
 
-    Criterios de verificación (en orden):
-    1. Radicado 23 dígitos completo → match definitivo (OK o NO_PERTENECE)
-    2. Radicado corto + accionante mencionado → OK
-    3. Accionante en nombre del archivo (ej: RESPUESTA FOREST B.L.A.R.docx) → OK
-    4. Radicado de OTRO caso detectado → NO_PERTENECE
-    5. Sin referencias al caso → SOSPECHOSO
+    v6.0: delega a Bayesian assignment si `USE_COGNITIVE_PIPELINE=true`.
+    Mantiene la implementación legacy (5 criterios rígidos) para compatibilidad
+    cuando el feature flag está apagado.
 
     Returns: (status, detalle)
-        status: 'OK' / 'SOSPECHOSO' / 'NO_PERTENECE'
+        status: 'OK' / 'SOSPECHOSO' / 'NO_PERTENECE' / 'REVISAR'
         detalle: explicación del resultado
     """
+    # v6.0: feature flag → inferencia Bayesiana
+    try:
+        from backend.core.settings import settings
+        if getattr(settings, "USE_COGNITIVE_PIPELINE", False):
+            return _verify_bayesian(case, doc)
+    except Exception:
+        pass  # fallback a legacy si algo falla en el import/setting
+    # Legacy (v5.5):
+    return _verify_legacy(case, doc)
+
+
+def _verify_bayesian(case: Case, doc: Document) -> tuple[str, str]:
+    """Adapter v6.0: construye IR del doc y aplica Bayesian assignment."""
+    from backend.cognition.bayesian_assignment import infer_assignment
+    from backend.extraction.ir_builder import _build_pdf_ir, _build_docx_ir
+    from pathlib import Path as _P
+    path = _P(doc.file_path or "")
+    ext = path.suffix.lower()
+    # Construir IR mínimo (solo para verificar, sin reconstruir todo)
+    if ext == ".pdf" and path.exists():
+        ir = _build_pdf_ir(str(path), doc.doc_type or "PDF_OTRO")
+    elif ext in (".docx", ".doc") and path.exists():
+        ir = _build_docx_ir(str(path), doc.doc_type or "DOCX_OTRO")
+    else:
+        # Sin acceso a archivo: crear IR mínimo a partir de extracted_text
+        from backend.extraction.ir_models import DocumentIR, DocumentZone
+        txt = doc.extracted_text or ""
+        ir = DocumentIR(
+            filename=doc.filename, doc_type=doc.doc_type or "OTRO", priority=9,
+            zones=[DocumentZone(zone_type="BODY", text=txt)] if txt else [],
+            full_text=txt,
+        )
+    verdict = infer_assignment(case, ir, doc=doc)
+    detalle_parts = []
+    if verdict.reasons_for:
+        detalle_parts.append("+: " + "; ".join(verdict.reasons_for[:3]))
+    if verdict.reasons_against:
+        detalle_parts.append("-: " + "; ".join(verdict.reasons_against[:3]))
+    detalle_parts.append(f"post={verdict.posterior:.3f}")
+    return verdict.verdict, " | ".join(detalle_parts)
+
+
+def _verify_legacy(case: Case, doc: Document) -> tuple[str, str]:
+    """Implementación v5.5: 5 criterios rígidos sobre primeros 10K chars."""
     import re
     import unicodedata
 
