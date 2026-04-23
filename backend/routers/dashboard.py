@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.database.database import get_db
 from backend.services.case_service import get_dashboard_kpis, get_chart_data
+from backend.services.executive_kpis import executive_dashboard
 from backend.database.models import AuditLog, Case
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -20,6 +21,19 @@ def api_kpis(db: Session = Depends(get_db)):
 @router.get("/charts")
 def api_charts(db: Session = Depends(get_db)):
     return get_chart_data(db)
+
+
+@router.get("/executive")
+def api_executive_dashboard(db: Session = Depends(get_db)):
+    """v6.0 Propuesta 9.9: KPIs ejecutivos consolidados.
+
+    Retorna un payload único con: tasa de cumplimiento, tiempos de
+    respuesta, distribución de fallos, tendencia mensual, rankings
+    (municipios, oficinas, abogados, accionantes recurrentes), métricas
+    v6.0 (origen, estado_incidente), tasa de impugnación e integración
+    con early warning (9.4).
+    """
+    return executive_dashboard(db)
 
 
 ACTION_TYPES = {

@@ -19,6 +19,7 @@ import {
   Wrench,
   Sparkles,
   AlertTriangle,
+  TrendingUp,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 
@@ -35,6 +36,7 @@ import Intelligence from './pages/Intelligence'
 import AgentTools from './pages/AgentTools'
 import CleanupPanel from './pages/CleanupPanel'
 import EarlyWarning from './pages/EarlyWarning'
+import ExecutiveDashboard from './pages/ExecutiveDashboard'
 import Login from './pages/Login'
 import ProgressModal from './components/ProgressModal'
 import NotificationCenter from './components/NotificationCenter'
@@ -46,6 +48,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/comp
 
 const navItems = [
   { to: '/', label: 'Panel Principal', icon: LayoutDashboard, exact: true },
+  { to: '/ejecutivo', label: 'Ejecutivo', icon: TrendingUp },
   { to: '/cases', label: 'Tutelas', icon: Scale },
   { to: '/cuadro', label: 'Cuadro', icon: Table2 },
   { to: '/seguimiento', label: 'Seguimiento', icon: ShieldAlert },
@@ -262,6 +265,7 @@ export default function App() {
                   <Route path="/seguimiento" element={<Seguimiento />} />
                   <Route path="/cleanup" element={<CleanupPanel />} />
                   <Route path="/alertas" element={<EarlyWarning />} />
+                  <Route path="/ejecutivo" element={<ExecutiveDashboard />} />
                 </Routes>
               </motion.div>
             </AnimatePresence>
