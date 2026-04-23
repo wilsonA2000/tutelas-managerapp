@@ -134,8 +134,8 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
                 _main.extraction_progress["phase"] = "Extrayendo..."
 
             if settings.UNIFIED_EXTRACTOR_ENABLED:
-                from backend.extraction.unified import unified_extract
-                stats = unified_extract(db, case, settings.BASE_DIR)
+                from backend.extraction.unified_cognitive import unified_extract_dispatch
+                stats = unified_extract_dispatch(db, case, settings.BASE_DIR)
             else:
                 stats = process_folder(db, case)
 
