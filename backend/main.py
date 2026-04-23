@@ -80,8 +80,8 @@ async def gmail_background_check():
                 db = SessionLocal()
                 try:
                     results = check_inbox(db)
-                    new_emails = [r for r in results if "error" not in r]
-                    errors = [r for r in results if "error" in r]
+                    new_emails = [r for r in results if not r.get("error")]
+                    errors = [r for r in results if r.get("error")]
 
                     last_gmail_check = datetime.now().isoformat()
 
@@ -358,8 +358,8 @@ def _run_gmail_check_background():
         _update_pct()
         last_gmail_check = datetime.now().isoformat()
 
-        new_emails = [r for r in results if "error" not in r]
-        errors = [r for r in results if "error" in r]
+        new_emails = [r for r in results if not r.get("error")]
+        errors = [r for r in results if r.get("error")]
         gmail_check_result["emails_found"] = len(new_emails)
         gmail_check_result["step"] = f"Paso 1/3: {len(new_emails)} emails descargados"
 
