@@ -60,6 +60,12 @@ class Case(Base):
 
     # --- Metadata ---
     folder_name = Column(String, unique=True, index=True)
+
+    # v6.0: clasificación cognitiva del caso (Capa 4)
+    origen = Column(String, nullable=True, index=True)           # TUTELA / INCIDENTE_HUERFANO / AMBIGUO
+    estado_incidente = Column(String, nullable=True, index=True)  # N/A / ACTIVO / EN_CONSULTA / EN_SANCION / ARCHIVADO / CUMPLIDO
+    entropy_score = Column(Float, nullable=True)                  # H(caso) post-extracción
+    convergence_iterations = Column(Integer, nullable=True)       # cuántas iteraciones necesitó el pipeline
     folder_path = Column(String)
     processing_status = Column(String, default="PENDIENTE", index=True)  # PENDIENTE / EXTRAYENDO / REVISION / COMPLETO
     tipo_actuacion = Column(String, default="TUTELA")  # TUTELA / INCIDENTE
