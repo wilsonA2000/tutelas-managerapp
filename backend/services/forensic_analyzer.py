@@ -262,8 +262,9 @@ def analyze_document(file_path: Path | str) -> DocumentAnalysis:
     analysis = DocumentAnalysis(file_path=str(path), filename=path.name)
     ext = path.suffix.lower()
 
-    # Etapa 1: extraer texto
-    text = _extract_text(path, max_chars=12000)
+    # Etapa 1: extraer texto. v5.5: leer documentos ampliamente para cosechar
+    # señales deterministas en footers (Proyectó:), sellos en anexos y watermarks.
+    text = _extract_text(path, max_chars=150000)
     analysis.text_length = len(text)
     analysis.has_text = len(text.strip()) > 50
 
@@ -364,17 +365,22 @@ def analyze_text_blob(
     return analysis
 
 
-def _extract_text(path: Path, max_chars: int = 8000) -> str:
-    """v5.2: Extrae texto de PDF/DOCX/DOC/MD/TXT/XLSX + footers DOCX + OCR imágenes."""
+def _extract_text(path: Path, max_chars: int = 150000) -> str:
+    """Extrae texto de PDF/DOCX/DOC/MD/TXT/XLSX + footers DOCX + OCR imágenes.
+
+    v5.5: lee todas las páginas del PDF (antes limitaba a 3) para cosechar
+    señales deterministas en anexos, firmas finales y sellos tardíos.
+    """
     ext = path.suffix.lower()
     try:
         if ext == ".pdf":
             import fitz
             doc = fitz.open(str(path))
             text = ""
-            for page_num in range(min(3, len(doc))):
+            for page_num in range(len(doc)):
                 text += doc[page_num].get_text()
-                if len(text) > max_chars: break
+                if len(text) > max_chars:
+                    break
             doc.close()
             return text[:max_chars]
 

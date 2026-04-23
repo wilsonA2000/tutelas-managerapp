@@ -274,12 +274,69 @@ NUIP_MENOR = RegexPattern(
     test_negative=[],
 )
 
+# ============================================================
+# v5.5 SELLO / WATERMARK PATTERNS (aparecen en zonas VISUAL y FOOTER_TAIL)
+# ============================================================
+
+SELLO_RADICADOR = RegexPattern(
+    name="sello_radicador",
+    pattern=re.compile(
+        r"(?:radicad[oa]ra?|RADICADA?\s+EN|sello\s+de\s+radicaci[oó]n)"
+        r"[\s:.\-]*(\d{3,6})",
+        re.IGNORECASE,
+    ),
+    description="Número de sello de radicación (sello rotado en esquina)",
+    test_positive=[
+        ("Radicadora: 12345", "12345"),
+        ("RADICADA EN 987", "987"),
+    ],
+    test_negative=[],
+)
+
+FECHA_RECIBIDO = RegexPattern(
+    name="fecha_recibido",
+    pattern=re.compile(
+        r"(?:recibid[oa]|fecha\s+de\s+recibo|recepci[oó]n)"
+        r"[\s:.\-]*(\d{1,2}[/\-]\d{1,2}[/\-](?:20)?\d{2,4})",
+        re.IGNORECASE,
+    ),
+    description="Fecha de recepción en sello del juzgado",
+    test_positive=[
+        ("Recibido: 15/03/2026", "15/03/2026"),
+        ("Fecha de recibo 03-04-26", "03-04-26"),
+    ],
+    test_negative=[],
+)
+
+PROC_GOBERNACION = RegexPattern(
+    name="proc_gobernacion",
+    pattern=re.compile(
+        r"(?:Proc|PROC|Proceso|PROCESO)\.?\s*(?:No\.?\s*)?(\d{4,7})",
+    ),
+    description="Número Proc interno de la Gobernación (watermark DOCX)",
+    test_positive=[("Proc. 45678", "45678"), ("PROCESO 123456", "123456")],
+    test_negative=[],
+)
+
+SELLO_JUZGADO = RegexPattern(
+    name="sello_juzgado",
+    pattern=re.compile(
+        r"(?i)(?:JUZGADO|TRIBUNAL)\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]{3,40}(?:\s+DE\s+[A-ZÁÉÍÓÚÑ\s]+)?)",
+    ),
+    description="Identificación de juzgado en sello (texto rotado o header)",
+    test_positive=[
+        ("JUZGADO PRIMERO PROMISCUO DE FAMILIA DE BUCARAMANGA", "PRIMERO PROMISCUO DE FAMILIA DE BUCARAMANGA"),
+    ],
+    test_negative=[],
+)
+
 ALL_PATTERNS = [
     RAD_23_CONTINUOUS, RAD_23_WITH_SEPARATORS, RAD_T_FORMAT, RAD_LABEL, RAD_GENERIC,
     FOREST_SPECIFIC, FOREST_KEYWORD,
     ACCIONANTE_EXPLICIT, ACCIONANTE_DEMANDANTE, ACCIONANTE_PROMOVIDA,
     PERSONERO_MUNICIPIO, ABOGADO_FOOTER,
     CC_ACCIONANTE, TUTELA_ONLINE_NO, ACTA_REPARTO_NO, EXPEDIENTE_DISCIPLINARIO, NUIP_MENOR,
+    SELLO_RADICADOR, FECHA_RECIBIDO, PROC_GOBERNACION, SELLO_JUZGADO,
 ]
 
 

@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     GMAIL_HISTORICAL_QUERY: str = ""      # Query Gmail alternativa (ej. "in:inbox") para sync histórico
     SYNC_BATCH_SIZE: int = 100            # Tamaño por defecto de batch en /api/emails/sync-batch
     AI_PROVIDER_PRIMARY: str = ""         # Override del router. "deepseek" o "anthropic". Vacío = respetar ROUTING_CHAINS
+    EXTRACTION_MAX_WORKERS: int = 3       # Workers paralelos en /api/extraction/batch. En WSL usar 2 para no saturar.
 
     # CSV
     CSV_DELIMITER: str = ";"

@@ -64,10 +64,7 @@ def _get_fields_data(case) -> dict:
 
 
 _progress_lock = threading.Lock()
-# v5.5: MAX_WORKERS parametrizable via env (default 3). En WSL con muchos PDFs,
-# pool=2 evita saturación de memoria y timeouts de DeepSeek.
-import os as _os
-MAX_WORKERS = int(_os.environ.get("EXTRACTION_MAX_WORKERS", "3"))
+MAX_WORKERS = settings.EXTRACTION_MAX_WORKERS
 
 
 def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):

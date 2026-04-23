@@ -6,6 +6,9 @@ Detecta zonas semanticas: HEADER, RADICADO, PARTIES, DATES, BODY, FOOTER, etc.
 
 import logging
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -15,20 +18,87 @@ from backend.extraction.ir_models import (
     TextSpan, DocumentZone, DocumentIR, CaseIR,
 )
 from backend.extraction.pipeline import classify_doc_type
+from backend.extraction.pdf_visual_analyzer import analyze_pdf_visual, report_to_zone_metadata
 
 logger = logging.getLogger("tutelas.ir_builder")
 
-_IR_BODY_MAX = 30000  # Limite de caracteres para zona BODY
+
+def _libreoffice_convert_to_docx(src: Path) -> Path | None:
+    """Convierte .doc/.rtf/.odt → .docx con LibreOffice headless. None si falla."""
+    if not shutil.which("libreoffice"):
+        return None
+    try:
+        tmpdir = Path(tempfile.mkdtemp(prefix="lo_convert_"))
+        r = subprocess.run(
+            ["libreoffice", "--headless", "--convert-to", "docx",
+             "--outdir", str(tmpdir), str(src)],
+            capture_output=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return None
+        converted = tmpdir / (src.stem + ".docx")
+        return converted if converted.exists() else None
+    except Exception as e:
+        logger.debug("LibreOffice convert falló para %s: %s", src.name, e)
+        return None
+
+
+def _extract_text_antiword(src: Path) -> str:
+    """Texto plano de .doc binario via antiword (paquete apt). '' si no disponible."""
+    if not shutil.which("antiword"):
+        return ""
+    try:
+        r = subprocess.run(["antiword", str(src)], capture_output=True, timeout=20)
+        return r.stdout.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _extract_text_olefile_scan(src: Path) -> str:
+    """Último recurso para .doc binario corrupto: escanea streams OLE por ASCII."""
+    try:
+        import olefile
+        with olefile.OleFileIO(str(src)) as ole:
+            for stream in ("WordDocument", "1Table", "0Table"):
+                if ole.exists(stream):
+                    raw = ole.openstream(stream).read()
+                    chunks = re.findall(rb"[\x20-\x7e\xc0-\xff\s]{10,}", raw)
+                    decoded = b" ".join(chunks[:500]).decode("utf-8", errors="replace")
+                    if len(decoded.strip()) > 100:
+                        return decoded
+    except Exception:
+        pass
+    return ""
+
+_IR_BODY_MAX = 150000   # Guard-rail amplio para zona BODY (full_text siempre se preserva)
+_FOOTER_TAIL_CHARS = 4000  # Últimos N chars preservados íntegros como zona FOOTER_TAIL
 
 
 def _make_body_zone(text: str, filename: str = "", **kwargs) -> DocumentZone:
-    """Crear zona BODY con truncation warning si excede limite."""
+    """Crear zona BODY. El truncamiento aquí es solo guard-rail de RAM; los
+    extractores locales consumen DocumentIR.full_text (no truncado)."""
     truncated = len(text) > _IR_BODY_MAX
     if truncated:
-        logger.warning("BODY truncado de %d a %d chars para %s", len(text), _IR_BODY_MAX, filename)
+        logger.debug("BODY zone trimmed de %d a %d chars para %s (full_text intacto)",
+                     len(text), _IR_BODY_MAX, filename)
     return DocumentZone(
         zone_type="BODY", text=text[:_IR_BODY_MAX],
         truncated=truncated, **kwargs,
+    )
+
+
+def _make_footer_tail_zone(full_text: str, page: int = 0) -> DocumentZone | None:
+    """Zona FOOTER_TAIL: últimos 4K chars del documento, íntegros.
+
+    Garantiza que 'Proyectó: X', sellos finales y firmas de abogado queden
+    siempre disponibles para regex/forensic aunque el doc sea gigante.
+    """
+    if not full_text or len(full_text.strip()) < 100:
+        return None
+    tail = full_text[-_FOOTER_TAIL_CHARS:] if len(full_text) > _FOOTER_TAIL_CHARS else full_text
+    return DocumentZone(
+        zone_type="FOOTER_TAIL", text=tail, page=page, confidence=1.0,
+        metadata={"total_doc_chars": len(full_text)},
     )
 
 
@@ -280,8 +350,27 @@ def _build_pdf_ir(file_path: str, doc_type: str) -> DocumentIR:
     body_text = "\n".join(full_text_parts)
     if body_text.strip():
         zones.append(_make_body_zone(body_text, filename=path.name, page=0, confidence=1.0))
+        tail_zone = _make_footer_tail_zone(body_text, page=page_count)
+        if tail_zone:
+            zones.append(tail_zone)
 
     doc.close()
+
+    # v5.5: análisis visual determinista (sin IA) — detecta logos, sellos, watermarks,
+    # firmas y texto rotado. Enriquece el IR con señales de institucionalidad.
+    try:
+        visual = analyze_pdf_visual(str(path))
+        if visual.findings or visual.images_count > 0:
+            rotated_text = "\n".join(visual.rotated_text_snippets[:10])
+            zones.append(DocumentZone(
+                zone_type="VISUAL",
+                text=rotated_text or f"[{visual.images_count} imgs, {visual.annotations_count} annots]",
+                page=0,
+                confidence=visual.institutional_score,
+                metadata=report_to_zone_metadata(visual),
+            ))
+    except Exception as e:
+        logger.debug("Visual analyzer falló para %s: %s", path.name, e)
 
     return DocumentIR(
         filename=path.name,
@@ -313,12 +402,44 @@ def _build_docx_ir(file_path: str, doc_type: str) -> DocumentIR:
     try:
         doc = docx.Document(str(path))
     except Exception as e:
-        logger.warning("python-docx no pudo abrir %s: %s", path.name, e)
+        logger.warning("python-docx no pudo abrir %s: %s — intentando fallbacks", path.name, e)
+        # Cadena de fallback: LibreOffice convert → antiword → olefile scan.
+        converted = _libreoffice_convert_to_docx(path)
+        if converted:
+            try:
+                doc = docx.Document(str(converted))
+                logger.info("Recuperado vía LibreOffice: %s", path.name)
+                return _build_docx_from_open(doc, path, doc_type, method="libreoffice+docx")
+            except Exception as e2:
+                logger.debug("LibreOffice→python-docx falló para %s: %s", path.name, e2)
+        # Texto plano sin estructura DOCX
+        plain = _extract_text_antiword(path) or _extract_text_olefile_scan(path)
+        if plain and len(plain.strip()) > 100:
+            logger.info("Recuperado vía texto plano (%d chars): %s", len(plain), path.name)
+            zones = [_make_body_zone(plain, filename=path.name, confidence=0.75)]
+            tail = _make_footer_tail_zone(plain)
+            if tail:
+                zones.append(tail)
+            return DocumentIR(
+                filename=path.name, doc_type=doc_type,
+                priority=_DOC_PRIORITY.get(doc_type, 9),
+                zones=zones, full_text=plain, page_count=1,
+                extraction_method="fallback_plain",
+            )
         return DocumentIR(
             filename=path.name, doc_type=doc_type,
             priority=_DOC_PRIORITY.get(doc_type, 9),
         )
 
+    return _build_docx_from_open(doc, path, doc_type, method="python-docx")
+
+
+def _build_docx_from_open(doc, path: Path, doc_type: str, method: str = "python-docx") -> DocumentIR:
+    """Construye el IR a partir de un objeto python-docx ya abierto.
+
+    Se extrae para reutilizarse desde el flujo directo y desde el fallback
+    LibreOffice→python-docx.
+    """
     zones = []
     full_text_parts = []
 
@@ -397,6 +518,9 @@ def _build_docx_ir(file_path: str, doc_type: str) -> DocumentIR:
 
     body_text = "\n".join(full_text_parts)
     zones.append(_make_body_zone(body_text, filename=path.name, confidence=1.0))
+    tail_zone = _make_footer_tail_zone(body_text)
+    if tail_zone:
+        zones.append(tail_zone)
 
     return DocumentIR(
         filename=path.name,
@@ -406,7 +530,7 @@ def _build_docx_ir(file_path: str, doc_type: str) -> DocumentIR:
         tables=tables,
         full_text=body_text,
         page_count=1,
-        extraction_method="python-docx",
+        extraction_method=method,
     )
 
 

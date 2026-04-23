@@ -326,7 +326,7 @@ def extract_actors(text: str, zones: DocZones | None = None) -> ActorSet:
     if not result.accionantes:
         try:
             from backend.cognition.ner_spacy import extract_persons
-            persons = extract_persons(text[:20000])  # primeros 20K chars
+            persons = extract_persons(text[:60000])  # v5.5: ampliado de 20K para cubrir docs largos
             # Filtrar: el primer PERSON en los primeros 2000 chars suele ser accionante
             for p in persons[:5]:
                 if p.start > 2000:

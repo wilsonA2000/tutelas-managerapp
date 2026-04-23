@@ -30,8 +30,10 @@ ZONE_TYPES = {
     "BODY",         # Cuerpo del documento (texto principal)
     "RESOLUTION",   # Parte resolutiva: RESUELVE, fallo, decision
     "FOOTER",       # Pie de pagina: abogado, firma, proyeccion
+    "FOOTER_TAIL",  # v5.5: últimos 4K chars del doc íntegros (garantiza firma abogado en docs largos)
     "TABLE",        # Tabla detectada
     "WATERMARK",    # Marca de agua (FOREST, sellos)
+    "VISUAL",       # v5.5: hallazgos visuales (imágenes, logos, sellos, escudos)
 }
 
 
