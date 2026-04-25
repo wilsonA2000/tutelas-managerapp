@@ -20,7 +20,8 @@ def test_settings_status(client):
     r = client.get("/api/settings/status")
     assert r.status_code == 200
     data = r.json()
-    for key in ("gmail", "groq", "database", "folders"):
+    # v5.4 cleanup: groq fue eliminado; el provider primary actual es anthropic
+    for key in ("gmail", "anthropic_configured", "database", "folders"):
         assert key in data
 
 

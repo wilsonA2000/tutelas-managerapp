@@ -20,7 +20,7 @@ from backend.database.database import init_db, get_db, SessionLocal
 from backend.database.seed import run_seed
 from backend.routers import cases, documents, extraction, dashboard, reports, emails, seguimiento
 from backend.email.gmail_monitor import check_inbox, get_gmail_total, sync_inbox
-from backend.extraction.pipeline import process_folder
+from backend.extraction.unified_cognitive import unified_extract_dispatch
 from backend.database.models import Case, Email
 
 # Logging estructurado
@@ -112,7 +112,7 @@ async def gmail_background_check():
 
                             cases_processed.add(case.id)
                             try:
-                                stats = process_folder(db, case)
+                                stats = unified_extract_dispatch(db, case, settings.BASE_DIR)
                                 fields = stats.get("ai_fields_extracted", 0)
                                 total_fields += fields
                                 add_monitor_log(
@@ -405,7 +405,7 @@ def _run_gmail_check_background():
             _update_pct()
 
             try:
-                stats = process_folder(db, case)
+                stats = unified_extract_dispatch(db, case, settings.BASE_DIR)
                 fields = stats.get("ai_fields_extracted", 0)
                 total_fields += fields
                 cases_processed += 1
@@ -1023,9 +1023,9 @@ def _run_extraction_background():
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from backend.services.backup_service import auto_backup
 
-    # v5.4: 3 workers paralelos. Conservador por RAM (~93% usada en baseline).
-    # DeepSeek soporta bien esa concurrencia y smart_router maneja rate limits 429.
-    MAX_WORKERS = 3
+    # v6.0.2: lee settings.EXTRACTION_MAX_WORKERS (8 en pod, ajustable por env).
+    # Antes era 3 hardcoded por RAM en WSL; el pod tiene headroom suficiente.
+    MAX_WORKERS = settings.EXTRACTION_MAX_WORKERS
 
     def _process_one_case(case_id: int) -> dict:
         """Worker que procesa 1 caso con su propia sesión DB (thread-safe)."""
@@ -1036,7 +1036,7 @@ def _run_extraction_background():
             if not case:
                 return {"case_id": case_id, "folder": case_folder, "error": "case no encontrado"}
             case_folder = case.folder_name or case_folder
-            stats = process_folder(thread_db, case)
+            stats = unified_extract_dispatch(thread_db, case, settings.BASE_DIR)
             return {"case_id": case_id, "folder": case_folder, "stats": stats}
         except Exception as e:
             try:

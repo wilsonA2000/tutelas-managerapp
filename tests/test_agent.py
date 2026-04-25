@@ -1,5 +1,6 @@
 """Tests del agente IA: run, tools, routes, tokens, budget."""
 
+import pytest
 from unittest.mock import patch
 
 
@@ -26,6 +27,7 @@ def test_agent_run_mock(client):
         assert r.status_code == 200
 
 
+@pytest.mark.skip(reason="Endpoint /api/agent/tokens removido en cleanup; budget endpoint sigue activo")
 def test_agent_tokens(client):
     r = client.get("/api/agent/tokens")
     assert r.status_code == 200
@@ -33,6 +35,7 @@ def test_agent_tokens(client):
     assert isinstance(data, dict)
 
 
+@pytest.mark.skip(reason="Endpoint /api/agent/tokens/budget removido en cleanup; reactivar si se reintroduce")
 def test_agent_budget(client):
     r = client.post("/api/agent/tokens/budget", json={"daily_limit_usd": 5.0, "monthly_limit_usd": 50.0})
     assert r.status_code == 200

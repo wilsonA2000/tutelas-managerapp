@@ -3,23 +3,7 @@
 from sqlalchemy.orm import Session
 
 from backend.database.models import Case, Document, Extraction
-from backend.extraction.pipeline import process_folder, reextract_document
-
-
-def extract_single(db: Session, case_id: int) -> dict:
-    """Extraer datos de un caso individual."""
-    case = db.query(Case).filter(Case.id == case_id).first()
-    if not case:
-        return {"error": "Caso no encontrado"}
-
-    stats = process_folder(db, case)
-    return {
-        "case_id": case.id,
-        "folder_name": case.folder_name,
-        "status": case.processing_status,
-        **stats,
-    }
-
+from backend.extraction.pipeline import reextract_document
 
 
 def get_review_queue(db: Session) -> list[dict]:
