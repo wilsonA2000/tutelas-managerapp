@@ -34,13 +34,32 @@ INVALID_FS_CHARS = re.compile(r'[<>:"/\\|?*\n\r\t]')
 # Detector de control chars que ensucian un folder_name aunque no tenga marca
 DIRTY_FS_CHARS = re.compile(r"[\n\r\t]")
 
-# Palabras "trampa" que indican que el accionante es texto suelto, no un nombre
+# Palabras "trampa" que indican que el candidato es texto suelto, NO un nombre.
+# Si APARECEN EN CUALQUIER POSICIÓN del candidato, se rechaza.
 TRAP_WORDS = {
-    "PRETENDE", "SEÑALA", "ANTECEDENTES", "INFORMAN", "ASUNTO", "RIESGO",
-    "ACREDITO", "ACREDITÓ", "APORTO", "APORTÓ", "RELACIONADA", "IMPUGNADA",
-    "JUZGADO", "ELLO", "SIGNIFICA", "REFRENCIA", "REFERENCIA", "SENTENCIA",
-    "FALLO", "DOCUMENTO", "CONDICION", "CONDICIÓN", "SALUD", "MEDIANTE",
-    "VINCULACION", "VINCULACIÓN", "EVENTO", "PRONUNCIARSE", "COMPETENTE",
+    # Verbos/conectores procesales
+    "PRETENDE", "SEÑALA", "INFORMAN", "ACREDITO", "ACREDITÓ", "APORTO",
+    "APORTÓ", "PRONUNCIARSE", "COMPETENTE", "MEDIANTE", "SIGNIFICA", "ELLO",
+    "RELACIONADA", "IMPUGNADA",
+    # Headers/títulos de sección
+    "ANTECEDENTES", "ASUNTO", "RIESGO", "REFRENCIA", "REFERENCIA",
+    "HECHOS", "PROBADOS", "CONSIDERANDOS",
+    # Tipos de documento procesal
+    "SENTENCIA", "FALLO",
+    # Atributos/conceptos
+    "CONDICION", "CONDICIÓN", "VINCULACION", "VINCULACIÓN", "EVENTO",
+    # Instituciones judiciales (rechazo total — no son accionantes)
+    "JUZGADO", "TRIBUNAL", "CORTE", "MAGISTRADO",
+}
+
+# Palabras que NUNCA pueden ser la primera palabra de un nombre real válido.
+# A diferencia de TRAP_WORDS, son atributos/calificativos institucionales que
+# son válidos a media frase (ej. "PERSONERO MUNICIPAL DE BARRANCABERMEJA")
+# pero falsos como cabeza ("MUNICIPAL DE BUCARAMANGA").
+INSTITUTIONAL_PREFIX_TRAPS = {
+    "MUNICIPAL", "DEPARTAMENTAL", "NACIONAL", "DISTRITAL",
+    "RAMA", "PODER", "PÚBLICO", "PUBLICO", "JUDICIAL",
+    "EJECUTIVO", "LEGISLATIVO",
 }
 
 # Tokens-rol procesales que aparecen pegados al accionante por extracción sucia
@@ -52,15 +71,43 @@ ROLE_TOKENS = {
     "CONTRA", "VS", "VS.", "Y/O",
 }
 
+# Frases procesales que aparecen DESPUÉS del nombre real y deben recortarse.
+# Ej: "FABRIZIO ENRIQUE MANOSALVA en calidad de representante" → "FABRIZIO ENRIQUE MANOSALVA"
+# Patrones case-insensitive aplicados en orden; el primer match corta el resto.
+TRAILING_CUT_PATTERNS = [
+    r"\s+en\s+calidad\s+de\b.*$",
+    r"\s+obrando\s+en\s+nombre\b.*$",
+    r"\s+actuando\s+(como|en\s+nombre)\b.*$",
+    r"\s+en\s+representaci[oó]n\s+de\b.*$",
+    r"\s+como\s+representante\b.*$",
+    r"\s+representante\s+(legal|judicial)\b.*$",
+    r"\s+identific(ado|ada)\s+con\b.*$",
+    r"\s+mayor\s+de\s+edad\b.*$",
+    r"\s+con\s+(c[eé]dula|cc|ti|nuip)\b.*$",
+]
+
 # Conectores que NO deberían estar al inicio de un nombre real
 START_TRAPS = {"EL", "LA", "EN", "Y", "QUE", "SI", "NO", "SE", "CON",
                "POR", "PARA", "DE", "DEL", "AL", "PRETENDE"}
+
+# Preposiciones/conectores que NO pueden ser la última palabra de un nombre
+# real válido. Indica que el candidato fue truncado por NER.
+END_TRAPS = {"DE", "DEL", "EN", "POR", "PARA", "CON", "Y", "AL"}
+
+
+def _apply_trailing_cuts(s: str) -> str:
+    """Aplica TRAILING_CUT_PATTERNS al string. Devuelve recortado."""
+    for pat in TRAILING_CUT_PATTERNS:
+        s = re.sub(pat, "", s, count=1, flags=re.IGNORECASE)
+    return s.strip()
 
 
 def clean_accionante(s: str) -> str:
     """Sanitiza el string de accionante antes de evaluarlo como nombre.
 
     - Toma la primera línea no vacía (corta en \\n, \\r, \\t).
+    - Recorta frases procesales tipo "en calidad de", "obrando en nombre",
+      "en representación de", etc. (FIX 2.2).
     - Elimina tokens-rol procesales en cabeza y cola
       (ej. "JUANA PEREZ\\nACCIONADO" → "JUANA PEREZ").
     - Colapsa espacios.
@@ -69,6 +116,7 @@ def clean_accionante(s: str) -> str:
         return ""
     parts = re.split(r"[\n\r\t]+", s)
     first = next((p.strip() for p in parts if p.strip()), "")
+    first = _apply_trailing_cuts(first)
     words = first.split()
 
     def _strip_token(w: str) -> str:
@@ -95,12 +143,19 @@ def is_likely_real_name(s: str) -> bool:
     if len(words) < 2 or len(words) > 12:
         return False
 
-    # Primera palabra empieza con mayúscula y no es trampa
+    # Primera palabra: ni conector trampa ni prefijo institucional
     first = words[0].upper()
     if first in START_TRAPS:
         return False
+    if first in INSTITUTIONAL_PREFIX_TRAPS:
+        return False
 
-    # No debe contener palabras trampa
+    # Última palabra: no puede ser preposición (señal de truncamiento NER).
+    last = words[-1].upper().strip(",.;:")
+    if last in END_TRAPS:
+        return False
+
+    # No debe contener palabras trampa (en ninguna posición)
     upper_words = {w.upper().strip(",.;:") for w in words}
     if upper_words & TRAP_WORDS:
         return False
@@ -130,12 +185,14 @@ def normalize_radicado(rad: str) -> str:
     return rad
 
 
-def needs_rename(folder_name: str) -> bool:
+def needs_rename(folder_name: str, current_accionante: Optional[str] = None) -> bool:
     """¿Esta carpeta requiere atención?
 
     Dispara renombrado si:
     - Tiene marca [PENDIENTE...] o [REVISAR_ACCIONANTE].
     - Contiene control chars (\\n, \\r, \\t) — folder ensuciado por extracción.
+    - El nombre tras el radicado NO es un nombre real (ej. "HECHOS PROBADOS",
+      "MUNICIPAL DE BUCARAMANGA") y `current_accionante` SÍ lo es.
     """
     if not folder_name:
         return False
@@ -143,6 +200,19 @@ def needs_rename(folder_name: str) -> bool:
         return True
     if DIRTY_FS_CHARS.search(folder_name):
         return True
+    # Detección de "folder sucio" — nombre tras radicado no es nombre real
+    if current_accionante:
+        m = re.match(r"20\d{2}[-\s]?\d+\s+(.+)", folder_name)
+        if m:
+            tail = m.group(1).strip()
+            # Quitar sufijo "(idN)" típico de resolución de colisión
+            tail = re.sub(r"\s*\(id\d+\)\s*$", "", tail).strip()
+            cleaned_acc = clean_accionante(current_accionante)
+            # Si el folder no luce como nombre real PERO el accionante sí → rename
+            if (not is_likely_real_name(tail)
+                    and cleaned_acc
+                    and is_likely_real_name(cleaned_acc)):
+                return True
     return False
 
 
@@ -183,7 +253,7 @@ def rename_folder_if_needed(db: Session, case: Case, base_dir: Optional[Path] = 
     """
     folder_name = case.folder_name or ""
 
-    if not needs_rename(folder_name):
+    if not needs_rename(folder_name, case.accionante):
         return {"action": "skipped", "reason": "folder ya limpio",
                 "old_name": folder_name, "new_name": folder_name}
 

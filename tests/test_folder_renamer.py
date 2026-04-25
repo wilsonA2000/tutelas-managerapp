@@ -63,6 +63,37 @@ class TestCleanAccionante:
     def test_collapses_extra_whitespace(self):
         assert clean_accionante("  JUAN   PEREZ  ") == "JUAN PEREZ"
 
+    # FIX 2.2: trailing cuts (frases procesales después del nombre)
+    def test_cut_en_calidad_de(self):
+        # caso 117 real
+        assert clean_accionante("FABRIZIO ENRIQUE MANOSALVA VALLEJO en calidad de representante") \
+            == "FABRIZIO ENRIQUE MANOSALVA VALLEJO"
+
+    def test_cut_obrando_en_nombre(self):
+        # caso 153 real
+        assert clean_accionante("SHAIRA YURLEY HERNANDEZ CHAVEZ obrando en nombre propio") \
+            == "SHAIRA YURLEY HERNANDEZ CHAVEZ"
+
+    def test_cut_en_representacion(self):
+        # caso 202 real (con tilde)
+        assert clean_accionante("MIGUEL COGARIA HERRERA en representación de HCM") \
+            == "MIGUEL COGARIA HERRERA"
+
+    def test_cut_actuando_como(self):
+        assert clean_accionante("ANA LOPEZ actuando como apoderada") == "ANA LOPEZ"
+
+    def test_cut_identificado_con(self):
+        assert clean_accionante("PEDRO MARTINEZ identificado con cédula 12345") == "PEDRO MARTINEZ"
+
+    def test_cut_mayor_de_edad(self):
+        assert clean_accionante("LUISA GOMEZ mayor de edad y vecina de Bucaramanga") == "LUISA GOMEZ"
+
+    def test_cut_with_cedula(self):
+        assert clean_accionante("CARLOS RUIZ con cédula 1098765432") == "CARLOS RUIZ"
+
+    def test_cut_case_insensitive(self):
+        assert clean_accionante("MARIA TORRES EN CALIDAD DE TUTORA") == "MARIA TORRES"
+
 
 # ---------- needs_rename ----------
 

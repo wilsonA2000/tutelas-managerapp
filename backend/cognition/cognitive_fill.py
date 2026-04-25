@@ -13,6 +13,7 @@ Uso típico en unified.py:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,6 +21,7 @@ from backend.agent.extractors.base import ExtractionResult
 from backend.cognition.zone_classifier import classify_zones
 from backend.cognition.entity_extractor import extract_actors
 from backend.cognition.decision_extractor import extract_decision
+from backend.cognition.folder_renamer import clean_accionante, is_likely_real_name
 from backend.cognition.narrative_builder import (
     build_asunto, build_pretensiones, build_observaciones, build_derecho_vulnerado,
 )
@@ -44,6 +46,81 @@ def _to_result(value: str, confidence: int, source: str) -> ExtractionResult:
         method="cognition",
         reasoning=f"Cognición local ({source})",
     )
+
+
+def _accionante_collides_with_juzgado(name: str, juzgado: str) -> bool:
+    """True si el 'accionante' candidato es en realidad un juzgado."""
+    if not name:
+        return False
+    n = name.upper().strip()
+    # Palabras-tipo institución judicial en el nombre (siempre rechazo)
+    if "JUZGADO" in n or "TRIBUNAL" in n or "CORTE" in n or "MAGISTRADO" in n:
+        return True
+    # Solapamiento substancial con el campo juzgado ya conocido
+    j = (juzgado or "").upper().strip()
+    if len(j) >= 10 and (j in n or n in j):
+        return True
+    return False
+
+
+# Patrones explícitos que preceden al accionante en encabezados de fallos/tutelas
+# Capturan hasta 6 palabras tipo nombre (mayúsculas/tildes/ñ).
+_ACCIONANTE_HEADER_RE = re.compile(
+    r"\b(?:Accionante|Demandante|Tutelante|Actor)\s*[:\-]?\s*"
+    r"((?:[A-ZÁÉÍÓÚÑ][\w\u00C0-\u017F'’.\-]+\s+){1,5}"
+    r"[A-ZÁÉÍÓÚÑ][\w\u00C0-\u017F'’.\-]+)",
+    re.UNICODE,
+)
+
+
+def _pick_accionante_from_text(full_text: str, juzgado: str = "") -> str:
+    """Fallback FIX 6: extraer accionante cuando actor_extractor falla.
+
+    Estrategia (en orden):
+    1. Regex sobre patrones explícitos "Accionante:|Demandante:|Tutelante:|Actor:"
+       (más confiable que NER porque captura nombre completo).
+    2. spaCy PERSON ranked por aparición temprana + frecuencia.
+
+    Descartando juzgados/tribunales en ambas fases.
+    """
+    head = full_text[:16000]
+
+    # Paso 1: regex header explícito
+    for m in _ACCIONANTE_HEADER_RE.finditer(head):
+        candidate = clean_accionante(m.group(1))
+        if not candidate or not is_likely_real_name(candidate):
+            continue
+        if _accionante_collides_with_juzgado(candidate, juzgado):
+            continue
+        return candidate
+
+    # Paso 2: NER fallback
+    try:
+        from backend.cognition.ner_spacy import extract_persons
+    except Exception:
+        return ""
+    persons = extract_persons(head, min_length=8)
+    if not persons:
+        return ""
+    seen: dict[str, dict] = {}
+    for p in persons:
+        candidate = clean_accionante(p.text)
+        if not candidate or not is_likely_real_name(candidate):
+            continue
+        if _accionante_collides_with_juzgado(candidate, juzgado):
+            continue
+        rec = seen.setdefault(candidate, {"count": 0, "first_pos": p.start})
+        rec["count"] += 1
+        rec["first_pos"] = min(rec["first_pos"], p.start)
+
+    if not seen:
+        return ""
+    ranked = sorted(seen.items(), key=lambda it: (-it[1]["count"], it[1]["first_pos"] * 2))
+    return ranked[0][0]
+
+
+# alias para compat con tests existentes
+_pick_accionante_from_ner = _pick_accionante_from_text
 
 
 def cognitive_fill(
@@ -84,9 +161,30 @@ def cognitive_fill(
             return
         out[field] = _to_result(value, confidence, source)
 
-    # Accionante
+    # Accionante (FIX 6 — validación + fallback NER):
+    # 1. Tomar el del actor_extractor, sanitizar con clean_accionante,
+    #    descartar si parece juzgado o no es nombre real.
+    # 2. Si falla, usar spaCy NER PERSON ranked por posición/frecuencia.
+    juzgado_known = case_meta.get("juzgado", "")
+    accionante_candidate = ""
     if actors.accionantes:
-        _maybe_set("accionante", actors.accionantes[0].name, 75, "cognition/actor_extractor")
+        raw = actors.accionantes[0].name
+        cleaned = clean_accionante(raw)
+        if (cleaned and is_likely_real_name(cleaned)
+                and not _accionante_collides_with_juzgado(cleaned, juzgado_known)):
+            accionante_candidate = cleaned
+
+    if not accionante_candidate:
+        text_pick = _pick_accionante_from_text(full_text, juzgado_known)
+        if text_pick:
+            accionante_candidate = text_pick
+            _logger.info("cognitive_fill case=%s accionante via text fallback: %r",
+                         case_meta.get("id"), text_pick)
+
+    if accionante_candidate:
+        _maybe_set("accionante", accionante_candidate, 75,
+                   "cognition/actor_extractor" if (actors.accionantes and accionante_candidate == clean_accionante(actors.accionantes[0].name))
+                   else "cognition/text_fallback")
 
     # Accionados (lista separada por " - ")
     if actors.accionados:

@@ -1,7 +1,7 @@
 # Secrets and credentials
 .env
-.env.experiment
-.env.*.local
+.env.*
+!.env.example
 gmail_token.json
 gmail_credentials.json
 secrets/

@@ -184,9 +184,20 @@ def unified_cognitive_extract(db: Session, case, base_dir: str = "",
         try:
             cog_results = cognitive_fill(case_meta, full_text, existing=None,
                                           documents=None)
-            # Aplicar sin sobrescribir valores existentes si provienen de regex fuerte
+            # Aplicar resultados:
+            # - Por default, no sobrescribir si el campo ya tiene valor.
+            # - Excepción: campo `accionante` SÍ se sobrescribe cuando el valor
+            #   actual no parece nombre real (ej. "ANTECEDENTES", "pretende que")
+            #   pero cognitive_fill encontró uno válido vía regex header / NER.
+            from backend.cognition.folder_renamer import is_likely_real_name as _is_name
             for field, result in cog_results.items():
-                if not getattr(case, field, None):
+                current = getattr(case, field, None)
+                if not current:
+                    setattr(case, field, result.value)
+                    continue
+                if field == "accionante" and not _is_name(current) and _is_name(result.value):
+                    logger.info("V6 case=%d accionante override: %r → %r (current no era nombre real)",
+                                case_id, current[:40], result.value[:40])
                     setattr(case, field, result.value)
         except Exception as e:
             logger.debug("cognitive_fill falló para case=%d: %s", case_id, e)

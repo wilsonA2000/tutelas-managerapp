@@ -144,7 +144,7 @@ def persist_case(db: Session, case: Case,
     # nombre. Si el accionante extraído es frase/header, marca [REVISAR_ACCIONANTE].
     try:
         from backend.cognition.folder_renamer import rename_folder_if_needed, needs_rename
-        if needs_rename(case.folder_name):
+        if needs_rename(case.folder_name, case.accionante):
             rename_result = rename_folder_if_needed(db, case)
             if rename_result.get("action") == "renamed":
                 db.add(AuditLog(
