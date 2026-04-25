@@ -47,16 +47,50 @@ MAX_CONVERGENCE_ITERATIONS = 3
 
 
 def unified_cognitive_extract(db: Session, case, base_dir: str = "",
-                               classify_docs: bool = False) -> dict:
+                               classify_docs: bool = False,
+                               skip_consolidation_and_persist: bool = False) -> dict:
     """Ejecuta el pipeline cognitivo v6.0 sobre un caso.
 
     Firma compatible con unified_extract legacy: (db, case, base_dir, classify_docs).
+
+    Args:
+        skip_consolidation_and_persist: si True, corre solo las Capas 0-5 y
+            retorna antes de Capa 6 (live_consolidator) y Capa 7 (persist).
+            Lo usa el pod RunPod, que ejecuta el cómputo pesado y deja las
+            capas cross-case + persist para el cliente (backend local).
     """
     case_id = case.id if hasattr(case, "id") else case
     if not hasattr(case, "documents"):
         case = db.query(Case).filter(Case.id == case_id).first()
         if not case:
             return {"status": "error", "reason": "caso no existe"}
+
+    # Switch a extracción remota (RunPod) cuando está habilitado.
+    # Solo aplica si NO estamos dentro del pod (skip=False) para evitar recursión.
+    if not skip_consolidation_and_persist:
+        try:
+            from backend.core.settings import settings
+            if bool(getattr(settings, "USE_REMOTE_EXTRACTION", False)):
+                from backend.extraction.remote_client import run_remote_extract
+                remote_stats = run_remote_extract(db, case)
+                if remote_stats is not None:
+                    return remote_stats
+                # Pod falló. Decidir: fallback local (consume RAM) o mantener pendiente (strict).
+                strict = bool(getattr(settings, "REMOTE_EXTRACTION_STRICT", False))
+                if strict:
+                    logger.warning("V6 case=%d remote falló y STRICT=true, caso queda PENDIENTE",
+                                   case_id)
+                    try:
+                        case.processing_status = "PENDIENTE"
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                    return {"status": "remote_failed_strict", "case_id": case_id,
+                            "source": "remote_pod"}
+                logger.warning("V6 case=%d remote falló, fallback local", case_id)
+        except Exception as e:
+            logger.exception("V6 case=%d error en switch remote, fallback local: %s",
+                             case_id, e)
 
     stats = {
         "case_id": case_id,
@@ -164,6 +198,14 @@ def unified_cognitive_extract(db: Session, case, base_dir: str = "",
         case.estado_incidente = cls.estado_incidente
         db.commit()
         stats["phase_entropies"]["post_cognition"] = entropy_of_case(case).entropy_bits
+
+        # =================================================================
+        # Pod mode: saltar Capas 6-7 (las hace el cliente con su DB real)
+        # =================================================================
+        if skip_consolidation_and_persist:
+            stats["status"] = "PHASES_0_5_OK"
+            stats["iterations"] = 1
+            return stats
 
         # =================================================================
         # Capa 6: Live consolidator

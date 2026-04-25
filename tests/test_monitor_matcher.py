@@ -141,22 +141,22 @@ class TestScoringUnica:
         s = EmailSignals(rad23="68-001-40-09-027-2026-00100-00")
         r = score_case_match(db, cache, s)
         assert r.case_id == 100
-        assert r.score == 40
-        assert r.confidence == "MEDIUM"
+        assert r.score == 70  # v6.0.1: rad23 alone = auto-match
+        assert r.confidence == "HIGH"
         assert "rad23" in r.breakdown
 
     def test_solo_forest_remitente_generico(self, db, cache):
         s = EmailSignals(forest="20260019953", sender="apoyojur@santander.gov.co")
         r = score_case_match(db, cache, s)
         assert r.case_id == 100
-        assert r.score == 15  # WEIGHT_FOREST_GENERIC
+        assert r.score == 20  # v6.0.1: WEIGHT_FOREST_GENERIC bumped 15→20
         assert r.confidence == "LOW"
 
     def test_forest_con_tutelas_sender(self, db, cache):
         s = EmailSignals(forest="20260019953", sender="tutelas@santander.gov.co")
         r = score_case_match(db, cache, s)
         assert r.case_id == 100
-        assert r.score == 25  # WEIGHT_FOREST_VERIFIED_SENDER
+        assert r.score == 50  # v6.0.1: WEIGHT_FOREST_VERIFIED_SENDER bumped 25→50
 
     def test_solo_cc(self, db, cache):
         s = EmailSignals(cc_accionante="1098765432")
@@ -191,7 +191,7 @@ class TestScoringMultiple:
         assert r.is_auto_match
 
     def test_rad23_mas_forest_tutelas_sender(self, db, cache):
-        """rad23 (40) + forest verified (25) = 65 → MEDIUM (cerca del umbral)."""
+        """v6.0.1: rad23 (70) + forest_verified (50) = 120 → HIGH (ambos auto-match)."""
         s = EmailSignals(
             rad23="68-001-40-09-027-2026-00100-00",
             forest="20260019953",
@@ -199,26 +199,26 @@ class TestScoringMultiple:
         )
         r = score_case_match(db, cache, s)
         assert r.case_id == 100
-        assert r.score == 65
-        assert r.confidence == "MEDIUM"
+        assert r.score == 120
+        assert r.confidence == "HIGH"
 
     def test_thread_parent_solo(self, db, cache):
-        """Thread parent +50 = MEDIUM casi auto."""
+        """v6.0.1: Thread parent +70 = HIGH (antes 50, MEDIUM)."""
         s = EmailSignals(thread_parent_case_id=100)
         r = score_case_match(db, cache, s)
         assert r.case_id == 100
-        assert r.score == 50
-        assert r.confidence == "MEDIUM"
+        assert r.score == 70
+        assert r.confidence == "HIGH"
 
     def test_thread_mas_rad23_auto(self, db, cache):
-        """Thread (50) + rad23 (40) = 90 HIGH."""
+        """v6.0.1: Thread (70) + rad23 (70) = 140 HIGH."""
         s = EmailSignals(
             thread_parent_case_id=100,
             rad23="68-001-40-09-027-2026-00100-00",
         )
         r = score_case_match(db, cache, s)
         assert r.case_id == 100
-        assert r.score == 90
+        assert r.score == 140
         assert r.confidence == "HIGH"
 
 
@@ -246,7 +246,7 @@ class TestF7Guard:
         s = EmailSignals(rad_corto="2026-00200")
         r = score_case_match(db, cache, s)
         assert r.case_id == 200
-        assert r.score == 7  # WEIGHT_RAD_CORTO_SIN_JUZGADO
+        assert r.score == 12  # v6.0.1: WEIGHT_RAD_CORTO_SIN_JUZGADO bumped 7→12
 
 
 # ─────────────────────────────────────────────────────────────
@@ -292,6 +292,6 @@ class TestMatchResult:
         j = r.to_signals_json()
         import json as _json
         parsed = _json.loads(j)
-        assert parsed["score"] == 40
-        assert parsed["confidence"] == "MEDIUM"
+        assert parsed["score"] == 70  # v6.0.1
+        assert parsed["confidence"] == "HIGH"
         assert "rad23" in parsed["breakdown"]

@@ -102,10 +102,24 @@ def _get_paddle_ocr():
 # ---------------------------------------------------------------------------
 
 def normalize_pdf(file_path: str | Path) -> NormalizationResult:
-    """PDF: cascada tier 1 → 2 → 3."""
+    """PDF: cascada tier 1 → 2 → 3.
+
+    v6.0.1: gate de tamaño — para PDFs >20MB se salta pdftext (pdfium ha
+    demostrado abortar con SIGTRAP en PDFs pesados/mal formados, tumbando
+    el proceso sin traceback). Va directo a lightweight OCR con fitz.
+    """
     file_path = Path(file_path)
     if not file_path.exists():
         return NormalizationResult(text="", error=f"Archivo no existe: {file_path}")
+
+    # v6.0.1: gate de tamaño antes de tocar pdftext/pdfium
+    try:
+        size_mb = file_path.stat().st_size / (1024 * 1024)
+    except OSError:
+        size_mb = 0
+    if size_mb > 20:
+        logger.info(f"PDF >20MB ({size_mb:.1f}MB), saltando pdftext y usando lightweight: {file_path.name}")
+        return normalize_pdf_lightweight(file_path)
 
     # Tier 1: pdftext
     if _check_pdftext():
@@ -259,35 +273,76 @@ def normalize_pdf_lightweight(file_path: str | Path) -> NormalizationResult:
 # ---------------------------------------------------------------------------
 
 def _extract_with_pdftext(file_path: Path) -> NormalizationResult:
-    """Tier 1: pdftext — rapido, sin modelos."""
+    """Tier 1: pdftext — rapido, sin modelos.
+
+    v6.0.1: ejecutado en subprocess aislado porque pdfium ha demostrado
+    abortar con SIGTRAP en PDFs mal formados, tumbando el proceso padre.
+    El subprocess también aplica timeout de 120s contra cuelgues.
+    """
+    import subprocess
+    import sys
+
+    runner_code = (
+        "import sys, json\n"
+        "from pdftext.extraction import paginated_plain_text_output\n"
+        "try:\n"
+        "    pages = paginated_plain_text_output(sys.argv[1])\n"
+        "    print(json.dumps({'ok': True, 'pages': pages}))\n"
+        "except Exception as e:\n"
+        "    print(json.dumps({'ok': False, 'error': str(e)[:200]}))\n"
+    )
+
     try:
-        from pdftext.extraction import paginated_plain_text_output
-        pages = paginated_plain_text_output(str(file_path))
-        if not pages:
-            return NormalizationResult(text="", error="pdftext: sin paginas")
-
-        all_parts = []
-        scanned_count = 0
-        for i, page_text in enumerate(pages):
-            if len(page_text.strip()) < 50:
-                scanned_count += 1
-            all_parts.append(f"--- PAGINA {i + 1} ---\n{page_text}")
-
-        text = "\n\n".join(all_parts)
-        has_scanned = scanned_count > 0
-
-        # Si mas de la mitad son escaneadas, necesita OCR completo
-        if scanned_count > len(pages) / 2:
-            return NormalizationResult(
-                text="", error="PDF mayormente escaneado",
-                pages=len(pages), has_ocr_pages=True,
-            )
-
-        return NormalizationResult(
-            text=text, method="pdftext", pages=len(pages), has_ocr_pages=has_scanned,
+        proc = subprocess.run(
+            [sys.executable, "-c", runner_code, str(file_path)],
+            capture_output=True, text=True, timeout=120,
         )
+    except subprocess.TimeoutExpired:
+        return NormalizationResult(text="", error="pdftext timeout 120s", has_ocr_pages=True)
     except Exception as e:
-        return NormalizationResult(text="", error=f"pdftext fallo: {e}")
+        return NormalizationResult(text="", error=f"pdftext subprocess error: {e}")
+
+    # returncode != 0 o stdout vacío: pdfium abortó (SIGTRAP/SIGSEGV)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        stderr_tail = (proc.stderr or "").strip()[-200:]
+        return NormalizationResult(
+            text="", error=f"pdftext aborted (rc={proc.returncode}): {stderr_tail}",
+            has_ocr_pages=True,  # fallback a OCR
+        )
+
+    import json as _json
+    try:
+        data = _json.loads(proc.stdout.splitlines()[-1])
+    except Exception:
+        return NormalizationResult(text="", error="pdftext JSON parse error", has_ocr_pages=True)
+
+    if not data.get("ok"):
+        return NormalizationResult(text="", error=f"pdftext fallo: {data.get('error','?')}")
+
+    pages = data.get("pages") or []
+    if not pages:
+        return NormalizationResult(text="", error="pdftext: sin paginas")
+
+    all_parts = []
+    scanned_count = 0
+    for i, page_text in enumerate(pages):
+        if len(page_text.strip()) < 50:
+            scanned_count += 1
+        all_parts.append(f"--- PAGINA {i + 1} ---\n{page_text}")
+
+    text = "\n\n".join(all_parts)
+    has_scanned = scanned_count > 0
+
+    # Si mas de la mitad son escaneadas, necesita OCR completo
+    if scanned_count > len(pages) / 2:
+        return NormalizationResult(
+            text="", error="PDF mayormente escaneado",
+            pages=len(pages), has_ocr_pages=True,
+        )
+
+    return NormalizationResult(
+        text=text, method="pdftext", pages=len(pages), has_ocr_pages=has_scanned,
+    )
 
 
 def _extract_with_marker(file_path: Path) -> NormalizationResult:

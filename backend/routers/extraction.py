@@ -248,8 +248,8 @@ def api_extract_single(case_id: int, db: Session = Depends(get_db)):
 
     try:
         if settings.UNIFIED_EXTRACTOR_ENABLED:
-            from backend.extraction.unified import unified_extract
-            stats = unified_extract(db, case, settings.BASE_DIR)
+            from backend.extraction.unified_cognitive import unified_extract_dispatch
+            stats = unified_extract_dispatch(db, case, settings.BASE_DIR)
         else:
             stats = process_folder(db, case)
         elapsed = int(time.time() - start)

@@ -139,6 +139,26 @@ def persist_case(db: Session, case: Case,
     logger.info("V6 persist case=%d %s→%s H=%.3f iters=%d",
                 case.id, status_before, new_status, h, convergence_iterations)
 
+    # Capa 7+: rename automático si la carpeta sigue marcada [PENDIENTE/REVISAR]
+    # Idempotente: si ya está limpia, skip. Si hay accionante real, rename con
+    # nombre. Si el accionante extraído es frase/header, marca [REVISAR_ACCIONANTE].
+    try:
+        from backend.cognition.folder_renamer import rename_folder_if_needed, needs_rename
+        if needs_rename(case.folder_name):
+            rename_result = rename_folder_if_needed(db, case)
+            if rename_result.get("action") == "renamed":
+                db.add(AuditLog(
+                    case_id=case.id,
+                    action="V6_FOLDER_RENAMED",
+                    source=f"{rename_result['old_name']} → {rename_result['new_name']} "
+                           f"clean={rename_result.get('is_clean')} "
+                           f"fs={rename_result.get('fs_renamed')} "
+                           f"docs={rename_result.get('docs_updated')}",
+                ))
+                db.commit()
+    except Exception as e:
+        logger.warning("V6 folder rename case=%d no fatal: %s", case.id, e)
+
     return PersistReport(
         case_id=case.id,
         status_before=status_before,

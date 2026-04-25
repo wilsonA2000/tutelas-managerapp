@@ -31,8 +31,26 @@ CREDENTIALS_PATH = _APP_DIR / "gmail_credentials.json"
 VALID_EXTENSIONS = {".pdf", ".docx", ".doc", ".xlsx"}
 
 # Correos que se ignoran (alertas, spam, no jurídicos)
-IGNORE_SENDERS = {"noreply@google.com", "no-reply@accounts.google.com", "googleplay-noreply@google.com"}
-IGNORE_SUBJECTS = {"alerta de seguridad", "configurar tu dispositivo", "privacidad en play", "verify your"}
+IGNORE_SENDERS = {
+    "noreply@google.com", "no-reply@accounts.google.com", "googleplay-noreply@google.com",
+    # v6.0.1: newsletters de proveedores IA (rescatamos de falsos positivos en histórico)
+    "info@cerebras.net", "noreply@cerebras.net",
+    "no-reply@openai.com", "noreply@openai.com",
+    "noreply@anthropic.com", "no-reply@anthropic.com",
+    "noreply@deepseek.com",
+    "noreply@huggingface.co",
+    # LinkedIn / social / marketing genérico
+    "notifications-noreply@linkedin.com", "messages-noreply@linkedin.com",
+    "invitations@linkedin.com", "news-noreply@linkedin.com",
+    "noreply@medium.com", "noreply@substack.com",
+}
+IGNORE_SUBJECTS = {
+    "alerta de seguridad", "configurar tu dispositivo", "privacidad en play", "verify your",
+    # v6.0.1: notificaciones de producto/newsletter (no jurídicas)
+    "model deprecation notice", "new api", "pricing update",
+    "weekly digest", "newsletter", "your subscription",
+    "account verification", "reset your password",
+}
 
 # Typos comunes en subjects judiciales
 SUBJECT_TYPOS = {
@@ -139,6 +157,7 @@ def extract_radicado(text: str) -> dict:
     Returns: {'radicado_23': str, 'radicado_corto': str}"""
     from backend.agent.regex_library import (
         RAD_23_CONTINUOUS, RAD_23_WITH_SEPARATORS, RAD_T_FORMAT, RAD_LABEL, RAD_GENERIC,
+        RAD_CONTINUOUS_SHORT, RAD_JUDICIAL_CONTEXT, RAD_SIX_DIGITS,
     )
     result = {"radicado_23": "", "radicado_corto": ""}
 
@@ -154,11 +173,12 @@ def extract_radicado(text: str) -> dict:
     # F2: PRIORITARIO — Si hay rad23 valido, derivar rad_corto directamente de el.
     # Esto PREVIENE que RAD_LABEL/RAD_GENERIC interpreten FOREST (20260066132)
     # como rad_corto (2026-66132) cuando el rad23 ya contiene el consecutivo real.
+    # v6.0.1: usar derive_rad_corto_from_rad23 que tiene fallback para 21d truncado
     if result["radicado_23"]:
-        clean = re.sub(r"[\s\-\.]", "", result["radicado_23"])
-        m = re.search(r"(20\d{2})(\d{5})(\d{2})$", clean)
-        if m:
-            result["radicado_corto"] = f"{m.group(1)}-{m.group(2)}"
+        from backend.email.rad_utils import derive_rad_corto_from_rad23
+        derived = derive_rad_corto_from_rad23(result["radicado_23"])
+        if derived:
+            result["radicado_corto"] = derived
             return result
 
     # Patrón 2: Formato T-00053/2026
@@ -178,6 +198,34 @@ def extract_radicado(text: str) -> dict:
         m = RAD_GENERIC.pattern.search(text)
         if m:
             result["radicado_corto"] = f"{m.group(1)}-{m.group(2).zfill(5)}"
+            return result
+
+    # v6.0.1 Patrón 6: 6 dígitos con leading-zero strip (ej. "2026-000115" → "2026-00115")
+    if not result["radicado_corto"]:
+        m = RAD_SIX_DIGITS.pattern.search(text)
+        if m:
+            seq = m.group(2).lstrip("0")
+            if 1 <= len(seq) <= 5:
+                result["radicado_corto"] = f"{m.group(1)}-{seq.zfill(5)}"
+                return result
+
+    # v6.0.1 Patrón 7: continuo YYYYNNNNN sin separador (9d exactos)
+    if not result["radicado_corto"]:
+        m = RAD_CONTINUOUS_SHORT.pattern.search(text)
+        if m:
+            result["radicado_corto"] = f"{m.group(1)}-{m.group(2)}"
+            return result
+
+    # v6.0.1 Patrón 8: 3-4 dígitos con marcador judicial ampliado (FALLO/TUTELA/OFICIO/etc)
+    # El patrón acepta marker antes o después — dos alternativas en la regex.
+    # Groups 1-2: orden MARKER ... rad. Groups 3-4: orden rad ... MARKER.
+    if not result["radicado_corto"]:
+        m = RAD_JUDICIAL_CONTEXT.pattern.search(text)
+        if m:
+            year = m.group(1) or m.group(3)
+            seq = m.group(2) or m.group(4)
+            if year and seq:
+                result["radicado_corto"] = f"{year}-{seq.zfill(5)}"
 
     return result
 

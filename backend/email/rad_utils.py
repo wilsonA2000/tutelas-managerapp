@@ -37,27 +37,37 @@ def derive_rad_corto_from_rad23(rad23: str | None) -> str:
     """Extrae 'AAAA-NNNNN' de los últimos 7 dígitos del rad23 (AAAA + NNNNN + 2 chequeo).
 
     Ejemplo: '54001410500220261002100' → año 2026, seq 10021 → '2026-10021'.
-    Retorna '' si el rad23 no tiene el shape esperado.
+
+    v6.0.1: fallback para rad23 truncado a 21 dígitos (falta el '-00' de instancia)
+    común en subjects de emails: "RAD 681904089002202600069" → año 2026, seq 00069.
+
+    Retorna '' si el rad23 no tiene shape reconocible.
     """
     digits = normalize_rad23(rad23)
     if len(digits) < 11:
         return ""
+    # Shape canónico: ...YYYY+5d+2d al final (23d completos)
     m = _RAD23_TAIL.search(digits)
-    if not m:
-        return ""
-    return f"{m.group(1)}-{m.group(2)}"
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    # v6.0.1: rad23 truncado (21d sin sufijo de instancia): YYYY+5d al final
+    m2 = re.search(r"(20\d{2})(\d{5})$", digits)
+    if m2:
+        return f"{m2.group(1)}-{m2.group(2)}"
+    return ""
 
 
 def canonical_rad_corto(raw: str | None, min_digits: int = 4) -> str:
     """Normaliza un rad_corto capturado a 'AAAA-NNNNN'.
 
     Args:
-        raw: string tipo '2026-1002', '2026 10021', 'RAD 2026-53', etc.
+        raw: string tipo '2026-1002', '2026 10021', 'RAD 2026-53', '2026-000115'.
         min_digits: mínimo de dígitos en la secuencia para aceptar. Default 4.
-                    Con 4 aceptamos '2026-1002' pero lo producimos como '2026-01002'
-                    (el fix real es en el regex RAD_GENERIC que exige ≥5).
 
-    Retorna '' si no se puede normalizar (año inválido o secuencia muy corta).
+    v6.0.1: si la secuencia tiene 6 dígitos y empieza con 0, strip leading zero
+    hasta 5 dígitos (convención colombiana canónica).
+
+    Retorna '' si no se puede normalizar (año inválido o secuencia inválida).
     """
     if not raw:
         return ""
@@ -71,7 +81,10 @@ def canonical_rad_corto(raw: str | None, min_digits: int = 4) -> str:
         return ""
     year = m.group(1)
     seq_raw = m.group(2)
-    if len(seq_raw) < min_digits:
+    # v6.0.1: 6 dígitos con leading zero → strip al canónico 5d
+    if len(seq_raw) == 6 and seq_raw.startswith("0"):
+        seq_raw = seq_raw.lstrip("0") or "0"
+    if len(seq_raw) < min_digits or len(seq_raw) > 5:
         return ""
     seq = seq_raw.zfill(5)
     return f"{year}-{seq}"
@@ -98,13 +111,20 @@ def reconcile(rad23: str | None, rad_corto: str | None) -> tuple[str, str]:
     Previene el bug donde un rad_corto regex mal capturado contamina la DB
     aunque el rad23 del email sea correcto.
 
+    v6.0.1: si rad23 tiene ≥18 dígitos pero la derivación falla (shape no
+    canónico, ej. RAD_23_CONTINUOUS captura 19-20d parciales), NO limpiar el
+    rad_corto que el extractor halló por otra vía (p.ej. desde el subject).
+
     Returns:
         (rad23_canonico, rad_corto_canonico). Ambos pueden ser '' si no hay datos.
     """
     rad23_clean = rad23 or ""
     if is_valid_rad23(rad23_clean):
         derived = derive_rad_corto_from_rad23(rad23_clean)
-        return rad23_clean, derived
+        if derived:
+            return rad23_clean, derived
+        # rad23 ≥18d pero sin shape canónico: preservar rad_corto del extractor
+        return rad23_clean, canonical_rad_corto(rad_corto) if rad_corto else ""
     # rad23 ausente o inválido: usar rad_corto normalizado
     return rad23_clean, canonical_rad_corto(rad_corto) if rad_corto else ""
 

@@ -10,18 +10,25 @@ Principio (análogo a `verify_document_belongs` del pipeline principal):
     El umbral determina si el match es automático, ambiguo (quarantine) o
     debe crear caso nuevo.
 
-Scoring (total 0-160, el threshold es relativo):
-    Thread parent (In-Reply-To match a email ya procesado):  +50   (señal fuerte)
-    rad23 canónico exacto en KB:                              +40
-    FOREST exacto + remitente tutelas@santander.gov.co:       +25
+Scoring (total 0-205, el threshold es relativo):
+    Thread parent (In-Reply-To match a email ya procesado):  +70   (auto-match)
+    rad23 canónico exacto en KB:                              +70   (auto-match; 23d = ID único nacional)
+    FOREST exacto + remitente tutelas@santander.gov.co:       +50   (FOREST = ID interno de correspondencia, único)
+    FOREST exacto con otro remitente:                         +20
     CC hash match en pii_mappings:                            +20
-    rad_corto + juzgado_code coincidentes:                    +15
+    rad_corto + juzgado_code coincidentes:                    +30   (year:seq:juzgado = casi único)
+    rad_corto sin juzgado:                                    +12
     Similaridad de nombre accionante (difflib):               +10   (0-10 gradual)
 
 Umbrales:
     ≥70   HIGH    — auto-match, escribir case_id
     40-69 MEDIUM  — ambiguo, marcar email.status='AMBIGUO' con case sugerido
     <40   LOW     — crear caso nuevo (si hay rad_corto) o quarantine
+
+v6.0.1 (2026-04-23): rad23 y forest_verified elevados a peso auto-match.
+    Justificación empírica: en 1,211 emails barridos, 244 quedaron AMBIGUO con
+    rad23 exacto (score=55-65). rad23 es ID nacional único (imposible colisión).
+    FOREST desde tutelas@santander.gov.co idem (ID interno único).
 """
 
 from __future__ import annotations
@@ -79,13 +86,13 @@ class MatchResult:
 # Pesos y umbrales
 # ─────────────────────────────────────────────────────────────
 
-WEIGHT_THREAD_PARENT = 50
-WEIGHT_RAD23 = 40
-WEIGHT_FOREST_VERIFIED_SENDER = 25
-WEIGHT_FOREST_GENERIC = 15
+WEIGHT_THREAD_PARENT = 70
+WEIGHT_RAD23 = 70
+WEIGHT_FOREST_VERIFIED_SENDER = 50
+WEIGHT_FOREST_GENERIC = 20
 WEIGHT_CC = 20
-WEIGHT_RAD_CORTO_JUZGADO = 15
-WEIGHT_RAD_CORTO_SIN_JUZGADO = 7
+WEIGHT_RAD_CORTO_JUZGADO = 30
+WEIGHT_RAD_CORTO_SIN_JUZGADO = 12
 WEIGHT_NAME_MAX = 10
 
 THRESHOLD_HIGH = 70

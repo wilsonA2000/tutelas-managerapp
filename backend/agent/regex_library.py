@@ -104,6 +104,78 @@ RAD_GENERIC = RegexPattern(
     ],
 )
 
+# v6.0.1: Pattern para "YYYY NNNNN" / "YYYYNNNNN" continuos (sin separador)
+# Común en subjects: "RAD 202600026", "TUTELA 202600069". Exige exactamente 5d
+# de secuencia con word boundary para rechazar FOREST (11-13d totales).
+RAD_CONTINUOUS_SHORT = RegexPattern(
+    name="radicado_continuous_short",
+    pattern=re.compile(r"\b(20\d{2})(\d{5})\b(?!\d)"),
+    description="Continuo YYYYNNNNN sin separador (9 dígitos exactos, fallback extra)",
+    test_positive=[
+        ("RAD 202600026", "00026"),
+        ("TUTELA 202600069", "00069"),
+        ("ACCION DE TUTELA 202600059 URGENTE", "00059"),
+    ],
+    test_negative=[
+        "20260066132",  # FOREST 11d (word-boundary + no-digit rechazará)
+        "202600069467",  # FOREST 12d
+        "texto 2026 solo",
+    ],
+)
+
+# v6.0.1: Pattern para 3-4 dígitos con marcador JUDICIAL AMPLIADO
+# Captura marcador ANTES o DESPUÉS del radicado corto (ambos órdenes).
+# Markers: TUTELA|FALLO|OFICIO|SENTENCIA|ACCION|NOTIFIC|CUMPL|IMPUG|INCIDENTE|
+#          REQUERIM|RESPUESTA|CONTEST|DESACATO|ADMIT|VINCULA|TRASLADO
+# Separador flexible (.{0,40}?) para aceptar "INCIDENTE DESACATO 2025-0020".
+_JUDICIAL_MARKERS = (
+    r"TUTELA|FALLO|OFICIO|SENTENCIA|ACCI[OÓ]N\s+DE\s+TUTELA"
+    r"|NOTIFIC\w*|CUMPLIM\w*|IMPUGN\w*|INCIDENTE|REQUERIM\w*"
+    r"|RESPUESTA|CONTEST\w*|TRASLADO|VINCULA\w*|DESACATO|ADMIT\w*"
+)
+RAD_JUDICIAL_CONTEXT = RegexPattern(
+    name="radicado_judicial_context",
+    pattern=re.compile(
+        r"(?:"
+        # Orden A: MARKER ... 2026-007
+        rf"(?:{_JUDICIAL_MARKERS}).{{0,40}}?(20\d{{2}})[-\u2013\u2014/]\s*0*(\d{{3,4}})(?!\d)"
+        r"|"
+        # Orden B: 2026-258 ... MARKER
+        rf"(20\d{{2}})[-\u2013\u2014/]\s*0*(\d{{3,4}})(?!\d).{{0,40}}?(?:{_JUDICIAL_MARKERS})"
+        r")",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    description="Rad corto 3-4d con marcador judicial antes o después (zfill a 5d)",
+    test_positive=[
+        ("Oficio cumplimiento fallo 2026-007", "007"),
+        ("RESPUESTA REQUERIMIENTO 2025-127", "127"),
+        ("RV: RESPUESTA ACCIÓN DE TUTELA 2026-108", "108"),
+        ("AUTO INCIDENTE DESACATO 2025-0020", "0020"),
+        ("RV: 2026-258 NOTIFICACIÓN FALLO DE TUTELA", "258"),
+    ],
+    test_negative=[
+        "caso 2026-007 ref",  # sin marker judicial
+        "factura 2026-030",
+    ],
+)
+
+# v6.0.1: Pattern para rad_corto con 6 dígitos (strip leading zero → 5d)
+# Casos como "contestación tutela 2026-000115" o "RAD 2026-000058"
+# donde el escritor usó 6 dígitos por error. Aceptamos y normalizamos.
+RAD_SIX_DIGITS = RegexPattern(
+    name="radicado_six_digits",
+    pattern=re.compile(r"(20\d{2})[-\u2013\u2014](0\d{5})(?!\d)"),
+    description="Rad corto con 6d (solo si empieza con 0, strip → 5d)",
+    test_positive=[
+        ("contestación tutela 2026-000115", "000115"),
+        ("RAD 2026-000058", "000058"),
+    ],
+    test_negative=[
+        "FOREST 2026-100115",  # no empieza con 0, es otra cosa
+        "2026-100000",  # no strippable
+    ],
+)
+
 # ============================================================
 # FOREST PATTERNS (moved from forest_extractor.py)
 # ============================================================

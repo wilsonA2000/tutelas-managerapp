@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     USE_COGNITIVE_PIPELINE: bool = False  # True = pipeline de 7 capas cognitivas; False = v5.5 legacy
     COGNITIVE_ENTROPY_THRESHOLD: float = 2.2  # Umbral H(caso) sobre el cual marcar REVISION_HUMANA
 
+    # v6.0.2 Remote extraction (RunPod GPU pod) — delega Capas 0-5 a un worker remoto.
+    # Las capas 6-7 (consolidator cross-case + persist) siempre se ejecutan local.
+    USE_REMOTE_EXTRACTION: bool = False
+    REMOTE_EXTRACTION_URL: str = ""       # ej. https://<pod-id>-8000.proxy.runpod.net
+    REMOTE_EXTRACTION_TOKEN: str = ""     # bearer token del pod
+    REMOTE_EXTRACTION_TIMEOUT: int = 600  # segundos por caso (casos pesados ~5-8 min)
+    REMOTE_EXTRACTION_STRICT: bool = False  # True = si pod falla NO hacer fallback local
+                                            # (preserva RAM local; caso queda PENDIENTE para retry)
+
     # CSV
     CSV_DELIMITER: str = ";"
     CSV_COLUMNS: list[str] = [

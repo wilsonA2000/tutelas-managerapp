@@ -1,0 +1,13 @@
+# Cachés y modelos (los bajamos dentro del pod)
+models/
+cache/
+__pycache__/
+*.pyc
+.venv/
+
+# Logs
+*.log
+logs/
+
+# Archivos temporales de request
+tmp_cases/
