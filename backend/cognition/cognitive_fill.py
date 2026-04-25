@@ -63,14 +63,38 @@ def _accionante_collides_with_juzgado(name: str, juzgado: str) -> bool:
     return False
 
 
-# Patrones explícitos que preceden al accionante en encabezados de fallos/tutelas
-# Capturan hasta 6 palabras tipo nombre (mayúsculas/tildes/ñ).
+# Patrones explícitos que preceden al accionante en encabezados de fallos/tutelas.
+# Acepta nombres en MAYÚSCULA TOTAL ("CARMEN BELEN") y Title Case ("Lina Rocío").
+# Captura 2-6 palabras tipo nombre.
+_NAME_TOKEN = r"[A-ZÁÉÍÓÚÑ][a-záéíóúñA-ZÁÉÍÓÚÑ'’.\-]*"
 _ACCIONANTE_HEADER_RE = re.compile(
     r"\b(?:Accionante|Demandante|Tutelante|Actor)\s*[:\-]?\s*"
-    r"((?:[A-ZÁÉÍÓÚÑ][\w\u00C0-\u017F'’.\-]+\s+){1,5}"
-    r"[A-ZÁÉÍÓÚÑ][\w\u00C0-\u017F'’.\-]+)",
+    rf"((?:{_NAME_TOKEN}\s+){{1,5}}{_NAME_TOKEN})",
     re.UNICODE,
 )
+
+# FIX 8.4 — patrones narrativos: capturar accionante en prosa cuando no hay
+# header explícito. Ej: "acción de tutela promovida por la señora MARTHA ANDREA QUITIAN PINEDA".
+# Nota: usar inline (?i:...) en partes case-insensitive para NO afectar
+# _NAME_TOKEN (que exige mayúscula inicial estricta).
+_NARRATIVE_PATTERNS = [
+    re.compile(
+        r"(?i:promovida|presentada|interpuesta|instaurada|incoada)\s+(?i:por)\s+"
+        r"(?i:la?\s+(?:señora|señor|señor\(a\)|sr|sra)\.?\s+)?"
+        rf"((?:{_NAME_TOKEN}\s+){{1,5}}{_NAME_TOKEN})",
+        re.UNICODE,
+    ),
+    re.compile(
+        rf"\bYo,?\s+((?:{_NAME_TOKEN}\s+){{1,5}}{_NAME_TOKEN}),?\s+"
+        r"(?:identificad[oa]|mayor\s+de\s+edad|en\s+calidad)",
+        re.UNICODE,
+    ),
+    re.compile(
+        r"\b(?i:el|la)\s+(?i:accionante)\s+(?i:es\s+)?"
+        rf"((?:{_NAME_TOKEN}\s+){{1,5}}{_NAME_TOKEN})",
+        re.UNICODE,
+    ),
+]
 
 
 def _pick_accionante_from_text(full_text: str, juzgado: str = "") -> str:
@@ -93,6 +117,16 @@ def _pick_accionante_from_text(full_text: str, juzgado: str = "") -> str:
         if _accionante_collides_with_juzgado(candidate, juzgado):
             continue
         return candidate
+
+    # Paso 1.5: patrones narrativos (FIX 8.4)
+    for pat in _NARRATIVE_PATTERNS:
+        for m in pat.finditer(head):
+            candidate = clean_accionante(m.group(1))
+            if not candidate or not is_likely_real_name(candidate):
+                continue
+            if _accionante_collides_with_juzgado(candidate, juzgado):
+                continue
+            return candidate
 
     # Paso 2: NER fallback
     try:

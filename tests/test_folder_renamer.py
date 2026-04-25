@@ -94,6 +94,37 @@ class TestCleanAccionante:
     def test_cut_case_insensitive(self):
         assert clean_accionante("MARIA TORRES EN CALIDAD DE TUTORA") == "MARIA TORRES"
 
+    # FIX 8.1 — preposición trailing (truncamiento NER)
+    def test_trim_trailing_en(self):
+        assert clean_accionante("YOLIMA KATHERINE QUIMBAYA SOCHA en") == "YOLIMA KATHERINE QUIMBAYA SOCHA"
+
+    def test_trim_trailing_de(self):
+        assert clean_accionante("ANA LOPEZ de") == "ANA LOPEZ"
+
+    def test_trim_trailing_y(self):
+        assert clean_accionante("PEDRO MARTINEZ y") == "PEDRO MARTINEZ"
+
+    def test_trim_recursive_preps(self):
+        # Múltiples preposiciones colgadas
+        assert clean_accionante("CARLOS RUIZ en de") == "CARLOS RUIZ"
+
+    # FIX 8.2 — frases procesales típicas de respuestas
+    def test_cut_dando_cumplimiento(self):
+        # casos 58, 65 reales
+        assert clean_accionante("RUTH QUIJANO GARCES DANDO CUMPLIMIENTO A FALLO DE TUTELA") \
+            == "RUTH QUIJANO GARCES"
+
+    def test_cut_derecho_peticion(self):
+        assert clean_accionante("JUAN PEREZ DERECHO DE PETICIÓN") == "JUAN PEREZ"
+
+    def test_cut_dar_respuesta(self):
+        assert clean_accionante("MARIA LOPEZ dar respuesta a la solicitud") == "MARIA LOPEZ"
+
+    def test_cut_con_cc_punctuation(self):
+        # caso 181 / patrón narrativo: "MARTHA con C.C. 91"
+        assert clean_accionante("MARTHA ANDREA QUITIAN PINEDA con C.C. 91.154.169") \
+            == "MARTHA ANDREA QUITIAN PINEDA"
+
 
 # ---------- needs_rename ----------
 

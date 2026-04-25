@@ -75,16 +75,29 @@ ROLE_TOKENS = {
 # Ej: "FABRIZIO ENRIQUE MANOSALVA en calidad de representante" → "FABRIZIO ENRIQUE MANOSALVA"
 # Patrones case-insensitive aplicados en orden; el primer match corta el resto.
 TRAILING_CUT_PATTERNS = [
+    # FIX 2.2 base
     r"\s+en\s+calidad\s+de\b.*$",
     r"\s+obrando\s+en\s+nombre\b.*$",
     r"\s+actuando\s+(como|en\s+nombre)\b.*$",
-    r"\s+en\s+representaci[oó]n\s+de\b.*$",
+    r"\s+en\s+representaci[oó]n.*$",
     r"\s+como\s+representante\b.*$",
     r"\s+representante\s+(legal|judicial)\b.*$",
     r"\s+identific(ado|ada)\s+con\b.*$",
     r"\s+mayor\s+de\s+edad\b.*$",
-    r"\s+con\s+(c[eé]dula|cc|ti|nuip)\b.*$",
+    r"\s+con\s+(?:c[eé]dula|c\.?\s*c\.?|t\.?\s*i\.?|nuip|n[uú]m(?:ero)?)\b.*$",
+    # FIX 8.2 — frases típicas de respuestas / oficios
+    r"\s+dando\s+cumplimiento\b.*$",
+    r"\s+da(ndo|r)\s+respuesta\b.*$",
+    r"\s+derecho\s+de\s+petici[oó]n\b.*$",
+    r"\s+presento?\s+(?:acci[oó]n|ante)\b.*$",
+    r"\s+interp(ongo|uso|one)\b.*$",
 ]
+
+# FIX 8.1 — preposiciones colgadas al final tras un nombre (truncamiento NER).
+# Se quitan recursivamente al final hasta dar con palabra-tipo nombre.
+TRAILING_PREP_TOKENS = {
+    "en", "de", "del", "y", "al", "por", "para", "con", "a", "ante",
+}
 
 # Conectores que NO deberían estar al inicio de un nombre real
 START_TRAPS = {"EL", "LA", "EN", "Y", "QUE", "SI", "NO", "SE", "CON",
@@ -107,9 +120,10 @@ def clean_accionante(s: str) -> str:
 
     - Toma la primera línea no vacía (corta en \\n, \\r, \\t).
     - Recorta frases procesales tipo "en calidad de", "obrando en nombre",
-      "en representación de", etc. (FIX 2.2).
+      "en representación de", "dando cumplimiento", etc. (FIX 2.2 + 8.2).
     - Elimina tokens-rol procesales en cabeza y cola
       (ej. "JUANA PEREZ\\nACCIONADO" → "JUANA PEREZ").
+    - Quita preposiciones colgadas al final (FIX 8.1).
     - Colapsa espacios.
     """
     if not s:
@@ -126,6 +140,9 @@ def clean_accionante(s: str) -> str:
         words.pop()
     while words and _strip_token(words[0]) in ROLE_TOKENS:
         words.pop(0)
+    # FIX 8.1: preposición colgada al final tras truncamiento
+    while words and words[-1].lower().strip(",.;:") in TRAILING_PREP_TOKENS:
+        words.pop()
 
     return re.sub(r"\s+", " ", " ".join(words)).strip()
 

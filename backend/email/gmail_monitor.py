@@ -298,6 +298,11 @@ def extract_accionante(subject: str, body: str) -> str:
         "CONTRA", "EN", "REPRESENTACION", "REPRESENTACIÓN", "NOMBRE",
     }
 
+    # FIX 8 — usar helpers compartidos del cognitive layer para consistencia
+    # con folder_renamer/cognitive_fill (mismas reglas en monitor e ingesta).
+    from backend.cognition.folder_renamer import clean_accionante as _clean
+    from backend.cognition.folder_renamer import is_likely_real_name as _is_real
+
     for text in texts_to_scan:
         for pat in patterns:
             match = re.search(pat, text)
@@ -313,6 +318,10 @@ def extract_accionante(subject: str, body: str) -> str:
                     trimmed.append(tok)
                 if trimmed:
                     name = " ".join(trimmed)
+                # FIX 8 — sanitizar y validar con helpers compartidos
+                name = _clean(name)
+                if not name or not _is_real(name):
+                    continue
                 words = name.upper().split()
                 non_skip = [w for w in words if w not in SKIP_WORDS and len(w) > 2]
                 if len(non_skip) >= 2:

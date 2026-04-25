@@ -43,6 +43,30 @@ class TestPickAccionanteFromText:
         text = "Accionante - LUISA MARTINEZ ROJAS\n"
         assert _pick_accionante_from_text(text) == "LUISA MARTINEZ ROJAS"
 
+    # FIX 8.3 — Title Case (no solo MAYÚSCULAS)
+    def test_header_title_case(self):
+        # caso 133 real
+        text = "Accionante: Lina Rocío Sánchez Fernández\nAccionada: Sanitas E.P.S."
+        assert _pick_accionante_from_text(text) == "Lina Rocío Sánchez Fernández"
+
+    # FIX 8.4 — patrones narrativos (sin header explícito)
+    def test_narrative_promovida_por(self):
+        # caso 181 real
+        text = "acción de tutela promovida por la señora MARTHA ANDREA QUITIAN PINEDA con C.C. 91"
+        assert _pick_accionante_from_text(text) == "MARTHA ANDREA QUITIAN PINEDA"
+
+    def test_narrative_yo_identificada(self):
+        text = "Yo, MARIA FERNANDA TORRES, identificada con cedula 12345, presento..."
+        assert _pick_accionante_from_text(text) == "MARIA FERNANDA TORRES"
+
+    def test_narrative_interpuesta_por(self):
+        text = "tutela interpuesta por JOSE MIGUEL VARGAS RIVERA contra..."
+        assert _pick_accionante_from_text(text) == "JOSE MIGUEL VARGAS RIVERA"
+
+    def test_narrative_la_accionante_es(self):
+        text = "...la accionante PATRICIA GOMEZ ROMERO solicita..."
+        assert _pick_accionante_from_text(text) == "PATRICIA GOMEZ ROMERO"
+
 
 class TestAccionanteCollidesWithJuzgado:
     def test_juzgado_word_in_name(self):
