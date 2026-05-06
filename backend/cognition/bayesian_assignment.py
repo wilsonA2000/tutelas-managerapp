@@ -67,6 +67,11 @@ LR_TUTELA_INICIAL_PRE_RAD = 8.0            # doc_type tutela y accionante exacto
 LR_FILENAME_HAS_OTHER_CASE_RAD23 = 0.005   # filename apunta a OTRO caso conocido en DB (señal MUY negativa)
 LR_FILENAME_HAS_OTHER_CASE_RAD_CORTO = 0.10  # rad_corto en filename apunta a otro case (moderada)
 
+# v6.0.17 — corroboración por expediente y pre-radicación incidente
+LR_CASE_CORROBORATED = 4.5                 # ≥3 hermanos OK con rad23 confirmado del case
+                                           # y doc actual no tiene rad ajeno → contexto valida pertenencia
+LR_INCIDENTE_INICIAL_PRE_RAD = 6.0         # pre-radicación de incidente (filename con "incidente"/"desacato")
+
 
 # ============================================================
 # Evidencia y veredicto
@@ -400,6 +405,18 @@ def _apply_cognitive_rules(case, doc_ir, ids: IdentifierSet,
                          detail=f"escrito sin rad23, accionante coverage {cov:.2f}")
             reasons_for.append("Escrito de tutela con accionante del caso (pre-radicación)")
 
+    # ---- R11: pre-radicación incidente/desacato ----
+    is_likely_incidente = (
+        doc_type in ("INCIDENTE", "PDF_INCIDENTE", "ESCRITO_INCIDENTE", "DESACATO")
+        or "INCIDENTE" in fn_upper or "DESACATO" in fn_upper
+    )
+    if is_likely_incidente and accionante and full_text and not ids.has("rad23"):
+        cov = _name_coverage(accionante, full_text[:8000])
+        if cov >= 0.4:  # umbral más laxo: incidentes a veces solo dicen "el accionante"
+            evidence.add("incidente_pre_rad", LR_INCIDENTE_INICIAL_PRE_RAD,
+                         detail=f"incidente sin rad23, accionante coverage {cov:.2f}")
+            reasons_for.append("Escrito de incidente/desacato con accionante (pre-radicación)")
+
     # ---- R5/R6: cross-DB lookup vía CaseLookupCache (target_case_id) ----
     # Refinamientos v6.0.16+:
     #  - Si el filename contiene rad23 EXACTO del case → BLOQUEAR target_case_id
@@ -515,6 +532,54 @@ def _apply_cognitive_rules(case, doc_ir, ids: IdentifierSet,
                         break
     except Exception:
         pass
+
+    # ---- R10: corroboración por expediente (v6.0.17) ----
+    # Si el case tiene ≥3 docs OK con rad23 del case Y este doc no tiene rad ajeno
+    # detectado → contexto del expediente valida pertenencia. LR moderado.
+    # Why: docs sin identifier propio (escritos pre-rad, anexos, correos
+    # renderizados) que viven en una carpeta validada heredan contexto.
+    has_rad_ajeno = bool(target_case_id) or any(
+        s.name in ("rad23_other_case_header", "rad23_other_case_body",
+                   "filename_other_case_rad23")
+        for s in evidence.signals
+    )
+    has_strong_signal = any(
+        s.name in ("filename_case_rad23", "filename_case_rad_corto",
+                   "rad23_visual_match", "rad23_header_match", "rad23_body_match",
+                   "thread_parent", "email_markdown",
+                   "tutela_inicial_pre_rad", "incidente_pre_rad",
+                   "text_rad_corto_and_accionante")
+        for s in evidence.signals
+    )
+    if not has_rad_ajeno and not has_strong_signal:
+        try:
+            from backend.database.database import SessionLocal
+            from backend.database.models import Document as _Doc
+            from sqlalchemy import and_
+            _sess = SessionLocal()
+            try:
+                # Contar hermanos OK con rad23 confirmado en el case actual
+                # (excluyendo el doc en evaluación si tiene id en DB)
+                doc_id_self = None
+                if hasattr(doc_ir, "filename") and case_rad23_norm:
+                    case_id_actual = getattr(case, "id", None)
+                    if case_id_actual:
+                        # Heurística simple: contar docs OK del case que tienen rad23 del case
+                        # mencionado en su verificacion_detalle (señal de validación previa)
+                        ok_siblings = _sess.query(_Doc).filter(
+                            and_(_Doc.case_id == case_id_actual,
+                                 _Doc.verificacion == "OK")
+                        ).count()
+                        if ok_siblings >= 3:
+                            evidence.add("case_corroborated", LR_CASE_CORROBORATED,
+                                         detail=f"{ok_siblings} hermanos OK en case (expediente validado)")
+                            reasons_for.append(
+                                f"Expediente del caso tiene {ok_siblings} docs OK (corroboración por contexto)"
+                            )
+            finally:
+                _sess.close()
+        except Exception:
+            pass
 
     return target_case_id, target_evidence
 
