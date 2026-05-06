@@ -67,10 +67,90 @@ _progress_lock = threading.Lock()
 MAX_WORKERS = settings.EXTRACTION_MAX_WORKERS
 
 
+def _extraction_worker_init():
+    """Precarga singletons + log PID (assert paralelismo real) por worker process.
+
+    v6.1.1: skipea Presidio analyzer si LOCAL_ONLY=true (ahorra ~300 MB RAM por worker).
+    """
+    import os, logging
+    logging.getLogger("tutelas.extraction.worker").info(
+        "Worker process started: pid=%s ppid=%s", os.getpid(), os.getppid()
+    )
+    try:
+        from backend.cognition.ner_spacy import _get_nlp
+        _get_nlp()
+    except Exception:
+        pass
+    try:
+        from backend.core.settings import settings as _s
+        if not getattr(_s, "LOCAL_ONLY", False) and getattr(_s, "PII_REDACTION_ENABLED", True):
+            from backend.privacy.detectors import _get_analyzer
+            _get_analyzer()
+    except Exception:
+        pass
+
+
+def _process_one_case_router(args: tuple) -> tuple:
+    """Worker top-level (picklable) para ProcessPool. args=(cid, classify_docs).
+
+    Sin acceso a state global del proceso main: el progress se actualiza en main al recibir
+    el future. Retorna (ok, folder_name, error_reason, cid).
+    """
+    cid, classify_docs = args
+    from backend.database.database import SessionLocal as _SessionLocal
+    from backend.database.models import Case as _Case
+    from backend.core.settings import settings as _settings
+    from backend.extraction.pipeline import process_folder as _process_folder
+
+    db = _SessionLocal()
+    folder_name = f"ID {cid}"
+    try:
+        case = db.query(_Case).filter(_Case.id == cid).first()
+        if not case:
+            return False, folder_name, "case no encontrado", cid
+
+        folder_name = (case.folder_name or folder_name)[:60]
+
+        if classify_docs:
+            try:
+                from backend.agent.orchestrator import classify_and_clean_folder
+                classify_and_clean_folder(db, case, _settings.BASE_DIR)
+            except Exception:
+                pass
+
+        if _settings.UNIFIED_EXTRACTOR_ENABLED:
+            from backend.extraction.unified_cognitive import unified_extract_dispatch
+            stats = unified_extract_dispatch(db, case, _settings.BASE_DIR)
+        else:
+            stats = _process_folder(db, case)
+
+        if stats.get("renamed"):
+            db.refresh(case)
+
+        if stats.get("ai_error") and case.processing_status != "COMPLETO":
+            case.processing_status = "REVISION"
+            db.commit()
+            return False, folder_name, str(stats.get("ai_error"))[:120], cid
+
+        return True, folder_name, None, cid
+    except Exception as e:
+        try:
+            db.rollback()
+            case = db.query(_Case).filter(_Case.id == cid).first()
+            if case:
+                case.processing_status = "REVISION"
+                db.commit()
+        except Exception:
+            pass
+        return False, folder_name, str(e)[:120], cid
+    finally:
+        db.close()
+
+
 def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
-    """Ejecutar extraccion en background con paralelizacion (3 workers)."""
+    """Ejecutar extraccion en background con ProcessPool real (sin GIL)."""
     import time
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ProcessPoolExecutor, as_completed
     from backend.services.backup_service import auto_backup
 
     _start = time.time()
@@ -105,79 +185,30 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
     elapsed_thread = threading.Thread(target=_update_elapsed, daemon=True)
     elapsed_thread.start()
 
-    # Lock para operaciones de archivo (rename, move) — evita race conditions
-    _file_ops_lock = threading.Lock()
-
-    def _process_one_case(cid: int) -> tuple[bool, str, str | None]:
-        """Procesar un caso en su propio thread. Retorna (ok, folder_name, error_reason)."""
-        db = SessionLocal()
-        folder_name = f"ID {cid}"
-        try:
-            case = db.query(Case).filter(Case.id == cid).first()
-            if not case:
-                return False, folder_name, "case no encontrado"
-
-            folder_name = (case.folder_name or folder_name)[:60]
-            with _progress_lock:
-                _main.extraction_progress["step"] = f"Procesando: {folder_name}..."
-                _main.extraction_progress["phase"] = "Clasificando..." if classify_docs else "Extrayendo..."
-
-            if classify_docs:
-                try:
-                    with _file_ops_lock:
-                        from backend.agent.orchestrator import classify_and_clean_folder
-                        classify_and_clean_folder(db, case, settings.BASE_DIR)
-                except Exception as e:
-                    _main.add_monitor_log(f"Clasificacion caso {cid}: {str(e)[:80]}", level="warning")
-
-            with _progress_lock:
-                _main.extraction_progress["phase"] = "Extrayendo..."
-
-            if settings.UNIFIED_EXTRACTOR_ENABLED:
-                from backend.extraction.unified_cognitive import unified_extract_dispatch
-                stats = unified_extract_dispatch(db, case, settings.BASE_DIR)
-            else:
-                stats = process_folder(db, case)
-
-            if stats.get("renamed"):
-                with _file_ops_lock:
-                    db.refresh(case)
-
-            if stats.get("ai_error") and case.processing_status != "COMPLETO":
-                case.processing_status = "REVISION"
-                db.commit()
-                return False, folder_name, str(stats.get("ai_error"))[:120]
-
-            return True, folder_name, None
-        except Exception as e:
-            try:
-                db.rollback()
-                case = db.query(Case).filter(Case.id == cid).first()
-                if case:
-                    case.processing_status = "REVISION"
-                    db.commit()
-            except Exception:
-                pass
-            _main.add_monitor_log(f"Error caso {cid}: {str(e)[:100]}", level="error")
-            return False, folder_name, str(e)[:120]
-        finally:
-            db.close()
-
     try:
+        # Mutex: pausar llama-server para liberar RAM antes del batch
+        try:
+            from backend.services.llm_mutex import pause_llm_for_extraction
+            paused = pause_llm_for_extraction()
+            if paused:
+                _update_progress(step="LLM pausado para liberar RAM...", phase="Setup")
+        except Exception as e:
+            logger.warning("llm_mutex pause falló: %s", e)
+
         _update_progress(step="Creando backup automatico...", phase="Backup")
         auto_backup("pre_extraction")
 
         _update_progress(
-            step=f"Extrayendo {len(case_ids)} casos ({MAX_WORKERS} en paralelo)...",
+            step=f"Extrayendo {len(case_ids)} casos (ProcessPool={MAX_WORKERS})...",
             phase="Extraccion",
         )
 
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        with ProcessPoolExecutor(max_workers=MAX_WORKERS, initializer=_extraction_worker_init) as executor:
             futures = {}
             for cid in case_ids:
                 if not _main.extraction_in_progress:
                     break
-                future = executor.submit(_process_one_case, cid)
+                future = executor.submit(_process_one_case_router, (cid, classify_docs))
                 futures[future] = cid
 
             for future in as_completed(futures):
@@ -189,12 +220,14 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
                 cid = futures[future]
                 try:
                     result = future.result()
-                    if isinstance(result, tuple) and len(result) == 3:
-                        ok, folder_name, reason = result
+                    if isinstance(result, tuple) and len(result) >= 3:
+                        ok, folder_name, reason = result[0], result[1], result[2]
                     else:
                         ok, folder_name, reason = bool(result), f"ID {cid}", None
                     with _progress_lock:
                         _main.extraction_progress["current"] += 1
+                        _main.extraction_progress["case_name"] = folder_name
+                        _main.extraction_progress["step"] = f"Procesado: {folder_name}"
                         if ok:
                             _main.extraction_progress["success"] += 1
                         else:
@@ -202,6 +235,7 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
                             _main.extraction_progress["failed_cases"].append({
                                 "id": cid, "folder": folder_name, "reason": reason or "desconocido",
                             })
+                            _main.add_monitor_log(f"Error caso {cid}: {(reason or 'desconocido')[:100]}", level="error")
                 except Exception as e:
                     with _progress_lock:
                         _main.extraction_progress["current"] += 1

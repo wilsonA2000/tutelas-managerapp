@@ -317,9 +317,22 @@ def _monthly_trends(db: Session, msg: str) -> ChatResponse:
 # ─── Tier 2: LLM fallback ────────────────────────────────────────────
 
 def _llm_intent_fallback(message: str) -> Optional[dict]:
-    """Pide al LLM que identifique template + params. Retorna None si falla."""
+    """Pide al LLM que identifique template + params. Retorna None si falla.
+
+    Si llama-server está pausado (post-extraction), lo relanza lazy.
+    """
     if not LLM_ENABLED:
         return None
+    # Lazy restart si llama-server está pausado
+    try:
+        from backend.services.llm_mutex import ensure_llm_up, PAUSE_FLAG
+        if PAUSE_FLAG.exists():
+            logger.info("LLM pausado — relanzando lazy")
+            if not ensure_llm_up(wait_s=45):
+                logger.warning("LLM no arrancó — fallback a unknown")
+                return None
+    except Exception as e:
+        logger.debug("ensure_llm_up falló: %s", e)
     template_list = ", ".join(i["name"] for i in INTENTS)
     prompt = (
         f"Eres un router de intención. Templates disponibles: {template_list}.\n"
