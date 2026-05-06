@@ -32,14 +32,21 @@ import requests
 
 logger = logging.getLogger("tutelas.cognition.lifecycle")
 
-# Scripts que orquestan vLLM en el pod
+# Detección de entorno: RunPod (pod con /workspace) vs WSL/local.
+# Why: scripts /workspace/*.sh sólo existen en pod RunPod. En WSL delegamos a llm_mutex
+# que ya conoce los binarios locales (~/llama.cpp/build/bin/llama-server).
+_RUNPOD_MODE = Path("/workspace").exists() and Path("/workspace/start_qwen_server.sh").exists()
+
+# Scripts que orquestan vLLM en el pod (sólo se invocan en RUNPOD_MODE)
 START_PADDLEOCR = "/workspace/start_vllm_server.sh"
 STOP_PADDLEOCR = "/workspace/stop_paddleocr_server.sh"
 START_QWEN = "/workspace/start_qwen_server.sh"
 STOP_QWEN = "/workspace/stop_qwen_server.sh"
 
 PADDLEOCR_URL = "http://localhost:8118/v1/models"
-QWEN_URL = "http://localhost:8120/v1/models"
+QWEN_URL = "http://localhost:8120/v1/models" if _RUNPOD_MODE else os.getenv(
+    "LLM_LOCAL_URL", "http://127.0.0.1:8765"
+) + "/v1/models"
 
 # Tiempos máximos esperados (s)
 MAX_WAIT_QWEN_READY = 180   # primera carga puede ser lenta (cold cache MooseFS)
@@ -134,14 +141,20 @@ class ModelLifecycle:
 
         t0 = time.time()
         try:
-            logger.info("[lifecycle] wake_chat: stopping paddleocr…")
-            self._bash(STOP_PADDLEOCR)
-            time.sleep(3)
-            logger.info("[lifecycle] wake_chat: starting qwen…")
-            self._spawn_bash(START_QWEN)
-            ok = self._wait_ready(QWEN_URL, MAX_WAIT_QWEN_READY)
-            if not ok:
-                logger.error("[lifecycle] qwen no respondió en %ds", MAX_WAIT_QWEN_READY)
+            if _RUNPOD_MODE:
+                logger.info("[lifecycle] wake_chat: stopping paddleocr…")
+                self._bash(STOP_PADDLEOCR)
+                time.sleep(3)
+                logger.info("[lifecycle] wake_chat: starting qwen…")
+                self._spawn_bash(START_QWEN)
+                ok = self._wait_ready(QWEN_URL, MAX_WAIT_QWEN_READY)
+                if not ok:
+                    logger.error("[lifecycle] qwen no respondió en %ds", MAX_WAIT_QWEN_READY)
+            else:
+                # WSL/local: delegar a llm_mutex (paths e infra del pod no existen).
+                logger.info("[lifecycle] wake_chat (WSL): ensure_llm_up via llm_mutex")
+                from backend.services.llm_mutex import ensure_llm_up
+                ensure_llm_up(wait_s=MAX_WAIT_QWEN_READY)
         finally:
             with self._lock:
                 self._status.transitioning_since = None
@@ -170,12 +183,18 @@ class ModelLifecycle:
 
         t0 = time.time()
         try:
-            logger.info("[lifecycle] sleep_chat: stopping qwen…")
-            self._bash(STOP_QWEN)
-            time.sleep(3)
-            logger.info("[lifecycle] sleep_chat: starting paddleocr…")
-            self._spawn_bash(START_PADDLEOCR)
-            self._wait_ready(PADDLEOCR_URL, MAX_WAIT_PADDLEOCR_READY)
+            if _RUNPOD_MODE:
+                logger.info("[lifecycle] sleep_chat: stopping qwen…")
+                self._bash(STOP_QWEN)
+                time.sleep(3)
+                logger.info("[lifecycle] sleep_chat: starting paddleocr…")
+                self._spawn_bash(START_PADDLEOCR)
+                self._wait_ready(PADDLEOCR_URL, MAX_WAIT_PADDLEOCR_READY)
+            else:
+                # WSL/local: pausa llama-server liberando RAM (no hay paddleocr que volver a arrancar).
+                logger.info("[lifecycle] sleep_chat (WSL): pause_llm_for_extraction via llm_mutex")
+                from backend.services.llm_mutex import pause_llm_for_extraction
+                pause_llm_for_extraction()
         finally:
             with self._lock:
                 self._status.transitioning_since = None
