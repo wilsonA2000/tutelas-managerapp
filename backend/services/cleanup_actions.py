@@ -14,6 +14,8 @@ Todas las funciones DEVUELVEN estadisticas en vez de loggearlas.
 from __future__ import annotations
 
 import logging
+import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from backend.database.models import AuditLog, Case, Document, Email
 from backend.extraction.pipeline import compute_file_hash
+from backend.services.sibling_mover import move_document_or_package
 
 logger = logging.getLogger("tutelas.cleanup_actions")
 
@@ -379,6 +382,234 @@ def batch_move_no_pertenece(
 
     stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
+
+
+# ============================================================
+# v6.0.16: batch_move_using_cognitive_v6016
+# Usa CaseLookupCache + verdict.target_case_id (Bayesian v6.0.16)
+# ============================================================
+
+def batch_move_cognitive_v6016(
+    db: Session,
+    dry_run: bool = True,
+    include_sospechoso: bool = True,
+    min_posterior: float = 0.0,
+    limit: int = 0,
+) -> dict[str, Any]:
+    """v6.0.16 — Cleanup que aprovecha el verdict.target_case_id producido
+    por bayesian_assignment con cross-DB lookup.
+
+    Para cada doc SOSPECHOSO/NO_PERTENECE:
+      1. Re-correr verify_document_belongs (que ya invoca Bayesian v6.0.16)
+      2. Si verdict.target_case_id != None → mover con sibling_mover
+      3. Si verdict cambia a OK → simplemente actualizar status
+      4. Si verdict sigue ambiguo → marcar SOSPECHOSO con razón explícita
+    """
+    from backend.email.case_lookup_cache import get_cache
+    from backend.extraction.pipeline import _verify_bayesian
+    from backend.cognition.bayesian_assignment import infer_assignment
+
+    start = datetime.utcnow()
+    cache = get_cache()
+    if not cache._built:
+        cache.build(db)
+
+    statuses = ["NO_PERTENECE"]
+    if include_sospechoso:
+        statuses.append("SOSPECHOSO")
+
+    q = db.query(Document).filter(Document.verificacion.in_(statuses))
+    if limit and limit > 0:
+        q = q.limit(limit)
+    docs = q.all()
+
+    stats: dict[str, Any] = {
+        "total": len(docs),
+        "moved": 0,
+        "kept_now_ok": 0,
+        "kept_still_ambiguous": 0,
+        "errors": 0,
+        "skipped_no_target": 0,
+        "skipped_low_posterior": 0,
+        "skipped_target_no_accionante": 0,
+        "actions": [],
+        "suggested_for_review": [],
+        "transitions": Counter(),
+    }
+    already_moved: set[int] = set()
+    cases_by_id = {c.id: c for c in db.query(Case).all()}
+
+    # Para reciclar cómputo: invocamos infer_assignment directamente para tener verdict completo
+    from backend.extraction.ir_builder import _build_pdf_ir, _build_docx_ir
+    from backend.extraction.ir_models import DocumentIR, DocumentZone
+    import json as _json
+
+    for doc in docs:
+        if doc.id in already_moved:
+            continue
+        try:
+            case = cases_by_id.get(doc.case_id)
+            if not case:
+                stats["errors"] += 1
+                continue
+
+            # Reciclar IR persistido (mismo enfoque que _verify_bayesian)
+            ir = None
+            if doc.extracted_text:
+                vs = {}
+                if doc.visual_signature_json:
+                    try:
+                        vs = _json.loads(doc.visual_signature_json)
+                    except Exception:
+                        vs = {}
+                txt = doc.extracted_text
+                head = txt[:2000]
+                body = txt[:150_000]
+                foot = txt[-4000:] if len(txt) > 4000 else txt
+                zones = []
+                if head.strip():
+                    zones.append(DocumentZone(zone_type="HEADER", text=head))
+                if body.strip():
+                    zones.append(DocumentZone(zone_type="BODY", text=body))
+                if foot.strip() and foot != head:
+                    zones.append(DocumentZone(zone_type="FOOTER_TAIL", text=foot))
+                ir = DocumentIR(
+                    filename=doc.filename or "",
+                    doc_type=doc.doc_type or "OTRO",
+                    priority=9,
+                    zones=zones,
+                    full_text=txt,
+                )
+                ir.visual_signature = vs
+
+            if ir is None:
+                stats["errors"] += 1
+                continue
+
+            verdict = infer_assignment(case, ir, doc=doc)
+            old_status = doc.verificacion
+            new_status = verdict.verdict
+            stats["transitions"][f"{old_status}->{new_status}"] += 1
+
+            # Decisión:
+            #  A) verdict.target_case_id presente → mover
+            #  B) new_status == OK → actualizar status, no mover
+            #  C) sin target → SOSPECHOSO con razón
+            # v6.0.16: si target_evidence indica falta de accionante, NO mover automáticamente
+            target_safe_to_move = (
+                verdict.target_case_id is not None
+                and verdict.target_case_id != doc.case_id
+                and "[accionante target no en doc]" not in (verdict.target_evidence or "")
+            )
+
+            if target_safe_to_move:
+                if verdict.posterior > min_posterior:
+                    if dry_run:
+                        stats["moved"] += 1
+                        stats["actions"].append({
+                            "doc_id": doc.id,
+                            "filename": (doc.filename or "")[:60],
+                            "source_case_id": doc.case_id,
+                            "target_case_id": verdict.target_case_id,
+                            "evidence": verdict.target_evidence,
+                            "verdict": new_status,
+                            "posterior": round(verdict.posterior, 3),
+                        })
+                    else:
+                        result = move_document_or_package(
+                            db, doc.id, verdict.target_case_id,
+                            reason="cleanup_v6016_cognitive",
+                        )
+                        if result.get("errors"):
+                            stats["errors"] += 1
+                        else:
+                            moved_ids = result.get("moved_ids", [])
+                            stats["moved"] += len(moved_ids)
+                            already_moved.update(moved_ids)
+                            stats["actions"].append({
+                                "doc_id": doc.id,
+                                "moved_ids": moved_ids,
+                                "target_case_id": verdict.target_case_id,
+                                "evidence": verdict.target_evidence,
+                                "verdict": new_status,
+                            })
+                else:
+                    stats["skipped_low_posterior"] += 1
+            elif new_status == "OK" and old_status != "OK":
+                stats["kept_now_ok"] += 1
+                if not dry_run:
+                    doc.verificacion = "OK"
+                    detail = " | ".join(verdict.reasons_for[:3])
+                    doc.verificacion_detalle = f"v6.0.16 reverify: {detail[:200]}"
+                    db.add(AuditLog(
+                        case_id=doc.case_id or 0,
+                        field_name="verificacion",
+                        old_value=old_status,
+                        new_value="OK",
+                        action="REVERIFY_V6016",
+                        source=f"cleanup_v6016 doc_id={doc.id}",
+                    ))
+            elif (verdict.target_case_id and verdict.target_case_id != doc.case_id
+                   and "[accionante target no en doc]" in (verdict.target_evidence or "")):
+                # Target sugerido pero requiere revisión humana
+                stats["skipped_target_no_accionante"] += 1
+                stats["suggested_for_review"].append({
+                    "doc_id": doc.id,
+                    "filename": (doc.filename or "")[:60],
+                    "current_case_id": doc.case_id,
+                    "suggested_target": verdict.target_case_id,
+                    "evidence": verdict.target_evidence,
+                    "posterior": round(verdict.posterior, 3),
+                })
+            else:
+                stats["kept_still_ambiguous"] += 1
+                stats["skipped_no_target"] += 1
+        except Exception as e:
+            logger.error("batch_move_cognitive_v6016 doc=%d: %s", doc.id, e)
+            stats["errors"] += 1
+
+    if not dry_run:
+        db.commit()
+        from backend.database.database import wal_checkpoint
+        wal_checkpoint("PASSIVE")
+
+    stats["transitions"] = dict(stats["transitions"])
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
+    return stats
+
+
+# ============================================================
+# v6.0.16: detect_misnamed_folders
+# ============================================================
+
+def detect_misnamed_folders(db: Session) -> list[dict]:
+    """Compara folder_name vs radicado_23_digitos. Retorna lista de inconsistencias."""
+    issues = []
+    cases = db.query(Case).filter(Case.processing_status == "COMPLETO").all()
+    for c in cases:
+        folder = c.folder_name or ""
+        rad23 = c.radicado_23_digitos or ""
+        m_folder = re.match(r"(20\d{2})[-_ ]?0*(\d{1,5})", folder)
+        rad_digits = re.sub(r"\D", "", rad23)
+        m_rad = re.search(r"(20\d{2})(\d{5})", rad_digits)
+        if not m_folder or not m_rad:
+            continue
+        f_yc = (m_folder.group(1), m_folder.group(2).zfill(5))
+        r_yc = (m_rad.group(1), m_rad.group(2))
+        if f_yc != r_yc:
+            issues.append({
+                "case_id": c.id,
+                "folder_name": folder,
+                "rad23": rad23,
+                "folder_yc": f"{f_yc[0]}-{f_yc[1]}",
+                "rad_yc": f"{r_yc[0]}-{r_yc[1]}",
+                "suggested_rename": re.sub(
+                    r"^(20\d{2})[-_ ]?0*\d{1,5}",
+                    f"{r_yc[0]}-{r_yc[1]}",
+                    folder, count=1,
+                ),
+            })
+    return issues
 
 
 # ============================================================

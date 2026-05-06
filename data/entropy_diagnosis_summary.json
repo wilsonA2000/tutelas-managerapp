@@ -1,0 +1,415 @@
+{
+  "total_docs_diagnosticados": 1619,
+  "verdicts": {
+    "KEEP_OK": 163,
+    "MIXED_SIGNAL": 254,
+    "TRULY_ORPHAN": 1078,
+    "AMBIGUOUS": 10,
+    "MOVE_TO": 114
+  },
+  "status_x_verdict": {
+    "NO_PERTENECE->KEEP_OK": 44,
+    "NO_PERTENECE->MIXED_SIGNAL": 95,
+    "NO_PERTENECE->TRULY_ORPHAN": 59,
+    "NO_PERTENECE->AMBIGUOUS": 8,
+    "NO_PERTENECE->MOVE_TO": 53,
+    "REVISAR->TRULY_ORPHAN": 9,
+    "SOSPECHOSO->KEEP_OK": 119,
+    "SOSPECHOSO->TRULY_ORPHAN": 1010,
+    "SOSPECHOSO->MOVE_TO": 61,
+    "SOSPECHOSO->MIXED_SIGNAL": 159,
+    "SOSPECHOSO->AMBIGUOUS": 2
+  },
+  "top_target_cases_for_move": [
+    [
+      246,
+      10
+    ],
+    [
+      419,
+      9
+    ],
+    [
+      176,
+      8
+    ],
+    [
+      620,
+      5
+    ],
+    [
+      519,
+      5
+    ],
+    [
+      547,
+      5
+    ],
+    [
+      424,
+      5
+    ],
+    [
+      263,
+      4
+    ],
+    [
+      490,
+      4
+    ],
+    [
+      188,
+      4
+    ],
+    [
+      236,
+      4
+    ],
+    [
+      595,
+      3
+    ],
+    [
+      209,
+      3
+    ],
+    [
+      274,
+      3
+    ],
+    [
+      343,
+      3
+    ],
+    [
+      254,
+      2
+    ],
+    [
+      553,
+      2
+    ],
+    [
+      473,
+      2
+    ],
+    [
+      505,
+      2
+    ],
+    [
+      537,
+      2
+    ]
+  ],
+  "carpetas_mal_nombradas": [
+    {
+      "case_id": 123,
+      "folder_name": "2022-000137 PERSONERO MUNICUPAL DE SURATA",
+      "rad23": "68001310301020220013700",
+      "folder_yc": "2022-00013",
+      "rad_yc": "2022-00137"
+    },
+    {
+      "case_id": 127,
+      "folder_name": "2025-00011 Alexis Dario Suarez Balaguera",
+      "rad23": "68432-31-89-002-2025-00111-01",
+      "folder_yc": "2025-00011",
+      "rad_yc": "2025-00111"
+    },
+    {
+      "case_id": 140,
+      "folder_name": "2025-00170  OLGA MILENA GUTIERREZ",
+      "rad23": "684644089001-2025-00107-00",
+      "folder_yc": "2025-00170",
+      "rad_yc": "2025-00107"
+    },
+    {
+      "case_id": 142,
+      "folder_name": "2025-0021 JULIETH YAMILE RUEDA",
+      "rad23": "68-001-40-09-020-2026-00021-00",
+      "folder_yc": "2025-00021",
+      "rad_yc": "2020-26000"
+    },
+    {
+      "case_id": 148,
+      "folder_name": "2025-0049 LAURA TATIANA NIÑO RUEDA",
+      "rad23": "685474003003-2026-00049-00",
+      "folder_yc": "2025-00049",
+      "rad_yc": "2026-00049"
+    },
+    {
+      "case_id": 152,
+      "folder_name": "2025-0074 JULIAN LEONARDO JEREZ",
+      "rad23": "680014003019-2026-00074-00",
+      "folder_yc": "2025-00074",
+      "rad_yc": "2026-00074"
+    },
+    {
+      "case_id": 157,
+      "folder_name": "2025-01002 ESMERALDA CAMPOS ROMERO",
+      "rad23": "20001 40 03 005-2025-01002-00",
+      "folder_yc": "2025-01002",
+      "rad_yc": "2000-14003"
+    },
+    {
+      "case_id": 167,
+      "folder_name": "2025-00045 SALOMON CONTRERAS",
+      "rad23": "68001418900320260004500",
+      "folder_yc": "2025-00045",
+      "rad_yc": "2026-00045"
+    },
+    {
+      "case_id": 170,
+      "folder_name": "2026-00004 LUZ MIREYA FAJARDO ROJAS",
+      "rad23": "68-377-40-89-001-2021-00055-00",
+      "folder_yc": "2026-00004",
+      "rad_yc": "2021-00055"
+    },
+    {
+      "case_id": 172,
+      "folder_name": "2026-00055 OSIRYS RENTERIA",
+      "rad23": "68001-4003-006-2026-2026-00055-00",
+      "folder_yc": "2026-00055",
+      "rad_yc": "2026-20260"
+    },
+    {
+      "case_id": 173,
+      "folder_name": "2026-000026 JUAN CAMILO ORTIZ ORTIZ",
+      "rad23": "686864089001-2026-00026-00",
+      "folder_yc": "2026-00002",
+      "rad_yc": "2026-00026"
+    },
+    {
+      "case_id": 177,
+      "folder_name": "2026-00008 JULIAN ANTONIO ARIZA",
+      "rad23": "68-377-40-89-001-2025-00072-00",
+      "folder_yc": "2026-00008",
+      "rad_yc": "2025-00072"
+    },
+    {
+      "case_id": 195,
+      "folder_name": "2026-00020 WILSON ALEJANDRO HERNÁNDEZ GUERRERO",
+      "rad23": "684254089001202600021",
+      "folder_yc": "2026-00020",
+      "rad_yc": "2026-00021"
+    },
+    {
+      "case_id": 237,
+      "folder_name": "2026-0010 MARTHA CECILIA  PAHABUENA 2026-0010",
+      "rad23": "68-001-40-88-017-2026-00010-00",
+      "folder_yc": "2026-00102",
+      "rad_yc": "2026-00010"
+    },
+    {
+      "case_id": 267,
+      "folder_name": "2026-0025 JUAN GUILLERMO SALAZAR",
+      "rad23": "11001-31-87-009-2026-00028-00",
+      "folder_yc": "2026-00025",
+      "rad_yc": "2026-00028"
+    },
+    {
+      "case_id": 271,
+      "folder_name": "2026-0027 YASMIN ARDILA RIATIGA",
+      "rad23": "682094089001-2026-00027-00",
+      "folder_yc": "2026-00027",
+      "rad_yc": "2094-08900"
+    },
+    {
+      "case_id": 272,
+      "folder_name": "2026-0028 ROSA ELVIRA DÍAZ",
+      "rad23": "68001418900320250076700",
+      "folder_yc": "2026-00028",
+      "rad_yc": "2025-00767"
+    },
+    {
+      "case_id": 290,
+      "folder_name": "2026-00006 JENNY JHOANNA FONSECA ROJAS",
+      "rad23": "680204089-001-2026-00006-00",
+      "folder_yc": "2026-00006",
+      "rad_yc": "2040-89001"
+    },
+    {
+      "case_id": 292,
+      "folder_name": "2026-00007 CAROLINA MARTÍNEZ JIMÉNEZ",
+      "rad23": "2026-0007-00",
+      "folder_yc": "2026-00007",
+      "rad_yc": "2026-00070"
+    },
+    {
+      "case_id": 307,
+      "folder_name": "2026-00429 DILSA ACEVEDO PARADA",
+      "rad23": "11001-02-03-000-2026-00429-00",
+      "folder_yc": "2026-00429",
+      "rad_yc": "2030-00202"
+    },
+    {
+      "case_id": 322,
+      "folder_name": "2026-00394 LAURA MELISSA GRIMALDY QUIROGA",
+      "rad23": "2026-10070",
+      "folder_yc": "2026-00394",
+      "rad_yc": "2026-10070"
+    },
+    {
+      "case_id": 327,
+      "folder_name": "2026-03700 YARI ALEJANDRA DUARTE CASTILLO",
+      "rad23": "68-001-40-88-012-2026-00037-00",
+      "folder_yc": "2026-03700",
+      "rad_yc": "2026-00037"
+    },
+    {
+      "case_id": 328,
+      "folder_name": "2026-27600 DAVID DANIEL RUBIO RODRÍGUEZ",
+      "rad23": "11001400305420260027600",
+      "folder_yc": "2026-27600",
+      "rad_yc": "2026-00276"
+    },
+    {
+      "case_id": 338,
+      "folder_name": "2026-00418 LUZ ADRIANA SOLÓRZANO GARCÍA Y JUAN CARLOS",
+      "rad23": "68081-4004-007-2026-00071",
+      "folder_yc": "2026-00418",
+      "rad_yc": "2026-00071"
+    },
+    {
+      "case_id": 342,
+      "folder_name": "2026-05000 NEYLA ABAUNZA ARIZA",
+      "rad23": "68001400902320260005000",
+      "folder_yc": "2026-05000",
+      "rad_yc": "2026-00050"
+    },
+    {
+      "case_id": 351,
+      "folder_name": "2026-03000 OSCAR MAURICIO ROJAS CAMARGO",
+      "rad23": "68-001-40-88-014-2026-00030-00",
+      "folder_yc": "2026-03000",
+      "rad_yc": "2026-00030"
+    },
+    {
+      "case_id": 373,
+      "folder_name": "2026-05500 SARA EDILIA MOGOLLÓN BUSTAMANTE",
+      "rad23": "68-001-40-09-024-2026-00055-00",
+      "folder_yc": "2026-05500",
+      "rad_yc": "2026-00055"
+    },
+    {
+      "case_id": 390,
+      "folder_name": "2026-00159 YOLIMA KATHERINE QUIMBAYA (en representación de SAMANTHA SÁNCHEZ QUIMBAYA)",
+      "rad23": "680014189002-2025-00159-00",
+      "folder_yc": "2026-00159",
+      "rad_yc": "2025-00159"
+    },
+    {
+      "case_id": 415,
+      "folder_name": "2026-00228 ANGIE PAOLA CASTILLO MOJICA",
+      "rad23": "680014003020-2026-00228-00",
+      "folder_yc": "2026-00228",
+      "rad_yc": "2020-26002"
+    },
+    {
+      "case_id": 419,
+      "folder_name": "2026-00070 Marcela Mondragón Cortés",
+      "rad23": "680014071002-2026-00078-00",
+      "folder_yc": "2026-00070",
+      "rad_yc": "2026-00078"
+    },
+    {
+      "case_id": 420,
+      "folder_name": "2026-00237 AMPARO FERIA CASTRO",
+      "rad23": "68001-2204-000-2026-00237-00",
+      "folder_yc": "2026-00237",
+      "rad_yc": "2040-00202"
+    },
+    {
+      "case_id": 435,
+      "folder_name": "2026-03100 ALDAIR YARURO GARCÍA; ACCIONADO INSTITUTO TÉCNIC",
+      "rad23": "688954089001-2026-00031-00",
+      "folder_yc": "2026-03100",
+      "rad_yc": "2026-00031"
+    },
+    {
+      "case_id": 447,
+      "folder_name": "2024-00112 María Lucia Sarmiento Aguilar",
+      "rad23": "6875531040032026-00013-00",
+      "folder_yc": "2024-00112",
+      "rad_yc": "2026-00013"
+    },
+    {
+      "case_id": 469,
+      "folder_name": "2026-00001 SYLVIA ROCÍO CALDERÓN SÁNCHEZ",
+      "rad23": "68-464-4089-003-2026-00014-01",
+      "folder_yc": "2026-00001",
+      "rad_yc": "2026-00014"
+    },
+    {
+      "case_id": 492,
+      "folder_name": "2026-58982 YINETH RUBIELA SANTOS",
+      "rad23": "68167-40-89-002-2026-00042-00",
+      "folder_yc": "2026-58982",
+      "rad_yc": "2026-00042"
+    },
+    {
+      "case_id": 494,
+      "folder_name": "2026-00239 NICOLL DANIELA SALCEDO GONZÁLEZ",
+      "rad23": "680014003020-2026-00239-00",
+      "folder_yc": "2026-00239",
+      "rad_yc": "2020-26002"
+    },
+    {
+      "case_id": 511,
+      "folder_name": "2026-00240 YADIRA MOTOA CRISTANCHO",
+      "rad23": "680014003020-2026-00240-00",
+      "folder_yc": "2026-00240",
+      "rad_yc": "2020-26002"
+    },
+    {
+      "case_id": 535,
+      "folder_name": "2026-00033 Yamid Bautista Orostegui",
+      "rad23": "682094089001-2026-00033-00",
+      "folder_yc": "2026-00033",
+      "rad_yc": "2094-08900"
+    },
+    {
+      "case_id": 536,
+      "folder_name": "2026-70849 EDUARDO CAMACHO GAMBA",
+      "rad23": "2026-00088",
+      "folder_yc": "2026-70849",
+      "rad_yc": "2026-00088"
+    },
+    {
+      "case_id": 545,
+      "folder_name": "2025-00006 JENNY JOHANA FONSECA ROJAS",
+      "rad23": "680204089001-2025-00006-00",
+      "folder_yc": "2025-00006",
+      "rad_yc": "2040-89001"
+    },
+    {
+      "case_id": 554,
+      "folder_name": "2026-00129 AYDE PÉREZ MURILLO Y OTROS SE REMITE RESPUESTA",
+      "rad23": "68689318900120260007400",
+      "folder_yc": "2026-00129",
+      "rad_yc": "2026-00074"
+    },
+    {
+      "case_id": 611,
+      "folder_name": "2026-007 CAROLINA MARTINEZ JIMENEZ",
+      "rad23": "681906000139202300329",
+      "folder_yc": "2026-00007",
+      "rad_yc": "2023-00329"
+    },
+    {
+      "case_id": 620,
+      "folder_name": "2026-429 DILSA ACEVEDO PARADA",
+      "rad23": "68081-31-84-003-2025-00261-00",
+      "folder_yc": "2026-00429",
+      "rad_yc": "2025-00261"
+    }
+  ],
+  "cache_stats": {
+    "cases_indexed": 301,
+    "rad23": 269,
+    "rad_corto": 225,
+    "forest": 241,
+    "cc_hash": 217
+  }
+}

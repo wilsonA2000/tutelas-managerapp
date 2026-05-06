@@ -41,7 +41,10 @@ LR_RAD23_VISUAL_MATCH = 100.0              # rad23 del caso aparece en sello fí
 LR_RAD23_HEADER_MATCH = 40.0
 LR_RAD23_BODY_MATCH = 8.0
 LR_RAD23_OTHER_CASE_IN_BODY = 0.02         # rad23 de OTRO caso en body = señal dura negativa
-LR_RAD23_OTHER_CASE_IN_HEADER = 0.005       # aún más negativo si es en header
+LR_RAD23_OTHER_CASE_IN_HEADER = 0.02       # v8.0: ajustado a 0.02 (compromiso entre 0.005 original
+                                           # y 0.05 de v6.1.1 que era demasiado lax). Sigue marcando
+                                           # SOSPECHOSO casos con rad23 ajeno en header pero sin
+                                           # ser tan duro como antes.
 LR_RAD_CORTO_MATCH = 3.0
 LR_CC_HASH_MATCH = 25.0                    # CC exacta coincide
 LR_FOREST_MATCH = 15.0
@@ -50,8 +53,19 @@ LR_JUZGADO_SELLO_MATCH = 10.0
 LR_ACCIONANTE_NAME_MATCH_HIGH = 6.0        # fuzzy ≥ 0.85
 LR_ACCIONANTE_NAME_MATCH_MEDIUM = 2.5      # fuzzy 0.65-0.85
 LR_INSTITUTIONAL_HIGH = 1.8                # institutional_score > 0.5 (señal leve)
-LR_THREAD_PARENT = 50.0                    # heredó case_id por email threading
+LR_THREAD_PARENT = 150.0                   # v6.1.1: subido de 50→150 — threading RFC 5322 con
+                                           # In-Reply-To es señal MUY fuerte (la oficina jurídica
+                                           # reenvía en hilos coherentes); evita falsos SOSPECHOSO
 LR_EMAIL_MARKDOWN = 100.0                  # email .md siempre pertenece por definición
+
+# v6.0.16 — señales cognitivas extraídas de Claude ground truth (data/claude_ground_truth.jsonl)
+LR_FILENAME_HAS_CASE_RAD23 = 200.0         # filename literal contiene rad23 EXACTO del caso (override fuerte)
+LR_FILENAME_HAS_CASE_RAD_CORTO = 25.0      # filename literal contiene rad_corto del caso
+LR_FILENAME_HAS_ACCIONANTE = 12.0          # filename contiene ≥2 apellidos del accionante
+LR_TEXT_RAD_CORTO_AND_ACCIONANTE = 30.0    # texto tiene rad_corto del caso Y accionante fuzzy ≥ 0.6
+LR_TUTELA_INICIAL_PRE_RAD = 8.0            # doc_type tutela y accionante exacto sin rad23 (escrito inicial)
+LR_FILENAME_HAS_OTHER_CASE_RAD23 = 0.005   # filename apunta a OTRO caso conocido en DB (señal MUY negativa)
+LR_FILENAME_HAS_OTHER_CASE_RAD_CORTO = 0.10  # rad_corto en filename apunta a otro case (moderada)
 
 
 # ============================================================
@@ -98,6 +112,9 @@ class AssignmentVerdict:
     reasons_for: list[str]
     reasons_against: list[str]
     detail: str = ""
+    # v6.0.16 — destino sugerido cuando verdict=NO_PERTENECE/SOSPECHOSO con target identificado
+    target_case_id: int | None = None
+    target_evidence: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -106,6 +123,8 @@ class AssignmentVerdict:
             "reasons_for": self.reasons_for,
             "reasons_against": self.reasons_against,
             "detail": self.detail,
+            "target_case_id": self.target_case_id,
+            "target_evidence": self.target_evidence,
         }
 
 
@@ -132,6 +151,20 @@ def _fuzzy_ratio(a: str, b: str) -> float:
         return 0.0
     common = wa & wb
     return len(common) / max(len(wa), len(wb))
+
+
+def _name_coverage(name: str, text: str) -> float:
+    """Cobertura: qué fracción de las palabras significativas del nombre aparecen en text.
+    Útil para detectar mención de accionante en textos largos donde _fuzzy_ratio falla.
+    """
+    if not name or not text:
+        return 0.0
+    name_words = _significant_name_words(name)
+    if not name_words:
+        return 0.0
+    text_norm = _norm_text(text)
+    matches = sum(1 for w in name_words if w in text_norm)
+    return matches / len(name_words)
 
 
 # ============================================================
@@ -170,14 +203,21 @@ def infer_assignment(case, doc_ir, doc=None) -> AssignmentVerdict:
     ids: IdentifierSet = harvest_identifiers(doc_ir)
 
     case_rad23 = _norm_digits(getattr(case, "radicado_23_digitos", "") or "")
-    case_rad23_suffix = case_rad23[-17:] if len(case_rad23) >= 17 else ""
+    # v6.0.16: comparar IGNORANDO sufijo de etapa procesal (00/01/02 = misma tutela).
+    # Tomar año+consecutivo+despacho (12 dígitos antes de los últimos 2 del rad23).
+    case_rad23_core = case_rad23[-14:-2] if len(case_rad23) >= 14 else ""
+
+    def _rad_matches_case(rad_value: str) -> bool:
+        rn = _norm_digits(rad_value)
+        if not case_rad23_core or len(rn) < 14:
+            return False
+        return rn[-14:-2] == case_rad23_core
 
     # 3) RAD23 en el doc
     rads_in_doc = ids.of_kind("rad23")
-    if rads_in_doc and case_rad23_suffix:
-        # ¿Alguno coincide con el caso?
-        matches = [r for r in rads_in_doc if case_rad23_suffix in _norm_digits(r.value)]
-        others = [r for r in rads_in_doc if case_rad23_suffix not in _norm_digits(r.value)]
+    if rads_in_doc and case_rad23_core:
+        matches = [r for r in rads_in_doc if _rad_matches_case(r.value)]
+        others = [r for r in rads_in_doc if not _rad_matches_case(r.value)]
 
         for r in matches:
             if r.source_zone == "VISUAL_ROTATED":
@@ -270,7 +310,264 @@ def infer_assignment(case, doc_ir, doc=None) -> AssignmentVerdict:
                      detail=f"institutional_score={inst_score:.2f}")
         reasons_for.append(f"Doc institucional (score {inst_score:.2f})")
 
-    return _decide(evidence, reasons_for, reasons_against)
+    # =========================================================
+    # v6.0.16 — Reglas cognitivas (Claude ground truth + cache cross-DB)
+    # =========================================================
+    target_case_id, target_evidence = _apply_cognitive_rules(
+        case, doc_ir, ids, evidence, reasons_for, reasons_against,
+    )
+
+    verdict = _decide(evidence, reasons_for, reasons_against)
+    if target_case_id is not None:
+        verdict.target_case_id = target_case_id
+        verdict.target_evidence = target_evidence
+    return verdict
+
+
+def _apply_cognitive_rules(case, doc_ir, ids: IdentifierSet,
+                            evidence: AssignmentEvidence,
+                            reasons_for: list[str],
+                            reasons_against: list[str]) -> tuple[int | None, str]:
+    """v6.0.16 — Aplica las 7 reglas cognitivas extraídas del ground truth de Claude.
+
+    Returns: (target_case_id, evidence_str) si se identificó destino claro.
+    """
+    filename = (getattr(doc_ir, "filename", "") or "").strip()
+    full_text = (getattr(doc_ir, "full_text", "") or "")
+    accionante = (getattr(case, "accionante", "") or "")
+    case_rad23_norm = _norm_digits(getattr(case, "radicado_23_digitos", "") or "")
+    case_folder = (getattr(case, "folder_name", "") or "")
+
+    # Derivar rad_corto del caso (AAAA-NNNNN)
+    case_rad_corto = _derive_rad_corto(case_rad23_norm) or _extract_rad_corto_from_string(case_folder)
+
+    fn_digits = _norm_digits(filename)
+    fn_norm = _norm_text(filename)
+
+    # ---- R3: filename contiene rad23 EXACTO del caso ----
+    if case_rad23_norm and len(case_rad23_norm) >= 18 and case_rad23_norm[:20] in fn_digits:
+        evidence.add("filename_case_rad23", LR_FILENAME_HAS_CASE_RAD23,
+                     detail=f"rad23 case en filename: {case_rad23_norm[:20]}")
+        reasons_for.append("Filename contiene rad23 EXACTO del caso")
+
+    # ---- R3b: filename contiene rad_corto EXACTO del caso ----
+    if case_rad_corto:
+        # Buscar AAAA-NNNNN o AAAANNNNN en filename
+        cr_year, cr_seq = case_rad_corto.split("-")
+        if (case_rad_corto in filename
+                or case_rad_corto in fn_norm
+                or f"{cr_year}{cr_seq}" in fn_digits):
+            evidence.add("filename_case_rad_corto", LR_FILENAME_HAS_CASE_RAD_CORTO,
+                         detail=f"rad_corto case en filename: {case_rad_corto}")
+            reasons_for.append(f"Filename contiene rad_corto del caso ({case_rad_corto})")
+
+    # ---- R1: filename contiene apellidos del accionante (≥2 palabras) ----
+    if accionante:
+        acc_words = _significant_name_words(accionante)
+        if len(acc_words) >= 2:
+            matches = sum(1 for w in acc_words[:4] if w in fn_norm)
+            if matches >= 2:
+                evidence.add("filename_accionante", LR_FILENAME_HAS_ACCIONANTE,
+                             detail=f"{matches} apellidos del accionante en filename")
+                reasons_for.append("Filename contiene apellidos del accionante")
+            elif matches == 1 and len(filename) > 8:
+                # 1 apellido es indicio leve, no se penaliza pero no premia tanto
+                pass
+
+    # ---- R2: texto contiene rad_corto + accionante (LR moderado) ----
+    if case_rad_corto and full_text:
+        text_norm = _norm_text(full_text[:20000])
+        rad_corto_in_text = (case_rad_corto in text_norm
+                              or case_rad_corto.replace("-", "") in _norm_digits(full_text[:20000]))
+        if rad_corto_in_text:
+            acc_cov = _name_coverage(accionante, full_text[:20000])
+            if acc_cov >= 0.5:
+                evidence.add("text_rad_corto_and_accionante", LR_TEXT_RAD_CORTO_AND_ACCIONANTE,
+                             detail=f"rad_corto + accionante (cov {acc_cov:.2f}) en texto")
+                reasons_for.append("Texto menciona rad_corto del caso + accionante")
+
+    # ---- R7: tutela inicial pre-radicación con accionante exacto ----
+    doc_type = (getattr(doc_ir, "doc_type", "") or "").upper()
+    fn_upper = filename.upper()
+    is_likely_tutela = (
+        doc_type in ("TUTELA", "PDF_TUTELA", "ESCRITO_TUTELA", "DOCX_TUTELA")
+        or "TUTELA" in fn_upper or "ESCRITO" in fn_upper
+    )
+    if is_likely_tutela and accionante and full_text:
+        cov = _name_coverage(accionante, full_text[:8000])
+        if cov >= 0.5 and not ids.has("rad23"):
+            evidence.add("tutela_inicial_pre_rad", LR_TUTELA_INICIAL_PRE_RAD,
+                         detail=f"escrito sin rad23, accionante coverage {cov:.2f}")
+            reasons_for.append("Escrito de tutela con accionante del caso (pre-radicación)")
+
+    # ---- R5/R6: cross-DB lookup vía CaseLookupCache (target_case_id) ----
+    # Refinamientos v6.0.16+:
+    #  - Si el filename contiene rad23 EXACTO del case → BLOQUEAR target_case_id
+    #    (rad anterior en texto es del mismo proceso, no caso ajeno).
+    #  - Validar que target tenga al menos UNA señal coherente (rad23 exacto
+    #    o accionante en filename) antes de proponerlo.
+    target_case_id = None
+    target_evidence = ""
+
+    # Comparar rad23 completo (23 dígitos) — no truncar a 20, porque
+    # el consecutivo está en posición 21+ y casos del mismo juzgado/año
+    # comparten primeros 20 dígitos.
+    def _same_rad23(a: str, b: str) -> bool:
+        """Compara dos rad23 considerando que sólo difieren en sufijo de etapa procesal.
+
+        rad23 colombiano termina en NN (00=1ra inst, 01=impugnación, 02+=etc).
+        Dos rads del mismo proceso difieren sólo en esos 2 últimos dígitos.
+        Comparamos los dígitos 11..21 (juzgado+año+consecutivo) ignorando sufijo.
+        """
+        a_n = _norm_digits(a)
+        b_n = _norm_digits(b)
+        if not a_n or not b_n or len(a_n) < 18 or len(b_n) < 18:
+            return False
+        # Quitar últimos 2 dígitos (sufijo etapa) y comparar 12 dígitos siguientes
+        # = año(4)+consecutivo(5)+despacho(3)
+        a_core = a_n[-14:-2] if len(a_n) >= 14 else a_n
+        b_core = b_n[-14:-2] if len(b_n) >= 14 else b_n
+        return a_core == b_core
+
+    case_rad23_in_doc = bool(case_rad23_norm and len(case_rad23_norm) >= 18
+                              and case_rad23_norm[-14:] in fn_digits)
+    case_rad23_in_text = False
+    for r in ids.of_kind("rad23"):
+        if _same_rad23(case_rad23_norm, r.value):
+            case_rad23_in_text = True
+            break
+
+    if case_rad23_in_doc or case_rad23_in_text:
+        # rad23 exacto del case está en el doc → no proponer target ajeno
+        return None, ""
+
+    try:
+        from backend.email.case_lookup_cache import get_cache
+        cache = get_cache()
+        if cache._built:
+            # Helper para validar candidato target con DB
+            def _validate_candidate(cand_case_id: int, source_rad: str) -> bool:
+                """Verifica si el target tiene rad23 cuya forma corta == rad23 del doc.
+                Si el doc tiene rad23 23-d, debe coincidir EXACTO con el del target.
+                """
+                if cand_case_id == getattr(case, "id", None):
+                    return False
+                # Si el cache lo devolvió por rad23 exacto, ya está validado
+                return True
+
+            # 1) rad23 ajeno → buscar destino
+            for r in ids.of_kind("rad23"):
+                rad_norm = _norm_digits(r.value)
+                if not rad_norm or len(rad_norm) < 18:
+                    continue
+                if _same_rad23(case_rad23_norm, r.value):
+                    continue
+                hit = cache.lookup_by_rad23(r.value)
+                if hit and _validate_candidate(hit, rad_norm):
+                    target_case_id = hit
+                    target_evidence = f"rad23={rad_norm[-14:]}"
+                    break
+
+            # 2) rad_corto en filename/texto (validar que target tiene rad23 que coincide)
+            if not target_case_id:
+                cands = _extract_rad_cortos(filename)
+                for cand in cands:
+                    if cand == case_rad_corto:
+                        continue
+                    hit = cache.lookup_by_rad_corto(cand)
+                    if hit and _validate_candidate(hit, cand):
+                        target_case_id = hit
+                        target_evidence = f"rad_corto={cand} (filename)"
+                        break
+
+            # 3) Validación adicional: si target identificado, verificar coherencia con accionante
+            if target_case_id:
+                try:
+                    from backend.database.database import SessionLocal
+                    from backend.database.models import Case as _Case
+                    _sess = SessionLocal()
+                    try:
+                        tgt = _sess.query(_Case).filter(_Case.id == target_case_id).first()
+                        if tgt and tgt.accionante:
+                            tgt_words = _significant_name_words(tgt.accionante)
+                            txt_norm = _norm_text(full_text[:5000] + " " + filename)
+                            if tgt_words:
+                                acc_match = sum(1 for w in tgt_words[:4] if w in txt_norm)
+                                if acc_match == 0 and len(tgt_words) >= 2:
+                                    # Target identificado por rad pero accionante NO está en doc
+                                    # → reducir confianza del target (no descarta, marca SOSPECHOSO)
+                                    target_evidence += " [accionante target no en doc]"
+                    finally:
+                        _sess.close()
+                except Exception:
+                    pass
+
+            # Si target identificado y filename apunta a otro case → señal negativa
+            if target_case_id:
+                for r in ids.of_kind("rad23"):
+                    rad_norm = _norm_digits(r.value)
+                    if (rad_norm[-14:] in fn_digits
+                            and not _same_rad23(case_rad23_norm, r.value)):
+                        evidence.add("filename_other_case_rad23", LR_FILENAME_HAS_OTHER_CASE_RAD23,
+                                     detail=f"filename apunta a otro case: {rad_norm[-14:]}",
+                                     pro=False)
+                        reasons_against.append("Filename contiene rad23 de OTRO caso conocido")
+                        break
+    except Exception:
+        pass
+
+    return target_case_id, target_evidence
+
+
+# ============================================================
+# Helpers v6.0.16
+# ============================================================
+
+_NAME_SKIP = {
+    "AGENTE", "OFICIOSO", "MENOR", "REPRESENTANTE", "LEGAL", "MUNICIPAL",
+    "PERSONERO", "PERSONERA", "PERSONERIA", "ACCION", "TUTELA", "CONTRA",
+    "HIJO", "HIJA", "SENOR", "SENORA", "COMO", "REPRESENTATE", "REPRESENTACION",
+    "NOMBRE", "DOCENTE", "RECTOR", "ALCALDE", "JUEZ", "SECRETARIA",
+}
+
+
+def _significant_name_words(name: str) -> list[str]:
+    """Extrae palabras del nombre del accionante (≥4 chars, sin stopwords)."""
+    return [w for w in re.findall(r"[A-ZÁÉÍÓÚÑ]{4,}", _norm_text(name))
+            if w not in _NAME_SKIP]
+
+
+def _derive_rad_corto(rad23_norm: str) -> str:
+    """Deriva 'AAAA-NNNNN' de un rad23 normalizado de 22-25 dígitos."""
+    if not rad23_norm or len(rad23_norm) < 18:
+        return ""
+    m = re.search(r"(20\d{2})(\d{5})", rad23_norm)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    return ""
+
+
+def _extract_rad_corto_from_string(s: str) -> str:
+    """Extrae 'AAAA-NNNNN' del primer match en s (folder_name, etc.)."""
+    if not s:
+        return ""
+    m = re.search(r"(20\d{2})[-_ ]?0*(\d{1,5})", s)
+    if m:
+        return f"{m.group(1)}-{m.group(2).zfill(5)}"
+    return ""
+
+
+def _extract_rad_cortos(s: str) -> set[str]:
+    """Extrae TODOS los rad_corto AAAA-NNNNN de s."""
+    if not s:
+        return set()
+    found = set()
+    for m in re.finditer(r"(20\d{2})[-_ ]?0*(\d{1,5})(?:[-_ ]?\d{2})?", s):
+        yr, sq = m.group(1), m.group(2).zfill(5)
+        # Sanity: año razonable, secuencial >=1
+        if 2018 <= int(yr) <= 2030 and int(sq) >= 1:
+            found.add(f"{yr}-{sq}")
+    return found
 
 
 def _extract_cc_from_case(case) -> str:
