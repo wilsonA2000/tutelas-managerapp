@@ -10,7 +10,7 @@ import {
   getCleanupDiagnosis, runHashBackfill, runEmailsMdBackfill,
   runMoveNoPertenece, runMergeIdentity,
   runPurgeDuplicates, runMergeForestFragments, runBackfillRadicados,
-  getHealthV50,
+  getHealthV50, runReverifySospechosos,
 } from '../services/api'
 import PageShell from '@/components/PageShell'
 import PageHeader from '@/components/PageHeader'
@@ -200,6 +200,22 @@ export default function CleanupPanel() {
       if (!dryRun) qc.invalidateQueries({ queryKey: ['cleanup-diagnosis'] })
     },
     onError: () => toast.error('Error al completar radicados'),
+  })
+
+  // v6.0.12: re-verify SOSPECHOSO con datos actualizados
+  const reverifyMut = useMutation({
+    mutationFn: (dryRun: boolean) => runReverifySospechosos(dryRun, false, 0),
+    onSuccess: (data, dryRun) => {
+      setResults(r => ({ ...r, reverify: data }))
+      const trans = (data?.transitions ?? {}) as Record<string, number>
+      const toOk = trans['SOSPECHOSO->OK'] ?? 0
+      const total = data?.total_processed ?? 0
+      toast.success(dryRun
+        ? `Preview: ${toOk}/${total} pasarían a OK`
+        : `Re-verificados: ${toOk}/${total} → OK`)
+      if (!dryRun) qc.invalidateQueries({ queryKey: ['cleanup-diagnosis'] })
+    },
+    onError: () => toast.error('Error al re-verificar sospechosos'),
   })
 
   // Extract diagnosis from actual API structure
@@ -508,6 +524,18 @@ export default function CleanupPanel() {
             isPreviewing={moveMut.isPending && moveMut.variables === true}
             isExecuting={moveMut.isPending && moveMut.variables === false}
             result={results.move ?? null}
+          />
+
+          <ActionCard
+            title="Re-verificar Sospechosos"
+            description="Re-ejecuta verificación de pertenencia sobre documentos SOSPECHOSO con los datos actualizados del caso (post Fase 6.7 + Gmail check). Muchos pasarán a OK al tener más contexto."
+            icon={FileSearch}
+            iconColor="text-amber-600"
+            onPreview={() => reverifyMut.mutate(true)}
+            onExecute={() => { if (confirm('¿Re-verificar los documentos sospechosos? Puede tardar varios minutos.')) reverifyMut.mutate(false) }}
+            isPreviewing={reverifyMut.isPending && reverifyMut.variables === true}
+            isExecuting={reverifyMut.isPending && reverifyMut.variables === false}
+            result={results.reverify ?? null}
           />
 
           <ActionCard

@@ -862,3 +862,97 @@ def backfill_radicado_23d(
 
     stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
+
+
+# ============================================================
+# v6.0.12: Reverify SOSPECHOSO docs con datos actualizados
+# ============================================================
+
+def reverify_sospechosos(
+    db: Session,
+    dry_run: bool = True,
+    include_revisar: bool = False,
+    limit: int = 0,
+) -> dict[str, Any]:
+    """Re-ejecuta verify_document_belongs sobre docs SOSPECHOSO con datos
+    de caso actualizados (post-Fase 6.7 + Gmail check). Muchos docs marcados
+    SOSPECHOSO con info incompleta vuelven a OK.
+
+    Args:
+        db: sesion SQLAlchemy
+        dry_run: si True solo cuenta sin persistir
+        include_revisar: si True tambien re-verifica REVISAR
+        limit: si >0, solo procesa primeros N (para test rapido)
+
+    Returns:
+        dict con transitions {(old,new): count} + details
+    """
+    from backend.extraction.pipeline import verify_document_belongs
+
+    start = datetime.utcnow()
+    statuses = ["SOSPECHOSO"]
+    if include_revisar:
+        statuses.append("REVISAR")
+
+    q = db.query(Document).filter(Document.verificacion.in_(statuses))
+    if limit and limit > 0:
+        q = q.limit(limit)
+    docs = q.all()
+
+    transitions: dict[str, int] = {}
+    sample_changes: list[dict[str, Any]] = []
+    errors = 0
+
+    for i, doc in enumerate(docs, 1):
+        case = db.query(Case).filter(Case.id == doc.case_id).first()
+        if not case:
+            errors += 1
+            continue
+        old_status = doc.verificacion
+        try:
+            new_status, new_detail = verify_document_belongs(case, doc)
+        except Exception as e:
+            errors += 1
+            logger.warning("reverify doc=%d falló: %s", doc.id, str(e)[:80])
+            continue
+
+        key = f"{old_status}->{new_status}"
+        transitions[key] = transitions.get(key, 0) + 1
+
+        if new_status != old_status:
+            if len(sample_changes) < 20:
+                sample_changes.append({
+                    "doc_id": doc.id,
+                    "filename": doc.filename[:60] if doc.filename else "",
+                    "old": old_status,
+                    "new": new_status,
+                    "detail": (new_detail or "")[:80],
+                })
+            if not dry_run:
+                doc.verificacion = new_status
+                doc.verificacion_detalle = f"Re-verify v6.0.12: {(new_detail or '')[:180]}"
+                db.add(AuditLog(
+                    case_id=doc.case_id or 0,
+                    field_name="verificacion",
+                    old_value=old_status,
+                    new_value=new_status,
+                    action="REVERIFY_V6012",
+                    source=f"cleanup_actions:reverify_sospechosos doc_id={doc.id}",
+                ))
+
+        if i % 100 == 0 and not dry_run:
+            db.commit()
+
+    if not dry_run:
+        db.commit()
+        from backend.database.database import wal_checkpoint
+        wal_checkpoint("PASSIVE")
+
+    return {
+        "dry_run": dry_run,
+        "total_processed": len(docs),
+        "errors": errors,
+        "transitions": transitions,
+        "sample_changes": sample_changes,
+        "duration_s": round((datetime.utcnow() - start).total_seconds(), 1),
+    }

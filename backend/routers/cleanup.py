@@ -27,6 +27,7 @@ from backend.services.cleanup_actions import (
     purge_duplicates,
     merge_forest_fragments,
     backfill_radicado_23d,
+    reverify_sospechosos,
 )
 
 router = APIRouter(prefix="/api/cleanup", tags=["cleanup"])
@@ -311,3 +312,27 @@ def api_cleanup_health(db: Session = Depends(get_db)):
         "processing_status_distribution": status_dist,
         "verificacion_distribution": verif_dist,
     }
+
+
+class ReverifySospechososBody(BaseModel):
+    dry_run: bool = True
+    include_revisar: bool = False
+    limit: int = 0
+
+
+@router.post("/reverify-sospechosos")
+def api_cleanup_reverify_sospechosos(
+    body: ReverifySospechososBody = ReverifySospechososBody(),
+    db: Session = Depends(get_db),
+):
+    """v6.0.12: Re-ejecuta verify_document_belongs sobre docs SOSPECHOSO con
+    datos actualizados de caso. Muchos pasaran a OK tras Fase 6.7 + Gmail check.
+
+    Idempotente. Registra AuditLog REVERIFY_V6012 por cada cambio.
+    """
+    return reverify_sospechosos(
+        db,
+        dry_run=body.dry_run,
+        include_revisar=body.include_revisar,
+        limit=body.limit,
+    )

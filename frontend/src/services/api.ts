@@ -63,6 +63,9 @@ export const chatWithAI = (question: string) =>
 export const getChatIntents = () => api.get('/chat/intents').then(r => r.data);
 export const getChatHealth = () => api.get('/chat/health').then(r => r.data);
 
+export const runReverifySospechosos = (dryRun = true, includeRevisar = false, limit = 0) =>
+  api.post('/cleanup/reverify-sospechosos', { dry_run: dryRun, include_revisar: includeRevisar, limit }, { timeout: 600000 }).then(r => r.data);
+
 // Documents
 export const getDocumentPreviewUrl = (id: number) =>
   `/api/documents/${id}/preview`;
