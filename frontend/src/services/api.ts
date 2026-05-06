@@ -51,7 +51,17 @@ export const getActivity = () =>
   api.get('/dashboard/activity').then(r => r.data);
 
 export const chatWithAI = (question: string) =>
-  api.post('/dashboard/chat', { question }, { timeout: 60000 }).then(r => r.data);
+  api.post('/chat/', { message: question }, { timeout: 30000 }).then(r => ({
+    response: r.data.answer,
+    intent: r.data.intent,
+    data: r.data.data,
+    confidence: r.data.confidence,
+    llm_used: r.data.llm_used,
+    template_used: r.data.template_used,
+  }));
+
+export const getChatIntents = () => api.get('/chat/intents').then(r => r.data);
+export const getChatHealth = () => api.get('/chat/health').then(r => r.data);
 
 // Documents
 export const getDocumentPreviewUrl = (id: number) =>
@@ -212,6 +222,46 @@ export const getCalendarEvents = () =>
 
 export const getDeadlineSummary = () =>
   api.get('/intelligence/deadlines').then(r => r.data);
+
+// v9.0 — Similitud semántica BGE-M3
+export interface SimilarNeighbor {
+  rank: number;
+  score: number;
+  source: 'historical' | 'current';
+  case_id: number;
+  tema: string | null;
+  dependencia: string | null;
+  direccion: string | null;
+  tipo: string | null;
+  fallo: string | null;
+  text_preview: string;
+}
+
+export interface SimilarConsensus {
+  target: string;
+  value: string;
+  confidence: number;
+  n_valid: number;
+  n_neighbors: number;
+}
+
+export interface SimilarResponse {
+  case_id: number;
+  k: number;
+  source: string;
+  latency_ms: number;
+  neighbors: SimilarNeighbor[];
+  consensus: SimilarConsensus[];
+  reasoning: string;
+}
+
+export const getSimilarCases = (
+  caseId: number,
+  k = 5,
+  source: 'historical' | 'current' | 'mixed' = 'historical',
+): Promise<SimilarResponse> =>
+  api.get(`/intelligence/similar/${caseId}`, { params: { k, source } })
+    .then(r => r.data);
 
 // Agent
 export const runAgent = (instruction: string) =>

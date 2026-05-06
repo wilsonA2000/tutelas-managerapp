@@ -18,17 +18,17 @@ interface ChatMessage {
 }
 
 const QUICK_COMMANDS = [
-  { text: 'Estadisticas generales', icon: BarChart3, color: 'text-blue-600 bg-blue-50 border-blue-200 hover:bg-blue-100' },
-  { text: 'Escanear alertas criticas', icon: Shield, color: 'text-amber-600 bg-amber-50 border-amber-200 hover:bg-amber-100' },
-  { text: 'Consultar cuadro de tutelas', icon: Search, color: 'text-emerald-600 bg-emerald-50 border-emerald-200 hover:bg-emerald-100' },
-  { text: 'Casos con fallo concede', icon: Brain, color: 'text-purple-600 bg-purple-50 border-purple-200 hover:bg-purple-100' },
-  { text: 'Predecir resultado Bucaramanga', icon: Sparkles, color: 'text-rose-600 bg-rose-50 border-rose-200 hover:bg-rose-100' },
-  { text: 'Casos por municipio', icon: BarChart3, color: 'text-cyan-600 bg-cyan-50 border-cyan-200 hover:bg-cyan-100' },
+  { text: 'Resumen general', icon: BarChart3, color: 'text-blue-600 bg-blue-50 border-blue-200 hover:bg-blue-100' },
+  { text: 'Casos en sancion', icon: Shield, color: 'text-amber-600 bg-amber-50 border-amber-200 hover:bg-amber-100' },
+  { text: 'Tutelas en Bucaramanga', icon: Search, color: 'text-emerald-600 bg-emerald-50 border-emerald-200 hover:bg-emerald-100' },
+  { text: 'Impugnaciones pendientes', icon: Brain, color: 'text-purple-600 bg-purple-50 border-purple-200 hover:bg-purple-100' },
+  { text: 'Top entidades demandadas', icon: Sparkles, color: 'text-rose-600 bg-rose-50 border-rose-200 hover:bg-rose-100' },
+  { text: 'Tendencia mensual', icon: BarChart3, color: 'text-cyan-600 bg-cyan-50 border-cyan-200 hover:bg-cyan-100' },
 ]
 
 const WELCOME_MSG: ChatMessage = {
   role: 'ai',
-  text: 'Soy tu **Agente Juridico IA** de la Gobernacion de Santander.\n\nTengo **16 herramientas** especializadas y acceso directo al **Cuadro de Tutelas**.\n\nPuedo consultar datos en tiempo real, analizar abogados, predecir resultados, verificar plazos, escanear alertas y mucho mas.\n\n**Escribeme lo que necesitas en lenguaje natural.**',
+  text: 'Soy tu **Asistente Juridico** de la Gobernacion de Santander.\n\nConsulto la base depurada de **403 casos** en lenguaje natural. Templates Tier 1 deterministas (10 ms) + LLM local opcional para casos complejos.\n\n**Pregunta lo que necesites** sobre estado, ciudad, accionante, impugnaciones, tendencias...',
   timestamp: new Date(),
 }
 
