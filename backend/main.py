@@ -286,6 +286,10 @@ from backend.routers.agent import router as agent_router
 app.include_router(agent_router)
 from backend.routers.cleanup import router as cleanup_router
 app.include_router(cleanup_router)
+from backend.routers.cognitive import router as cognitive_router
+app.include_router(cognitive_router)
+from backend.routers.chat import router as chat_router
+app.include_router(chat_router)
 
 
 # ============================================================
@@ -1017,35 +1021,63 @@ def api_settings_status():
     }
 
 
+def _extraction_worker_init():
+    """Precarga singletons + log PID (assert paralelismo real) por worker process.
+
+    v6.1.1: skipea Presidio analyzer si LOCAL_ONLY=true (ahorra ~300 MB RAM por worker).
+    """
+    import os, logging
+    logging.getLogger("tutelas.extraction.worker").info(
+        "Worker process started: pid=%s ppid=%s", os.getpid(), os.getppid()
+    )
+    try:
+        from backend.cognition.ner_spacy import _get_nlp
+        _get_nlp()
+    except Exception:
+        pass
+    try:
+        from backend.core.settings import settings as _s
+        if not getattr(_s, "LOCAL_ONLY", False) and getattr(_s, "PII_REDACTION_ENABLED", True):
+            from backend.privacy.detectors import _get_analyzer
+            _get_analyzer()
+    except Exception:
+        pass
+
+
+def _process_one_case_extraction(case_id: int) -> dict:
+    """Worker top-level (picklable para ProcessPool) — procesa 1 caso con sesión DB propia."""
+    from backend.database.database import SessionLocal as _SessionLocal
+    from backend.database.models import Case as _Case
+    from backend.extraction.unified_cognitive import unified_extract_dispatch as _dispatch
+    from backend.core.settings import settings as _settings
+
+    thread_db = _SessionLocal()
+    case_folder = f"ID {case_id}"
+    try:
+        case = thread_db.query(_Case).filter(_Case.id == case_id).first()
+        if not case:
+            return {"case_id": case_id, "folder": case_folder, "error": "case no encontrado"}
+        case_folder = case.folder_name or case_folder
+        stats = _dispatch(thread_db, case, _settings.BASE_DIR)
+        return {"case_id": case_id, "folder": case_folder, "stats": stats}
+    except Exception as e:
+        try:
+            thread_db.rollback()
+        except Exception:
+            pass
+        return {"case_id": case_id, "folder": case_folder, "error": str(e)[:120]}
+    finally:
+        thread_db.close()
+
+
 def _run_extraction_background():
-    """Ejecutar extraccion masiva en background thread con pool de 3 workers paralelos."""
+    """Ejecutar extraccion masiva en background thread con ProcessPool real (sin GIL)."""
     global extraction_in_progress, extraction_progress
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ProcessPoolExecutor, as_completed
     from backend.services.backup_service import auto_backup
 
-    # v6.0.2: lee settings.EXTRACTION_MAX_WORKERS (8 en pod, ajustable por env).
-    # Antes era 3 hardcoded por RAM en WSL; el pod tiene headroom suficiente.
+    # v6.0.2: lee settings.EXTRACTION_MAX_WORKERS (8-16 en pod). ProcessPool sin GIL.
     MAX_WORKERS = settings.EXTRACTION_MAX_WORKERS
-
-    def _process_one_case(case_id: int) -> dict:
-        """Worker que procesa 1 caso con su propia sesión DB (thread-safe)."""
-        thread_db = SessionLocal()
-        case_folder = f"ID {case_id}"
-        try:
-            case = thread_db.query(Case).filter(Case.id == case_id).first()
-            if not case:
-                return {"case_id": case_id, "folder": case_folder, "error": "case no encontrado"}
-            case_folder = case.folder_name or case_folder
-            stats = unified_extract_dispatch(thread_db, case, settings.BASE_DIR)
-            return {"case_id": case_id, "folder": case_folder, "stats": stats}
-        except Exception as e:
-            try:
-                thread_db.rollback()
-            except Exception:
-                pass
-            return {"case_id": case_id, "folder": case_folder, "error": str(e)[:120]}
-        finally:
-            thread_db.close()
 
     db = None
     try:
@@ -1063,13 +1095,13 @@ def _run_extraction_background():
         extraction_progress["success"] = 0
         extraction_progress["errors"] = 0
         extraction_progress["progress_pct"] = 0
-        add_monitor_log(f"Extraccion masiva iniciada: {total} casos (pool={MAX_WORKERS})")
+        add_monitor_log(f"Extraccion masiva iniciada: {total} casos (ProcessPool={MAX_WORKERS})")
 
         failed_cases = []
         completed = 0
 
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {executor.submit(_process_one_case, cid): cid for cid in case_ids}
+        with ProcessPoolExecutor(max_workers=MAX_WORKERS, initializer=_extraction_worker_init) as executor:
+            futures = {executor.submit(_process_one_case_extraction, cid): cid for cid in case_ids}
             for fut in as_completed(futures):
                 if not extraction_in_progress:
                     add_monitor_log("Extraccion masiva cancelada por usuario")
