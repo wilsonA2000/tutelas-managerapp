@@ -579,6 +579,179 @@ def batch_move_cognitive_v6016(
 
 
 # ============================================================
+# v6.0.18: merge_duplicate_cases — fusionar pares de cases duplicados
+# ============================================================
+
+def merge_duplicate_cases(
+    db: Session,
+    pairs: list[tuple[int, int]],
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """v6.0.18: fusiona pares de cases duplicados.
+
+    Para cada (principal_id, dup_id):
+      1. Mueve docs de dup → principal vía move_document_or_package
+         (paquetes RFC 5322 viajan juntos).
+      2. Re-asigna emails: emails.case_id = principal_id.
+      3. Coalescing de campos: si principal tiene NULL y dup tiene valor → copia.
+      4. Marca dup.processing_status = 'DUPLICATE_MERGED' con folder_path
+         apuntando al principal (referencia).
+      5. AuditLog action='MERGE_V6018'.
+      6. Refresh case_lookup_cache.
+
+    Idempotente: si dup ya está DUPLICATE_MERGED, se salta.
+
+    Args:
+        db: SQLAlchemy session.
+        pairs: lista de (case_principal_id, case_dup_id).
+        dry_run: si True solo reporta sin mutar.
+
+    Returns:
+        dict con stats por par + total.
+    """
+    start = datetime.utcnow()
+    stats: dict[str, Any] = {
+        "dry_run": dry_run,
+        "total_pairs": len(pairs),
+        "merged": 0,
+        "skipped_already_merged": 0,
+        "errors": 0,
+        "actions": [],
+    }
+
+    # Campos del case que pueden coalescerse desde dup → principal si principal=NULL
+    COALESCE_FIELDS = (
+        "radicado_23_digitos", "radicado_forest", "abogado_responsable",
+        "accionados", "vinculados", "derecho_vulnerado", "juzgado", "ciudad",
+        "fecha_ingreso", "asunto", "pretensiones", "oficina_responsable",
+        "sentido_fallo_1st", "fecha_fallo_1st", "impugnacion", "quien_impugno",
+        "forest_impugnacion", "juzgado_2nd", "sentido_fallo_2nd", "fecha_fallo_2nd",
+        "incidente", "fecha_apertura_incidente", "responsable_desacato",
+        "decision_incidente", "observaciones", "categoria_tematica",
+        "direccion", "grupo", "equipo", "origen", "estado_incidente",
+    )
+
+    for principal_id, dup_id in pairs:
+        action: dict[str, Any] = {
+            "principal_id": principal_id,
+            "dup_id": dup_id,
+            "moved_docs": [],
+            "moved_emails": 0,
+            "coalesced_fields": [],
+            "errors": [],
+        }
+
+        try:
+            principal = db.query(Case).filter(Case.id == principal_id).first()
+            dup = db.query(Case).filter(Case.id == dup_id).first()
+
+            if not principal or not dup:
+                action["errors"].append("case principal o dup no existe")
+                stats["errors"] += 1
+                stats["actions"].append(action)
+                continue
+
+            if dup.processing_status == "DUPLICATE_MERGED":
+                stats["skipped_already_merged"] += 1
+                action["errors"].append("dup ya está DUPLICATE_MERGED")
+                stats["actions"].append(action)
+                continue
+
+            # 1) Mover docs de dup → principal
+            dup_docs = db.query(Document).filter(Document.case_id == dup_id).all()
+            already_moved: set[int] = set()
+            for doc in dup_docs:
+                if doc.id in already_moved:
+                    continue
+                if dry_run:
+                    action["moved_docs"].append({
+                        "doc_id": doc.id, "filename": (doc.filename or "")[:60],
+                    })
+                    already_moved.add(doc.id)
+                else:
+                    result = move_document_or_package(
+                        db, doc.id, principal_id, reason="merge_v6018",
+                    )
+                    if result.get("errors"):
+                        action["errors"].append(f"doc {doc.id}: {result['errors']}")
+                    else:
+                        moved_ids = result.get("moved_ids", [])
+                        already_moved.update(moved_ids)
+                        action["moved_docs"].extend([{"doc_id": mid} for mid in moved_ids])
+
+            # 2) Re-asignar emails (los docs que tenían email_id ya viajaron con paquete;
+            # también debe asegurarse que el email mismo apunte al case correcto)
+            if not dry_run:
+                emails_updated = db.query(Email).filter(
+                    Email.case_id == dup_id
+                ).update({Email.case_id: principal_id}, synchronize_session=False)
+                action["moved_emails"] = emails_updated
+            else:
+                action["moved_emails"] = db.query(Email).filter(
+                    Email.case_id == dup_id
+                ).count()
+
+            # 3) Coalescing
+            for field in COALESCE_FIELDS:
+                principal_val = getattr(principal, field, None)
+                dup_val = getattr(dup, field, None)
+                if (principal_val is None or principal_val == ""
+                        or principal_val == "None") and dup_val:
+                    if not dry_run:
+                        setattr(principal, field, dup_val)
+                        db.add(AuditLog(
+                            case_id=principal_id,
+                            field_name=field,
+                            old_value=str(principal_val) if principal_val else None,
+                            new_value=str(dup_val)[:200],
+                            action="MERGE_V6018_COALESCE",
+                            source=f"merge from case {dup_id}",
+                        ))
+                    action["coalesced_fields"].append(field)
+
+            # 4) Marcar dup como DUPLICATE_MERGED
+            if not dry_run:
+                dup.processing_status = "DUPLICATE_MERGED"
+                # Guardar referencia al principal en folder_path
+                dup.folder_path = f"MERGED_INTO_CASE_{principal_id}"
+                db.add(AuditLog(
+                    case_id=dup_id,
+                    field_name="processing_status",
+                    old_value="COMPLETO",
+                    new_value="DUPLICATE_MERGED",
+                    action="MERGE_V6018",
+                    source=f"merged into case {principal_id}",
+                ))
+
+            stats["merged"] += 1
+            stats["actions"].append(action)
+
+        except Exception as e:
+            logger.exception("merge_duplicate_cases pair=(%d,%d) error: %s",
+                             principal_id, dup_id, e)
+            action["errors"].append(str(e)[:120])
+            stats["errors"] += 1
+            stats["actions"].append(action)
+
+    if not dry_run:
+        db.commit()
+        # Refresh cache
+        try:
+            from backend.email.case_lookup_cache import get_cache
+            cache = get_cache()
+            for p_id, d_id in pairs:
+                cache.refresh_one(db, p_id)
+                cache.refresh_one(db, d_id)
+        except Exception as e:
+            logger.warning("cache refresh post-merge falló: %s", e)
+        from backend.database.database import wal_checkpoint
+        wal_checkpoint("PASSIVE")
+
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
+    return stats
+
+
+# ============================================================
 # v6.0.16: detect_misnamed_folders
 # ============================================================
 

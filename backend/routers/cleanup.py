@@ -336,3 +336,22 @@ def api_cleanup_reverify_sospechosos(
         include_revisar=body.include_revisar,
         limit=body.limit,
     )
+
+
+class MergeDuplicatesBody(BaseModel):
+    """v6.0.18: pares (principal_id, dup_id) a fusionar."""
+    pairs: list[tuple[int, int]]
+    dry_run: bool = True
+
+
+@router.post("/merge-duplicates")
+def api_cleanup_merge_duplicates(
+    body: MergeDuplicatesBody,
+    db: Session = Depends(get_db),
+):
+    """v6.0.18: fusiona pares de cases duplicados (Categoría A del análisis).
+
+    Body: {"pairs": [[principal_id, dup_id], ...], "dry_run": true}
+    """
+    from backend.services.cleanup_actions import merge_duplicate_cases
+    return merge_duplicate_cases(db, pairs=body.pairs, dry_run=body.dry_run)
