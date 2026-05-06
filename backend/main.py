@@ -403,6 +403,16 @@ def _run_gmail_check_background():
         # Expandir total: 2 pasos base + N casos
         gmail_check_result["total"] = 2 + len(cases_to_process)
 
+        # Pausar llama-server antes de re-extracción cognitiva (riesgo OOM en WSL 8 GB).
+        # Why: cada unified_extract_dispatch puede gatillar LLM y, sumado al server :8765
+        # cargado, causa swap thrashing 2.6 GB observado en sesión previa.
+        if cases_to_process:
+            try:
+                from backend.services.llm_mutex import pause_llm_for_extraction
+                pause_llm_for_extraction()
+            except Exception as _mutex_err:
+                add_monitor_log(f"Mutex pre-Paso3 no disponible: {_mutex_err}", level="warning")
+
         for i, case in enumerate(cases_to_process):
             gmail_check_result["current"] = 2 + i
             gmail_check_result["step"] = f"Paso 3/3: Analizando ({i+1}/{len(cases_to_process)}): {case.folder_name[:40]}..."
