@@ -12,7 +12,7 @@ from backend.database.models import Case, Document, Email, Extraction, AuditLog,
 from backend.extraction.pdf_extractor import extract_pdf
 from backend.extraction.docx_extractor import extract_docx
 from backend.extraction.doc_extractor import extract_doc
-from backend.extraction.ocr_extractor import extract_pdf_ocr, extract_image_ocr, is_tesseract_available
+# REMOVED minimal: ocr_extractor (legacy tesseract)
 from backend.extraction.ai_extractor import extract_with_ai
 
 
@@ -34,18 +34,7 @@ def extract_document_text(doc: Document) -> tuple[str, str]:
 
     if ext == ".pdf":
         result = extract_pdf(doc.file_path)
-        text = result.text
-        method = result.method
-
-        # Si tiene paginas escaneadas y tesseract esta disponible, intentar OCR
-        if result.has_scanned_pages and is_tesseract_available():
-            ocr_result = extract_pdf_ocr(doc.file_path)
-            if ocr_result.text.strip():
-                # Combinar texto normal con OCR de paginas escaneadas
-                text += "\n\n[OCR COMPLEMENTARIO]\n" + ocr_result.text
-                method = "pdfplumber+ocr"
-
-        return text, method
+        return result.text, result.method
 
     elif ext == ".docx":
         result = extract_docx(doc.file_path)
@@ -63,9 +52,6 @@ def extract_document_text(doc: Document) -> tuple[str, str]:
             return "", "md_error"
 
     elif ext in (".png", ".jpg", ".jpeg"):
-        if is_tesseract_available():
-            result = extract_image_ocr(doc.file_path)
-            return result.text, "ocr"
         return "", "no_ocr"
 
     return "", "unsupported"
