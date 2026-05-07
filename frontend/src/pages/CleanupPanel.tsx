@@ -87,11 +87,20 @@ function ActionCard({ title, description, icon: Icon, onPreview, onExecute, isPr
             )}
             {!expanded && (
               <div className="mt-1 flex flex-wrap gap-2">
-                {Object.entries(result).filter(([k]) => !['dry_run', 'duration_s', 'actions'].includes(k)).map(([k, v]) => (
-                  <Badge key={k} variant="outline" className="text-xs font-normal">
-                    {k}: <strong className="ml-1">{String(v)}</strong>
-                  </Badge>
-                ))}
+                {Object.entries(result).filter(([k]) => !['dry_run', 'duration_s', 'actions'].includes(k)).map(([k, v]) => {
+                  let display: string
+                  if (Array.isArray(v)) display = `${v.length} ítems`
+                  else if (v !== null && typeof v === 'object') {
+                    const pairs = Object.entries(v as Record<string, unknown>).map(([sk, sv]) => `${sk}=${sv}`).join(', ')
+                    display = pairs || '—'
+                  }
+                  else display = String(v)
+                  return (
+                    <Badge key={k} variant="outline" className="text-xs font-normal">
+                      {k}: <strong className="ml-1">{display}</strong>
+                    </Badge>
+                  )
+                })}
               </div>
             )}
           </div>

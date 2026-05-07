@@ -114,6 +114,7 @@ def _process_one_message(
         ).execute()
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         message_id = headers.get("Message-ID", headers.get("Message-Id", msg_ref["id"]))
+        result["message_id"] = message_id
 
         if message_id in existing_ids:
             # Modo experiment: si ya lo procesamos, no marcamos nada (idempotente)
@@ -293,7 +294,19 @@ def _persist_email(
         match_signals_json=match_signals_json,
     )
     db.add(email_record)
-    db.flush()
+    try:
+        db.flush()
+    except Exception as e:
+        # IntegrityError por message_id duplicado (header repetido entre emails distintos
+        # de Gmail). Tratamos como duplicado y abortamos persistencia de este email.
+        if "UNIQUE constraint failed: emails.message_id" in str(e):
+            db.rollback()
+            if adjuntos_result is not None:
+                adjuntos_result["result"] = "DUPLICATE_GMAIL"
+                adjuntos_result["adjuntos"] = 0
+                adjuntos_result["md_created"] = False
+            return
+        raise
 
     # Adjuntos
     guardados, ignorados = download_attachments(
@@ -422,6 +435,11 @@ def check_inbox_batch(
                 "subject": result["subject"],
                 "error": result.get("error", ""),
             })
+        # Agregar message_id al set para evitar IntegrityError cuando 2 emails del
+        # mismo batch comparten Message-ID header (forwards del mismo correo).
+        mid = result.get("message_id")
+        if mid:
+            existing_ids.add(mid)
         # Commit por email para no perder progreso si algo revienta después
         try:
             db.commit()

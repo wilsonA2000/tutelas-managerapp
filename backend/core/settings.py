@@ -129,9 +129,12 @@ class Settings(BaseSettings):
     ]
 
     # Derived paths (computed)
+    # APP_DIR es FIJO (donde vive este código + DB), independiente de BASE_DIR.
+    # BASE_DIR controla SOLO la raíz donde se crean carpetas de casos.
+    # Esto permite cambiar BASE_DIR sin migrar la DB.
     @property
     def app_dir(self) -> Path:
-        return Path(self.BASE_DIR) / "tutelas-app"
+        return Path(__file__).resolve().parents[2]
 
     @property
     def db_path(self) -> Path:
