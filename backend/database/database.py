@@ -28,7 +28,7 @@ def _set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.execute("PRAGMA synchronous=NORMAL")  # menor overhead que FULL, seguro con WAL
-    cursor.execute("PRAGMA busy_timeout=10000")  # 10s antes de fallar por lock
+    cursor.execute("PRAGMA busy_timeout=30000")  # 30s — DrvFs (/mnt/c) sufre contención con N workers
     cursor.close()
 
 

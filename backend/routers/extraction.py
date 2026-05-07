@@ -95,56 +95,86 @@ def _process_one_case_router(args: tuple) -> tuple:
 
     Sin acceso a state global del proceso main: el progress se actualiza en main al recibir
     el future. Retorna (ok, folder_name, error_reason, cid).
+
+    Reintenta hasta 3 veces ante OperationalError transitorios de SQLite
+    (DrvFs en /mnt/c puede arrojar "disk I/O error" o "database is locked"
+    bajo contención con varios workers escribiendo simultáneamente).
     """
+    import time as _time
+    from sqlalchemy.exc import OperationalError as _OpErr
     cid, classify_docs = args
     from backend.database.database import SessionLocal as _SessionLocal
     from backend.database.models import Case as _Case
     from backend.core.settings import settings as _settings
     from backend.extraction.pipeline import process_folder as _process_folder
 
-    db = _SessionLocal()
-    folder_name = f"ID {cid}"
-    try:
-        case = db.query(_Case).filter(_Case.id == cid).first()
-        if not case:
-            return False, folder_name, "case no encontrado", cid
-
-        folder_name = (case.folder_name or folder_name)[:60]
-
-        if classify_docs:
-            try:
-                from backend.agent.orchestrator import classify_and_clean_folder
-                classify_and_clean_folder(db, case, _settings.BASE_DIR)
-            except Exception:
-                pass
-
-        if _settings.UNIFIED_EXTRACTOR_ENABLED:
-            from backend.extraction.unified_cognitive import unified_extract_dispatch
-            stats = unified_extract_dispatch(db, case, _settings.BASE_DIR)
-        else:
-            stats = _process_folder(db, case)
-
-        if stats.get("renamed"):
-            db.refresh(case)
-
-        if stats.get("ai_error") and case.processing_status != "COMPLETO":
-            case.processing_status = "REVISION"
-            db.commit()
-            return False, folder_name, str(stats.get("ai_error"))[:120], cid
-
-        return True, folder_name, None, cid
-    except Exception as e:
+    last_err = None
+    for attempt in range(3):
+        if attempt > 0:
+            _time.sleep(0.5 * (2 ** attempt))  # 0.5s, 1s, 2s
+        db = _SessionLocal()
+        folder_name = f"ID {cid}"
         try:
-            db.rollback()
             case = db.query(_Case).filter(_Case.id == cid).first()
-            if case:
+            if not case:
+                return False, folder_name, "case no encontrado", cid
+
+            folder_name = (case.folder_name or folder_name)[:60]
+
+            if classify_docs:
+                try:
+                    from backend.agent.orchestrator import classify_and_clean_folder
+                    classify_and_clean_folder(db, case, _settings.BASE_DIR)
+                except Exception:
+                    pass
+
+            if _settings.UNIFIED_EXTRACTOR_ENABLED:
+                from backend.extraction.unified_cognitive import unified_extract_dispatch
+                stats = unified_extract_dispatch(db, case, _settings.BASE_DIR)
+            else:
+                stats = _process_folder(db, case)
+
+            if stats.get("renamed"):
+                db.refresh(case)
+
+            if stats.get("ai_error") and case.processing_status != "COMPLETO":
                 case.processing_status = "REVISION"
                 db.commit()
-        except Exception:
-            pass
-        return False, folder_name, str(e)[:120], cid
-    finally:
-        db.close()
+                return False, folder_name, str(stats.get("ai_error"))[:120], cid
+
+            return True, folder_name, None, cid
+        except _OpErr as e:
+            # OperationalError: lock o disk I/O. Reintentar.
+            last_err = e
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            continue
+        except Exception as e:
+            try:
+                db.rollback()
+                case = db.query(_Case).filter(_Case.id == cid).first()
+                if case:
+                    case.processing_status = "REVISION"
+                    db.commit()
+            except Exception:
+                pass
+            return False, folder_name, str(e)[:120], cid
+        finally:
+            db.close()
+
+    # Agotó retries por OperationalError. Marcar REVISION en sesión nueva.
+    try:
+        db2 = _SessionLocal()
+        case = db2.query(_Case).filter(_Case.id == cid).first()
+        if case:
+            case.processing_status = "REVISION"
+            db2.commit()
+        db2.close()
+    except Exception:
+        pass
+    return False, folder_name, f"OperationalError x3: {str(last_err)[:90]}", cid
 
 
 def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
