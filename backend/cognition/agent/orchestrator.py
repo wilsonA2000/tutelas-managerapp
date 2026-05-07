@@ -129,6 +129,41 @@ CAMPOS CANÓNICOS v8.2 — ÚSALOS SIEMPRE EN SQL (no los raw):
 - corte_revision — cases en revisión Corte Constitucional (radicado_t)
 - directorio_correos — contactos por dependencia/tema
 
+COLUMNAS REALES DE `cases` (úsalas exactamente, no inventes):
+  id · radicado_23_digitos · radicado_forest · abogado_responsable · abogado_canonical
+  accionante · accionados · vinculados · derecho_vulnerado · juzgado · ciudad
+  fecha_ingreso · asunto · pretensiones · oficina_responsable · dependencia_canonical
+  estado · fecha_respuesta · sentido_fallo_1st · fecha_fallo_1st · impugnacion
+  quien_impugno · forest_impugnacion · juzgado_2nd · sentido_fallo_2nd · fecha_fallo_2nd
+  incidente · fecha_apertura_incidente · responsable_desacato · decision_incidente
+  (+ _2 y _3 para segundo/tercer incidente)
+  categoria_tematica · origen · estado_incidente · folder_name · processing_status
+  observaciones · entropy_score · created_at · updated_at
+
+NUNCA uses `fecha_apertura` (no existe) — siempre `fecha_apertura_incidente`.
+NUNCA uses `fecha_cierre_incidente` (no existe) — el cierre se infiere de
+`estado_incidente IN ('CUMPLIDO','ARCHIVADO')`.
+
+DEFINICIONES JURÍDICAS COLOMBIANAS (cita estas, no inventes):
+- Tutela: art. 86 Constitución + Decreto 2591/1991. Plazo de respuesta del
+  accionado: 2-3 días hábiles. Plazo de fallo: 10 días.
+- Cumplimiento del fallo: 48 horas (art. 27 Decreto 2591) o el plazo que
+  fije el juez.
+- Incidente de desacato: art. 52 Decreto 2591. Procede cuando el accionado
+  no cumple el fallo en el plazo. Etapas: apertura → traslado → pruebas
+  (opcional) → decisión (sanción de arresto + multa) o archivo.
+- Grado de consulta: art. 52 Decreto 2591 — REVISIÓN AUTOMÁTICA por el
+  superior cuando el juez decreta sanción en incidente. NO es un nivel de
+  información; es la apelación oficiosa del auto sancionatorio.
+- Impugnación del fallo: art. 31 Decreto 2591, plazo 3 días desde notificación.
+- Selección/revisión Corte Constitucional: tras fallo de 2da instancia,
+  expediente sube a Corte; ésta selecciona ~5% para sentencia hito (T-).
+- Muerte del accionante: continúan herederos o cesa por carencia actual de
+  objeto si la vulneración era personalísima (art. 26 Decreto 2591).
+- Cumplido vs Archivado: CUMPLIDO = la SED acreditó cumplimiento; ARCHIVADO
+  = el juez cierra sin sanción (puede ser por cumplimiento tardío, allanamiento,
+  carencia actual de objeto).
+
 EJEMPLOS DE SQL CORRECTO:
   -- Top abogados por carga (USA SIEMPRE abogado_canonical):
   SELECT abogado_canonical, COUNT(*) FROM cases

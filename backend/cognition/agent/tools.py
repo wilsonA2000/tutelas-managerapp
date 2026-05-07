@@ -29,7 +29,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 DB_PATH = os.getenv("TUTELAS_DB_PATH", str(_REPO_ROOT / "data" / "tutelas.db"))
 
 # Whitelist seguridad SQL ─────────────────────────────────────────
-ALLOWED_TABLES = {"cases", "documents", "emails", "historical_cases"}
+# v8.2: agregadas tablas auxiliares
+ALLOWED_TABLES = {
+    "cases", "documents", "emails", "historical_cases",
+    "case_actuaciones", "compliance_tracking", "corte_revision",
+    "directorio_correos", "audit_log",
+}
 ALLOWED_CASES_COLS = {
     "id", "radicado_23_digitos", "radicado_forest", "abogado_responsable",
     "accionante", "accionados", "vinculados", "derecho_vulnerado", "juzgado",
@@ -37,8 +42,18 @@ ALLOWED_CASES_COLS = {
     "estado", "sentido_fallo_1st", "fecha_fallo_1st", "impugnacion",
     "quien_impugno", "juzgado_2nd", "sentido_fallo_2nd", "fecha_fallo_2nd",
     "incidente", "fecha_apertura_incidente", "responsable_desacato",
-    "decision_incidente", "categoria_tematica", "folder_name", "origen",
+    "decision_incidente",
+    # Segundo y tercer incidente
+    "incidente_2", "fecha_apertura_incidente_2", "responsable_desacato_2",
+    "decision_incidente_2", "incidente_3", "fecha_apertura_incidente_3",
+    "responsable_desacato_3", "decision_incidente_3",
+    "categoria_tematica", "folder_name", "folder_path", "origen",
     "estado_incidente", "tipo_actuacion", "direccion", "grupo", "equipo",
+    # v8.2 canonicals
+    "abogado_canonical", "abogado_canonical_confidence",
+    "dependencia_canonical", "dependencia_canonical_confidence",
+    "fecha_respuesta", "observaciones", "processing_status",
+    "entropy_score", "convergence_iterations", "pii_mode",
     "created_at", "updated_at",
 }
 SQL_HARD_LIMIT = 1000
