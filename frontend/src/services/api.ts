@@ -18,6 +18,10 @@ export const updateCase = (id: number, fields: Record<string, string>) =>
 export const syncSingleCase = (id: number) =>
   api.post(`/cases/${id}/sync`).then(r => r.data);
 
+// v8.1: validación heurística (firmante↔accionante, mezcla rad)
+export const validateCase = (id: number, useLlm = false) =>
+  api.post(`/cases/${id}/validate`, null, { params: { use_llm: useLlm } }).then(r => r.data);
+
 export const deleteCase = (id: number) =>
   api.delete(`/cases/${id}`).then(r => r.data);
 

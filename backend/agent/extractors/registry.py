@@ -3,7 +3,7 @@
 from backend.agent.extractors.base import FieldExtractor, ExtractionResult
 from backend.agent.extractors.radicado import RadicadoExtractor, RadicadoCortoExtractor
 from backend.agent.extractors.campos import (
-    FechaExtractor, JuzgadoExtractor, CiudadExtractor,
+    FechaExtractor, JuzgadoExtractor, JuzgadoSegundaExtractor, CiudadExtractor,
     ImpugnacionExtractor, IncidenteExtractor,
     SentidoFalloExtractor, AccionanteExtractor,
 )
@@ -17,6 +17,7 @@ _EXTRACTORS: dict[str, FieldExtractor] = {
     # --- Extractores IR (Fase 2) ---
     "accionante": AccionanteExtractor(),
     "juzgado": JuzgadoExtractor(),
+    "juzgado_2nd": JuzgadoSegundaExtractor(),  # v9.4.3
     "ciudad": CiudadExtractor(),
     "fecha_ingreso": FechaExtractor("fecha_ingreso", [
         "PDF_AUTO_ADMISORIO", "AUTO_ADMISORIO", "OTRO", "PDF_OTRO",

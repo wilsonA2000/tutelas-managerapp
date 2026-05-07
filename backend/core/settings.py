@@ -16,9 +16,16 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_ENV_FILE = str(Path(__file__).resolve().parent.parent.parent / ".env")
 _ENV_FILE_OVERRIDE = os.environ.get("TUTELAS_ENV_FILE")
-_EFFECTIVE_ENV_FILE = (
-    str(Path(_ENV_FILE_OVERRIDE).resolve()) if _ENV_FILE_OVERRIDE else _DEFAULT_ENV_FILE
-)
+_POD_ENV_FILE = Path("/workspace/tutelas-app/.env.pod")
+
+if _ENV_FILE_OVERRIDE:
+    _EFFECTIVE_ENV_FILE = str(Path(_ENV_FILE_OVERRIDE).resolve())
+elif _POD_ENV_FILE.exists():
+    # Auto-deteccion de pod RunPod: si /workspace/tutelas-app/.env.pod existe,
+    # cargarlo sin depender de TUTELAS_ENV_FILE manual al lanzar uvicorn.
+    _EFFECTIVE_ENV_FILE = str(_POD_ENV_FILE)
+else:
+    _EFFECTIVE_ENV_FILE = _DEFAULT_ENV_FILE
 
 
 class Settings(BaseSettings):
@@ -30,8 +37,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Rutas
-    BASE_DIR: str = "/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026"
+    # Rutas — default derivado del path del modulo (funciona WSL y pod RunPod).
+    # En pod, .env.pod sobreescribe con BASE_DIR=/workspace/tutelas-data.
+    BASE_DIR: str = str(Path(__file__).resolve().parents[3])
 
     # Gmail
     GMAIL_USER: str = ""
@@ -48,6 +56,14 @@ class Settings(BaseSettings):
     NORMALIZER_ENABLED: bool = True
     NORMALIZER_USE_MARKER: bool = False  # Requiere ~2GB de modelos ML
     NORMALIZER_USE_PADDLEOCR: bool = True  # Reemplaza Tesseract para español
+    # v6.1: PaddleOCR-VL 1.5 (VLM, 94.5% OmniDocBench, requiere GPU CUDA 12.6+ wheels)
+    NORMALIZER_USE_PADDLEOCR_VL: bool = True
+    NORMALIZER_PADDLE_DEVICE: str = "gpu:0"   # "gpu:0" | "cpu" — solo para VL native
+    NORMALIZER_PADDLE_VL_MAX_PAGES: int = 30  # PDFs > N páginas caen a page-by-page
+    # v6.1.1: vLLM acceleration server. Si URL definida, usa backend "vllm-server"
+    # (5-10x speedup). Si vacío, usa "native" (eager mode, lento).
+    NORMALIZER_VLLM_SERVER_URL: str = ""      # ej. "http://127.0.0.1:8118/v1"
+    NORMALIZER_VL_MAX_CONCURRENCY: int = 16   # request paralelos al vllm-server
 
     # Unified Extractor (IR-based)
     UNIFIED_EXTRACTOR_ENABLED: bool = True  # True = usar extractor unificado IR
@@ -71,6 +87,23 @@ class Settings(BaseSettings):
     # v6.0 Refactor cognitivo — feature flags
     USE_COGNITIVE_PIPELINE: bool = False  # True = pipeline de 7 capas cognitivas; False = v5.5 legacy
     COGNITIVE_ENTROPY_THRESHOLD: float = 2.2  # Umbral H(caso) sobre el cual marcar REVISION_HUMANA
+
+    # F2 (2026-05-02): confidence scoring por campo (IURIS appliance vendible con SLA jurídico)
+    USE_FIELD_CONFIDENCE: bool = False     # True = computa y persiste field_confidences_json post-extracción
+    CONFIDENCE_OK_THRESHOLD: float = 0.85  # ≥ → banda OK
+    CONFIDENCE_REVIEW_THRESHOLD: float = 0.50  # entre [REVIEW, OK) → banda REVISAR; < REVIEW → BAJO
+
+    # IURIS LLM Local (2026-05-03): enrutar IA cuantizada local
+    # Cuando LLM_LOCAL_URL está set y LLM_LOCAL_PRIMARY=True, smart_router
+    # usa este endpoint como primary, con fallback a Anthropic/DeepSeek.
+    LLM_LOCAL_URL: str = "http://127.0.0.1:8765"   # llama-server con Qwen3 4B + LoRA IURIS
+    LLM_LOCAL_PRIMARY: bool = False                # True = primary; False = no usar local
+    LLM_LOCAL_MODEL_ID: str = "qwen3-4b-iuris"     # identificador para token_usage
+    LLM_LOCAL_SYSTEM_PROMPT_PATH: str = "docs/iuris/SYSTEM_PROMPT_COMPILER.md"
+
+    # v6.1.1: modo 100% local (sin IA externa, sin PII redaction porque datos no salen)
+    LOCAL_ONLY: bool = False              # True = silencia smart_router + ai_extractor + skip Presidio
+    USE_AI_EXTRACTION: bool = True        # False = nunca invocar route() para extracción IA
 
     # v6.0.2 Remote extraction (RunPod GPU pod) — delega Capas 0-5 a un worker remoto.
     # Las capas 6-7 (consolidator cross-case + persist) siempre se ejecutan local.

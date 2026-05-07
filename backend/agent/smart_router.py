@@ -1,210 +1,40 @@
-"""Smart Router: selección de proveedor/modelo según tipo de tarea.
+"""Smart Router minimalista — siempre retorna provider local.
 
-Estrategia v5.4.3 (2 providers, flip 2026-04-22):
-1. Primary: Claude Haiku 4.5 (Anthropic) — DPA formal, SOC 2 / HIPAA / ISO 27001.
-2. Fallback: DeepSeek V3.2 — resiliencia si Anthropic tiene outage o rate limit.
-
-Razón del flip (v5.4.3): proyecto maneja datos sensibles (menores, salud,
-educación) de ciudadanos de Santander. Habeas Data Ley 1581/2012 exige
-salvaguardas en transferencia internacional; Anthropic ofrece DPA y
-certificaciones auditable, DeepSeek no. Costo diferencial ~$35 USD/año
-para 350 tutelas — despreciable para una entidad pública.
-
-Providers legacy (Gemini / Groq / Cerebras / HuggingFace / OpenAI) eliminados
-en v5.4 tras confirmar 0 llamadas útiles en token_usage. Registros históricos
-de Gemini (297 llamadas pre-v4.7) preservados en tabla token_usage como audit.
+Versión simplificada: sin fallback chain, sin priorización por tarea, sin
+selección de proveedor según rate limits. La decisión es trivial:
+LOCAL_ONLY=true (default) → siempre local.
 """
 
+from __future__ import annotations
+
 import os
-import time
-import logging
-import threading
 from dataclasses import dataclass
-
-logger = logging.getLogger("tutelas.router")
-
-# Rate limit tracking: provider → timestamp del ultimo 429
-# Protegido por _rate_limit_lock porque en PARALLEL_AI_EXTRACTION dos threads
-# pueden llamar report_rate_limit() / _is_rate_limited() simultaneamente.
-_rate_limit_cooldown: dict[str, float] = {}
-_rate_limit_lock = threading.Lock()
-_RATE_LIMIT_COOLDOWN_SECS = 60  # Esperar 60s antes de reintentar provider con 429
-
-
-def report_rate_limit(provider: str):
-    """Reportar que un provider devolvio 429. Se llama desde ai_extractor."""
-    with _rate_limit_lock:
-        _rate_limit_cooldown[provider] = time.time()
-    logger.warning("Rate limit reportado para %s (cooldown %ds)", provider, _RATE_LIMIT_COOLDOWN_SECS)
-
-
-def _is_rate_limited(provider: str) -> bool:
-    """Check si un provider esta en cooldown por rate limit (atomico)."""
-    with _rate_limit_lock:
-        last_429 = _rate_limit_cooldown.get(provider, 0)
-        return (time.time() - last_429) < _RATE_LIMIT_COOLDOWN_SECS
-
-# Tipos de tarea que el agente puede ejecutar
-TASK_TYPES = {
-    "pdf_multimodal": "Lectura directa de PDFs (requiere multimodal)",
-    "extraction": "Extracción de campos de texto (28 campos de tutela)",
-    "complex_reasoning": "Análisis legal complejo, predicción, razonamiento",
-    "legal_analysis": "Análisis jurídico profundo (incidentes, impugnaciones)",
-    "general": "Consultas generales, resúmenes, chat",
-    "multilingual": "Contenido en múltiples idiomas o español jurídico",
-}
+from typing import Optional
 
 
 @dataclass
 class RouteDecision:
     provider: str
     model: str
-    reason: str
-    cost_per_1m_input: float
-    cost_per_1m_output: float
-    context_window: int
-    fallback_provider: str | None = None
-    fallback_model: str | None = None
+    reason: str = ""
+    fallback_provider: Optional[str] = None
+    fallback_model: Optional[str] = None
 
 
-# Cadena de prioridad por tipo de tarea: Anthropic Haiku primary, DeepSeek fallback.
-# v5.4.3 flip (2026-04-22): Habeas Data Ley 1581/2012 + DPA Anthropic.
-ROUTING_CHAINS = {
-    "pdf_multimodal": [
-        # Ruta multimodal deprecada: el texto viene del normalizer local
-        # (pdfplumber + PaddleOCR). La clave se deja por compat hacia atras.
-        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
-        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-    ],
-    "extraction": [
-        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
-        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-    ],
-    "complex_reasoning": [
-        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
-        ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
-    ],
-    "legal_analysis": [
-        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
-        ("deepseek", "deepseek-reasoner", "DEEPSEEK_API_KEY"),
-    ],
-    "general": [
-        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
-        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-    ],
-    "multilingual": [
-        ("anthropic", "claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
-        ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-    ],
-}
-
-
-def _validate_api_key(env_key: str) -> bool:
-    """Validar que una API key existe y no es placeholder."""
-    key = os.getenv(env_key, "").strip()
-    if not key or len(key) < 10:
-        return False
-    # Detectar placeholders comunes
-    placeholders = {"xxx", "your-key-here", "CHANGE_ME", "sk-xxx", "test"}
-    if key.lower() in placeholders:
-        return False
-    return True
-
-
-def route(task_type: str = "general") -> RouteDecision:
-    """Seleccionar el mejor proveedor disponible para un tipo de tarea.
-
-    Itera la cadena de prioridad: el 1er provider disponible es el primary,
-    el 2do es el fallback. Valida API keys antes de seleccionar.
+def route(task_type: str = "extraction") -> RouteDecision:
+    """Selecciona LLM. Siempre retorna local en versión minimalista.
 
     Args:
-        task_type: Tipo de tarea (pdf_multimodal, extraction, complex_reasoning, etc.)
+        task_type: ignorado (legacy compat).
 
     Returns:
-        RouteDecision con proveedor, modelo y razón.
+        RouteDecision apuntando a llama-server local.
     """
-    from backend.extraction.ai_extractor import PROVIDERS
-    from backend.core.settings import settings as _s
-
-    chain = list(ROUTING_CHAINS.get(task_type, ROUTING_CHAINS["general"]))
-
-    # v5.5: override de primary por env (AI_PROVIDER_PRIMARY). Útil para el
-    # experimento donde queremos DeepSeek barato sin modificar ROUTING_CHAINS.
-    primary_override = (_s.AI_PROVIDER_PRIMARY or "").strip().lower()
-    if primary_override:
-        # Mover el provider override al frente de la chain si existe
-        chain.sort(key=lambda entry: 0 if entry[0].lower() == primary_override else 1)
-
-    # Recopilar todos los providers disponibles en orden (skip rate-limited)
-    available = []
-    for provider, model, env_key in chain:
-        if not _validate_api_key(env_key):
-            continue
-        if _is_rate_limited(provider):
-            logger.info("Skip %s/%s (rate limit cooldown)", provider, model)
-            continue
-        model_config = PROVIDERS.get(provider, {}).get("models", {}).get(model, {})
-        available.append((provider, model, model_config))
-
-    if not available:
-        logger.error("No provider available for task '%s' — configure at least DEEPSEEK_API_KEY", task_type)
-        return RouteDecision(
-            provider="none",
-            model="none",
-            reason="ERROR: sin proveedores disponibles. Configure DEEPSEEK_API_KEY o ANTHROPIC_API_KEY en .env",
-            cost_per_1m_input=0,
-            cost_per_1m_output=0,
-            context_window=0,
-        )
-
-    # Primary = 1ro disponible, Fallback = 2do disponible
-    prov, mod, cfg = available[0]
-    decision = RouteDecision(
-        provider=prov,
-        model=mod,
-        reason=f"Mejor opción para '{task_type}': {PROVIDERS.get(prov, {}).get('name', prov)} / {cfg.get('label', mod)}",
-        cost_per_1m_input=cfg.get("input_price", 0),
-        cost_per_1m_output=cfg.get("output_price", 0),
-        context_window=cfg.get("context_window", 128000),
+    model = os.getenv("LLM_LOCAL_MODEL_ID", "qwen3-4b-iuris")
+    return RouteDecision(
+        provider="local",
+        model=model,
+        reason="LOCAL_ONLY: solo proveedor local en producción",
+        fallback_provider=None,
+        fallback_model=None,
     )
-
-    if len(available) >= 2:
-        fb_prov, fb_mod, _ = available[1]
-        decision.fallback_provider = fb_prov
-        decision.fallback_model = fb_mod
-        logger.info("Route [%s] → %s/%s (fallback: %s/%s)", task_type, prov, mod, fb_prov, fb_mod)
-    else:
-        logger.info("Route [%s] → %s/%s (sin fallback)", task_type, prov, mod)
-
-    return decision
-
-
-def get_available_routes() -> dict[str, RouteDecision]:
-    """Obtener la ruta que se usaría para cada tipo de tarea."""
-    routes = {}
-    for task_type in TASK_TYPES:
-        routes[task_type] = route(task_type)
-    return routes
-
-
-def get_configured_providers() -> list[dict]:
-    """Lista de proveedores con API key configurada."""
-    from backend.extraction.ai_extractor import PROVIDERS
-    configured = []
-    for pid, pinfo in PROVIDERS.items():
-        api_key = os.getenv(pinfo["env_key"], "")
-        if api_key:
-            configured.append({
-                "provider": pid,
-                "name": pinfo["name"],
-                "models": list(pinfo["models"].keys()),
-                "key_configured": True,
-            })
-        else:
-            configured.append({
-                "provider": pid,
-                "name": pinfo["name"],
-                "models": list(pinfo["models"].keys()),
-                "key_configured": False,
-            })
-    return configured

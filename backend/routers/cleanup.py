@@ -355,3 +355,64 @@ def api_cleanup_merge_duplicates(
     """
     from backend.services.cleanup_actions import merge_duplicate_cases
     return merge_duplicate_cases(db, pairs=body.pairs, dry_run=body.dry_run)
+
+
+# ============================================================
+# v8.1: Validación masiva heurística sobre todos los cases
+# ============================================================
+
+@router.post("/validate-all")
+def validate_all_cases(
+    only_completo: bool = True,
+    db: Session = Depends(get_db),
+):
+    """v8.1: corre heurística determinista sobre todos los cases.
+
+    Detecta sin LLM:
+    - firmante↔accionante (24.6% de cases en auditoría 2026-05-06)
+    - mezcla de cases (rad23 ajeno en docs)
+
+    Devuelve resumen + top sospechosos.
+    """
+    import time
+    from backend.cognition.cognitive_complementary_ai import (
+        _heuristic_validation, _build_authority_weighted_text,
+    )
+    from backend.database.models import Case as _Case
+
+    t0 = time.time()
+    q = db.query(_Case)
+    if only_completo:
+        q = q.filter(_Case.processing_status == "COMPLETO")
+    cases = q.all()
+
+    summary = {"total": len(cases), "ok": 0, "sospechoso": 0, "by_field": {}}
+    sospechosos = []
+    for case in cases:
+        text = _build_authority_weighted_text(db, case, max_chars=4000) or ""
+        if not text:
+            continue
+        v = _heuristic_validation(case, text)
+        has_susp = any(info.get("verdict") != "OK" for info in v.values())
+        if has_susp:
+            summary["sospechoso"] += 1
+            for f, info in v.items():
+                if info.get("verdict") != "OK":
+                    summary["by_field"][f] = summary["by_field"].get(f, 0) + 1
+            sospechosos.append({
+                "case_id": case.id,
+                "accionante": (case.accionante or "")[:60],
+                "rad23": case.radicado_23_digitos,
+                "juzgado": (case.juzgado or "")[:60],
+                "verdicts": {f: info["verdict"] for f, info in v.items()
+                             if info.get("verdict") != "OK"},
+                "razones": {f: info["razon"][:120] for f, info in v.items()
+                            if info.get("verdict") != "OK"},
+            })
+        else:
+            summary["ok"] += 1
+
+    summary["elapsed_s"] = round(time.time() - t0, 3)
+    summary["sospechosos_top"] = sospechosos[:50]  # limitar respuesta
+    summary["sospechosos_total_count"] = len(sospechosos)
+    return summary

@@ -314,6 +314,352 @@ def _monthly_trends(db: Session, msg: str) -> ChatResponse:
                         template_used="monthly_trends", confidence=0.85)
 
 
+# ─── Intents v8.2: Para gobernador/jefes ──────────────────────────────
+
+@intent("count_by_abogado", [
+    r"\b(?:cu[aá]ntos?\s+)?casos?\s+(?:tiene|por|de|maneja)\s+(?:cada\s+)?abogad[oa]\b",
+    r"\bcarga\s+(?:de|por)\s+abogad[oa]s?\b",
+    r"\b(?:reparto|distribuci[oó]n)\s+(?:de\s+)?cas[ao]s\s+(?:por|entre)\s+abogad[oa]s?\b",
+    r"\bqui[eé]n\s+tiene\s+m[aá]s\s+casos?\b",
+], description="Distribución de casos por abogado canónico")
+def _count_by_abogado(db: Session, msg: str) -> ChatResponse:
+    rows = db.query(Case.abogado_canonical, func.count(Case.id)).filter(
+        Case.processing_status == "COMPLETO"
+    ).group_by(Case.abogado_canonical).order_by(func.count(Case.id).desc()).all()
+    body = "\n".join(
+        f"  • {(a or 'SIN ASIGNAR'):40s}  {n} casos"
+        for a, n in rows
+    )
+    return ChatResponse(intent="count_by_abogado",
+                        answer=f"👥 **Casos por abogado**:\n\n{body}",
+                        data={"abogados": [{"abogado": a, "count": n} for a, n in rows]},
+                        template_used="count_by_abogado", confidence=0.9)
+
+
+@intent("resumen_abogado_detalle", [
+    r"\b(?:cu[aá]ntos|qu[eé])\s+casos?\s+(?:tiene|maneja)\s+(\w+)\b",
+    r"\b(?:carga|portafolio)\s+de\s+(\w+)\b",
+    r"\bqu[eé]\s+tiene\s+(\w+)\b",
+], description="Detalle por abogado específico")
+def _resumen_abogado_detalle(db: Session, msg: str) -> ChatResponse:
+    # Detectar nombre del abogado en el mensaje
+    msg_l = msg.lower()
+    SHORTS = {
+        "victor": "VICTOR ALFONSO COLMENARES NIÑO",
+        "angelica": "ANGELICA YADIRA BARROSO SARMIENTO",
+        "angelia": "ANGELICA YADIRA BARROSO SARMIENTO",
+        "otilia": "OTILIA LUNA LOPEZ",
+        "juan diego": "JUAN DIEGO CRUZ LIZCANO",
+        "diego": "JUAN DIEGO CRUZ LIZCANO",
+        "jhon": "JHON ALEXANDER BOHORQUEZ CAMARGO",
+        "john": "JHON ALEXANDER BOHORQUEZ CAMARGO",
+        "luis eduardo": "LUIS EDUARDO MEZA JURADO",
+        "luis": "LUIS EDUARDO MEZA JURADO",
+        "fernando": "FERNANDO MAURICIO CAMACHO PICO",
+        "wilson": "WILSON ANDRES ARGUELLO CASTELLANOS",
+        "maria cristina": "MARIA CRISTINA VILLAMIZAR SCHILLER",
+        "cristina": "MARIA CRISTINA VILLAMIZAR SCHILLER",
+        "diego otilio": "DIEGO OTILIO RODRIGUEZ NUÑEZ",
+        "jorge": "JORGE JAVIER SEPULVEDA JAIMES",
+    }
+    target = None
+    for k, full in sorted(SHORTS.items(), key=lambda x: -len(x[0])):
+        if k in msg_l:
+            target = full
+            break
+    if not target:
+        return ChatResponse(intent="resumen_abogado_detalle",
+                            answer="¿De qué abogado? Ej: VICTOR, ANGELICA, OTILIA, JUAN DIEGO, JHON, LUIS EDUARDO, FERNANDO, MARIA CRISTINA, etc.",
+                            template_used="resumen_abogado_detalle", confidence=0.4)
+
+    cases = db.query(Case).filter(
+        Case.processing_status == "COMPLETO",
+        Case.abogado_canonical == target,
+    ).all()
+    by_estado = {}
+    by_origen = {}
+    en_sancion = 0
+    incidente_activo = 0
+    fallos_concede = 0
+    for c in cases:
+        by_estado[c.estado_incidente or "N/A"] = by_estado.get(c.estado_incidente or "N/A", 0) + 1
+        by_origen[c.origen or "?"] = by_origen.get(c.origen or "?", 0) + 1
+        if c.estado_incidente == "EN_SANCION":
+            en_sancion += 1
+        elif c.estado_incidente == "ACTIVO":
+            incidente_activo += 1
+        if (c.sentido_fallo_1st or "").upper().startswith("CONCEDE"):
+            fallos_concede += 1
+
+    answer = (
+        f"👤 **{target}**\n\n"
+        f"**Carga total:** {len(cases)} casos\n\n"
+        f"**Por origen:**\n" + "\n".join(f"  • {k}: {v}" for k, v in sorted(by_origen.items(), key=lambda x: -x[1])) + "\n\n"
+        f"**Estado incidente:**\n" + "\n".join(f"  • {k}: {v}" for k, v in sorted(by_estado.items(), key=lambda x: -x[1])) + "\n\n"
+        f"⚠️ **Críticos:**\n"
+        f"  • EN SANCIÓN: {en_sancion}\n"
+        f"  • Incidente activo: {incidente_activo}\n"
+        f"  • Fallos CONCEDE pendientes: {fallos_concede}"
+    )
+    return ChatResponse(intent="resumen_abogado_detalle", answer=answer,
+                        data={"abogado": target, "total": len(cases),
+                              "en_sancion": en_sancion,
+                              "incidente_activo": incidente_activo,
+                              "fallos_concede": fallos_concede,
+                              "by_estado": by_estado, "by_origen": by_origen},
+                        template_used="resumen_abogado_detalle", confidence=0.9)
+
+
+@intent("count_by_dependencia", [
+    r"\b(?:cu[aá]ntos?\s+)?casos?\s+(?:por|de)\s+depend[ei]ncia\b",
+    r"\bcarga\s+(?:de|por)\s+depend[ei]ncia\b",
+    r"\bcasos?\s+de\s+(talento\s+humano|estrat[eé]gica|financiera|cobertura|inspecci[oó]n|tesorer[ií]a|permanencia|pae|atenci[oó]n|nomina)\b",
+], description="Casos por dependencia SED")
+def _count_by_dependencia(db: Session, msg: str) -> ChatResponse:
+    # Si menciona dependencia específica, filtrar
+    DEP_MAP = {
+        "talento humano": "DIRECCION_TALENTO_DOCENTE",
+        "estrategica": "DIRECCION_ESTRATEGICA",
+        "estratégica": "DIRECCION_ESTRATEGICA",
+        "financiera": "FINANCIERA",
+        "cobertura": "COBERTURA_EDUCATIVA",
+        "inspeccion": "INSPECCION_VIGILANCIA",
+        "inspección": "INSPECCION_VIGILANCIA",
+        "tesoreria": "EQUIPO_TESORERIA",
+        "tesorería": "EQUIPO_TESORERIA",
+        "permanencia": "DIRECCION_PERMANENCIA",
+        "pae": "DIRECCION_PERMANENCIA",
+        "atencion": "ATENCION_CIUDADANO",
+        "atención": "ATENCION_CIUDADANO",
+        "nomina": "NOMINA",
+        "nómina": "NOMINA",
+    }
+    msg_l = msg.lower()
+    target = None
+    for k, code in sorted(DEP_MAP.items(), key=lambda x: -len(x[0])):
+        if k in msg_l:
+            target = code
+            break
+
+    if target:
+        q = db.query(Case).filter(
+            Case.processing_status == "COMPLETO",
+            Case.dependencia_canonical == target,
+        )
+        total = q.count()
+        cases = q.limit(20).all()
+        body = "\n".join(
+            f"  • #{c.id} {(c.folder_name or '')[:55]} | "
+            f"{(c.abogado_canonical or '-').split()[0] if c.abogado_canonical else '-'}"
+            for c in cases
+        )
+        more = f"\n\n  ... y {total - 20} más (total {total})" if total > 20 else ""
+        return ChatResponse(intent="count_by_dependencia",
+                            answer=f"🏢 **{total} casos en {target}**:\n\n{body}{more}",
+                            data={"dependencia": target, "count": total},
+                            template_used="count_by_dependencia", confidence=0.9)
+    # Sin filtro: distribución total
+    rows = db.query(Case.dependencia_canonical, func.count(Case.id)).filter(
+        Case.processing_status == "COMPLETO"
+    ).group_by(Case.dependencia_canonical).order_by(func.count(Case.id).desc()).all()
+    body = "\n".join(f"  • {(d or 'SIN ASIGNAR'):30s}  {n}" for d, n in rows)
+    return ChatResponse(intent="count_by_dependencia",
+                        answer=f"🏢 **Casos por dependencia**:\n\n{body}",
+                        data={"dependencias": [{"dep": d, "count": n} for d, n in rows]},
+                        template_used="count_by_dependencia", confidence=0.85)
+
+
+@intent("alertas_resumen", [
+    r"\b(?:cu[aá]ntos?|cu[aá]l)\s+(?:casos?|tutelas?)?\s*(?:rojos?|cr[ií]ticos?|urgentes?)\b",
+    r"\balertas?\s+(?:tempranas?|rojas?)\b",
+    r"\b(?:sem[aá]foro|riesgo|criticidad)\b",
+], description="Resumen de alertas tempranas (ROJO/AMARILLO)")
+def _alertas_resumen(db: Session, msg: str) -> ChatResponse:
+    from datetime import datetime
+    from backend.alerts.early_warning import score_case
+    cases = db.query(Case).filter(Case.processing_status == "COMPLETO").all()
+    now = datetime.utcnow()
+    counts = {"ROJO": 0, "AMARILLO": 0, "VERDE": 0, "N/A": 0}
+    rojos_top = []
+    for c in cases:
+        r = score_case(c, now)
+        counts[r.level] = counts.get(r.level, 0) + 1
+        if r.level == "ROJO":
+            rojos_top.append((c.id, c.folder_name, r.score, c.abogado_canonical))
+    rojos_top.sort(key=lambda x: -x[2])
+    answer = (
+        f"🚨 **Alertas tempranas**\n\n"
+        f"  • 🔴 ROJOS (intervención inmediata): {counts['ROJO']}\n"
+        f"  • 🟡 AMARILLOS (vigilar): {counts['AMARILLO']}\n"
+        f"  • 🟢 VERDES (en regla): {counts['VERDE']}\n"
+        f"  • ⚪ N/A: {counts.get('N/A', 0)}\n\n"
+        f"**Top 5 críticos:**\n"
+        + "\n".join(f"  • #{cid} {(f or '')[:50]} (score {s:.2f}) — {(a or 'sin asignar').split()[0] if a else 'SIN'}"
+                    for cid, f, s, a in rojos_top[:5])
+    )
+    return ChatResponse(intent="alertas_resumen", answer=answer, data=counts,
+                        template_used="alertas_resumen", confidence=0.92)
+
+
+@intent("count_by_sentido_fallo", [
+    r"\b(?:cu[aá]ntos?|qu[eé])\s+(?:fallos?|sentencias?|casos?)\s+(?:concede|niega|conceden|niegan|improcedente|amparados?|favorables?|desfavorables?)\b",
+    r"\bcasos?\s+(?:con\s+)?fallo\s+(concede|niega|improcedente|favorable|desfavorable)\b",
+    r"\b(?:distribuci[oó]n|sentido)\s+(?:de\s+)?(?:los\s+)?fallos?\b",
+], description="Casos por sentido de fallo 1ra/2da")
+def _count_by_sentido_fallo(db: Session, msg: str) -> ChatResponse:
+    msg_l = msg.lower()
+    target = None
+    if any(k in msg_l for k in ("concede", "conceden", "favorable", "amparad")):
+        target = "CONCEDE"
+    elif any(k in msg_l for k in ("niega", "niegan", "desfavorable")):
+        target = "NIEGA"
+    elif "improcedente" in msg_l:
+        target = "IMPROCEDENTE"
+
+    rows = db.query(Case.sentido_fallo_1st, func.count(Case.id)).filter(
+        Case.processing_status == "COMPLETO",
+        Case.sentido_fallo_1st.isnot(None),
+        Case.sentido_fallo_1st != "",
+    ).group_by(Case.sentido_fallo_1st).order_by(func.count(Case.id).desc()).all()
+
+    if target:
+        q = db.query(Case).filter(
+            Case.processing_status == "COMPLETO",
+            Case.sentido_fallo_1st.ilike(f"%{target}%"),
+        )
+        total = q.count()
+        cases = q.limit(15).all()
+        body = "\n".join(
+            f"  • #{c.id} {(c.folder_name or '')[:55]} | "
+            f"{(c.abogado_canonical or '-').split()[0] if c.abogado_canonical else '-'}"
+            for c in cases
+        )
+        more = f"\n\n  ... y {total - 15} más (total {total})" if total > 15 else ""
+        return ChatResponse(intent="count_by_sentido_fallo",
+                            answer=f"⚖️ **{total} fallos {target}**:\n\n{body}{more}",
+                            data={"target": target, "count": total},
+                            template_used="count_by_sentido_fallo", confidence=0.9)
+    body = "\n".join(f"  • {k}: {v}" for k, v in rows)
+    return ChatResponse(intent="count_by_sentido_fallo",
+                        answer=f"⚖️ **Distribución de fallos 1ra instancia:**\n\n{body}",
+                        data=[{"sentido": k, "count": v} for k, v in rows],
+                        template_used="count_by_sentido_fallo", confidence=0.88)
+
+
+@intent("plazos_proximos", [
+    r"\b(?:fallos?|cumplimientos?|plazos?)\s+(?:por\s+vencer|pr[oó]ximos?|que\s+vencen|urgentes?)\b",
+    r"\b(?:cu[aá]ndo|qu[eé]\s+plazos?)\s+vencen?\b",
+    r"\bvencimientos?\b",
+], description="Plazos de cumplimiento próximos a vencer")
+def _plazos_proximos(db: Session, msg: str) -> ChatResponse:
+    from backend.database.models import ComplianceTracking
+    from datetime import datetime
+    rows = db.query(ComplianceTracking).filter(
+        ComplianceTracking.estado != "CUMPLIDO"
+    ).all()
+    now = datetime.utcnow()
+    vencidos, urgentes, por_vencer, en_plazo = [], [], [], []
+    for r in rows:
+        fl = r.fecha_limite or ""
+        # Parse DD/MM/YYYY
+        m = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", fl)
+        if not m: continue
+        try:
+            limite = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError: continue
+        d = (limite - now).days
+        case = db.query(Case).filter(Case.id == r.case_id).first()
+        item = (r.case_id, case.folder_name if case else "?", d, r.fecha_limite)
+        if d < 0: vencidos.append(item)
+        elif d <= 3: urgentes.append(item)
+        elif d <= 7: por_vencer.append(item)
+        else: en_plazo.append(item)
+    answer = (
+        f"⏰ **Plazos de cumplimiento**\n\n"
+        f"  • 🔴 Vencidos: {len(vencidos)}\n"
+        f"  • 🟠 Urgentes (<3 días): {len(urgentes)}\n"
+        f"  • 🟡 Por vencer (<7 días): {len(por_vencer)}\n"
+        f"  • 🟢 En plazo: {len(en_plazo)}\n\n"
+    )
+    if vencidos:
+        answer += "**Vencidos:**\n" + "\n".join(
+            f"  • #{cid} {(f or '')[:50]} ({abs(d)}d vencido)"
+            for cid, f, d, _ in sorted(vencidos, key=lambda x: x[2])[:5]
+        ) + "\n"
+    if urgentes:
+        answer += "\n**Urgentes:**\n" + "\n".join(
+            f"  • #{cid} {(f or '')[:50]} (vence en {d}d)"
+            for cid, f, d, _ in sorted(urgentes, key=lambda x: x[2])[:5]
+        )
+    return ChatResponse(intent="plazos_proximos", answer=answer,
+                        data={"vencidos": len(vencidos), "urgentes": len(urgentes),
+                              "por_vencer": len(por_vencer), "en_plazo": len(en_plazo)},
+                        template_used="plazos_proximos", confidence=0.9)
+
+
+@intent("temas_top", [
+    r"\b(?:cu[aá]les|qu[eé])\s+(?:son\s+)?(?:los\s+)?(?:temas?|asuntos?|materias?)\s+(?:m[aá]s|principales?|frecuentes?|comunes?)\b",
+    r"\btop\s+(?:temas?|asuntos?)\b",
+    r"\b(?:tem[aá]tic[ao]|categor[ií]as?\s+tem[aá]tic[ao]s?)\b",
+], description="Top temas/asuntos de las tutelas")
+def _temas_top(db: Session, msg: str) -> ChatResponse:
+    rows = db.query(Case.categoria_tematica, func.count(Case.id)).filter(
+        Case.processing_status == "COMPLETO",
+        Case.categoria_tematica.isnot(None),
+        Case.categoria_tematica != "",
+    ).group_by(Case.categoria_tematica).order_by(func.count(Case.id).desc()).limit(15).all()
+    if not rows:
+        return ChatResponse(intent="temas_top",
+                            answer="No hay datos de categoría temática.",
+                            template_used="temas_top", confidence=0.4)
+    body = "\n".join(f"  • {(t or '?')[:50]:50s}  {n}" for t, n in rows)
+    return ChatResponse(intent="temas_top",
+                        answer=f"🏷️ **Top temas:**\n\n{body}",
+                        data=[{"tema": t, "count": n} for t, n in rows],
+                        template_used="temas_top", confidence=0.85)
+
+
+@intent("ayuda", [
+    r"^\s*(?:ayuda|help|qu[eé]\s+puedo\s+preguntar|c[oó]mo\s+funciona|qu[eé]\s+sabes)\s*\??\s*$",
+    r"\bqu[eé]\s+(?:tipos?|clases?)\s+de\s+preguntas?\b",
+], description="Ayuda — qué se puede preguntar")
+def _ayuda(db: Session, msg: str) -> ChatResponse:
+    return ChatResponse(intent="ayuda",
+                        answer=(
+                            "👋 **Asistente jurídico — Tutelas Santander**\n\n"
+                            "Puedes preguntarme sobre:\n\n"
+                            "📊 **Estadísticas generales**\n"
+                            "  • cuántos casos hay\n"
+                            "  • resumen / panorama\n\n"
+                            "🚨 **Alertas y críticos**\n"
+                            "  • cuántos rojos / críticos\n"
+                            "  • casos en sanción\n"
+                            "  • incidentes activos\n"
+                            "  • plazos por vencer\n\n"
+                            "👥 **Por abogado**\n"
+                            "  • casos por abogado\n"
+                            "  • carga de Victor / Angelica / Otilia / Juan Diego / etc.\n\n"
+                            "🏢 **Por dependencia**\n"
+                            "  • casos de talento humano\n"
+                            "  • casos de financiera\n"
+                            "  • carga por dependencia\n\n"
+                            "⚖️ **Por sentido**\n"
+                            "  • cuántos fallos concede\n"
+                            "  • distribución de fallos\n\n"
+                            "🏷️ **Temas y asuntos**\n"
+                            "  • top temas\n"
+                            "  • categorías temáticas\n\n"
+                            "📅 **Tendencias**\n"
+                            "  • casos por mes\n"
+                            "  • tendencia mensual\n\n"
+                            "🔍 **Búsqueda**\n"
+                            "  • caso 142 / detalle del caso N\n"
+                            "  • buscar accionante NOMBRE\n"
+                            "  • casos en Bucaramanga\n"
+                        ),
+                        template_used="ayuda", confidence=1.0)
+
+
 # ─── Tier 2: LLM fallback ────────────────────────────────────────────
 
 def _llm_intent_fallback(message: str) -> Optional[dict]:

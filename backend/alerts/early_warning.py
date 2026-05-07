@@ -184,6 +184,84 @@ def score_case(case: Case, now: Optional[datetime] = None) -> RiskReport:
         score = max(score, 0.35)
         reasons.append("Caso marcado para REVISION humana por el pipeline")
 
+    # Regla 8 (v8.2): plazo de cumplimiento del fallo próximo a vencer.
+    # Cruza con compliance_tracking — si el plazo legal del juez está por vencer,
+    # antes incluso del incidente, hay que actuar.
+    try:
+        from backend.database.models import ComplianceTracking
+        if hasattr(case, "compliance_records") and case.compliance_records:
+            for rec in case.compliance_records:
+                if (rec.estado or "").upper() in ("CUMPLIDO",):
+                    continue
+                limite = _parse_date(rec.fecha_limite)
+                if not limite:
+                    continue
+                dias_restantes = (limite - now).days
+                if dias_restantes < 0:
+                    score = max(score, 0.85)
+                    reasons.append(
+                        f"Plazo cumplimiento fallo VENCIDO hace {abs(dias_restantes)} días "
+                        f"(orden {rec.instancia or '1ra'}) — incidente probable"
+                    )
+                elif dias_restantes <= 2:
+                    score = max(score, 0.70)
+                    reasons.append(
+                        f"Plazo cumplimiento fallo vence en {dias_restantes} día(s) — actuar hoy"
+                    )
+                elif dias_restantes <= 7:
+                    score = max(score, 0.45)
+                    reasons.append(
+                        f"Plazo cumplimiento fallo vence en {dias_restantes} días — preparar respuesta"
+                    )
+    except Exception:
+        pass  # Defensivo: no romper EarlyWarning si compliance tiene datos sucios
+
+    # Regla 9 (v8.2): detección de "previene/apercibe sanción" en sentencia.
+    # Cuando el juez explícitamente advierte que ante incumplimiento decretará
+    # sanción de desacato, la prevención es inmediata.
+    try:
+        if hasattr(case, "documents"):
+            for doc in case.documents:
+                doc_type = (doc.doc_type or "").upper()
+                if not any(k in doc_type for k in ("SENTENCIA", "FALLO", "AUTO_ADMISORIO")):
+                    continue
+                text = (doc.extracted_text or "").upper()[:6000]
+                # Patrones jurídicos típicos de prevención
+                if any(p in text for p in (
+                    "PREVENGA", "APERCIBE", "APERCIBIMIENTO", "BAJO APERCIBIMIENTO",
+                    "SO PENA DE INCURRIR", "DESACATO", "POSIBLE SANCIÓN",
+                    "MULTA Y/O ARRESTO",
+                )):
+                    score = max(score, 0.55)
+                    reasons.append(
+                        "Sentencia contiene prevención/apercibimiento explícito — riesgo de sanción anticipado"
+                    )
+                    break
+    except Exception:
+        pass
+
+    # Regla 10 (v8.2): drift de asignación administrativa.
+    # Si la última actuación del Excel asigna abogado distinto al canónico actual,
+    # señalar para verificar quién está respondiendo realmente.
+    try:
+        from backend.database.models import CaseActuacion
+        if hasattr(case, "actuaciones_registradas") and case.actuaciones_registradas:
+            ult = sorted(
+                [a for a in case.actuaciones_registradas if a.abogado_canonical],
+                key=lambda a: a.imported_at or datetime.min, reverse=True,
+            )
+            if ult:
+                ult_abog = ult[0].abogado_canonical
+                if (case.abogado_canonical and ult_abog and
+                        case.abogado_canonical != ult_abog):
+                    score = max(score, 0.30)
+                    reasons.append(
+                        f"Drift de asignación: DB tiene {case.abogado_canonical[:25]} "
+                        f"pero última actuación dice {ult_abog[:25]}"
+                    )
+    except Exception:
+        pass
+
     # Determinar nivel
     if case.processing_status in ("DUPLICATE_MERGED",):
         level = LEVEL_NA
@@ -210,7 +288,7 @@ def score_case(case: Case, now: Optional[datetime] = None) -> RiskReport:
         days_since_incidente=days_incid,
         days_since_fallo_1st=days_fallo,
         has_response=has_response,
-        abogado_responsable=case.abogado_responsable or "",
+        abogado_responsable=(case.abogado_canonical or case.abogado_responsable or ""),
         entropy_score=case.entropy_score,
     )
 

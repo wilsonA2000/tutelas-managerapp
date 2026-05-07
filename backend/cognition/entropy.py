@@ -121,12 +121,9 @@ def _inconsistencies(case) -> set[str]:
         for f in ("fecha_apertura_incidente", "responsable_desacato", "decision_incidente"):
             if _is_filled(getattr(case, f, None)):
                 bad.add(f)
-    # Si hay fallo 2nd pero no sentido_fallo_1st (contradicción lógica:
-    # no puede haber 2da instancia sin 1ra instancia). La falta solo de
-    # fecha_fallo_1st no es inconsistencia — es dato incompleto.
-    if _is_filled(getattr(case, "sentido_fallo_2nd", None)) and \
-       not _is_filled(getattr(case, "sentido_fallo_1st", None)):
-        bad.add("sentido_fallo_1st")
+    # NOTA (Run 4): la falta de sentido_fallo_1st cuando hay sentido_fallo_2nd
+    # NO es contradicción — es dato faltante (1ra instancia no extraída o en
+    # otra carpeta). Marcarlo como inconsistente disparaba REVISION falso.
     return bad
 
 

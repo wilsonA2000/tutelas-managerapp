@@ -43,24 +43,45 @@ CYCLE_POSITIONS = (
 )
 
 
-# Mapeo determinista de doc_type (ya existente) → posición probable en el ciclo
+# Mapeo determinista de doc_type → posición probable en el ciclo procesal.
+# Incluye variantes con prefijo (PDF_/DOCX_), sin prefijo y orden invertido
+# (RESPUESTA_DOCX) que coexisten en DB por extractores históricos distintos.
 DOC_TYPE_TO_POSITION = {
+    # AUTO_ADMISORIO
     "PDF_AUTO_ADMISORIO": "AUTO_ADMISORIO",
-    "PDF_SENTENCIA": "FALLO_1ST",                # se reevalúa con fechas si hay 2 sentencias
+    "AUTO_ADMISORIO": "AUTO_ADMISORIO",
+    "AUTO": "AUTO_ADMISORIO",  # _refine_position lo refina si es SANCION/VINCULA
+    # FALLO 1RA
+    "PDF_SENTENCIA": "FALLO_1ST",
+    "SENTENCIA": "FALLO_1ST",
+    # IMPUGNACION
     "PDF_IMPUGNACION": "IMPUGNACION",
     "DOCX_IMPUGNACION": "IMPUGNACION",
+    "IMPUGNACION": "IMPUGNACION",
+    # INCIDENTE / DESACATO
     "PDF_INCIDENTE": "INCIDENTE",
     "DOCX_DESACATO": "INCIDENTE",
+    "INCIDENTE": "INCIDENTE",
+    # CUMPLIMIENTO
     "DOCX_CUMPLIMIENTO": "CUMPLIMIENTO",
+    # RESPUESTA
     "DOCX_RESPUESTA": "RESPUESTA",
+    "RESPUESTA_DOCX": "RESPUESTA",
     "DOCX_CONTESTACION": "RESPUESTA",
+    # SOLICITUD / ESCRITO inicial
     "DOCX_SOLICITUD": "SOLICITUD",
+    "PDF_ESCRITO": "SOLICITUD",
+    # OFICIOS / MAILS
     "DOCX_MEMORIAL": "OFICIO",
     "DOCX_CARTA": "OFICIO",
     "EMAIL_MD": "OFICIO",
-    "PDF_OTRO": "OTRO",
+    "GMAIL": "OFICIO",
     "PDF_GMAIL": "OFICIO",
+    # ANEXOS / OTROS
+    "PDF_ANEXO": "ANEXO",
+    "PDF_OTRO": "OTRO",
     "DOCX_OTRO": "OTRO",
+    "OTRO": "OTRO",
 }
 
 

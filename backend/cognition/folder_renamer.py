@@ -49,7 +49,14 @@ TRAP_WORDS = {
     # Atributos/conceptos
     "CONDICION", "CONDICIÓN", "VINCULACION", "VINCULACIÓN", "EVENTO",
     # Instituciones judiciales (rechazo total — no son accionantes)
-    "JUZGADO", "TRIBUNAL", "CORTE", "MAGISTRADO",
+    "JUZGADO", "TRIBUNAL", "CORTE", "MAGISTRADO", "MAGISTRADA",
+    # v8.1: cargos judiciales que NO son accionante (deben ser rechazados)
+    "JUEZ", "JUEZA", "FISCAL", "FISCALÍA", "FISCALIA",
+    "SECRETARIA", "SECRETARIO", "SECRETARÍA",
+    "PROCURADURIA", "PROCURADURÍA", "PROCURADOR",
+    "DEFENSORIA", "DEFENSORÍA", "DEFENSOR", "DEFENSORA",
+    # Cuando el accionante real es la persona, NO la institución personería
+    "PERSONERIA", "PERSONERÍA",
 }
 
 # Palabras que NUNCA pueden ser la primera palabra de un nombre real válido.
@@ -100,8 +107,11 @@ TRAILING_PREP_TOKENS = {
 }
 
 # Conectores que NO deberían estar al inicio de un nombre real
+# v8.1: agregar tratamientos honoríficos (Señor/Señora/Dr/Dra) y "DOCTOR/A"
 START_TRAPS = {"EL", "LA", "EN", "Y", "QUE", "SI", "NO", "SE", "CON",
-               "POR", "PARA", "DE", "DEL", "AL", "PRETENDE"}
+               "POR", "PARA", "DE", "DEL", "AL", "PRETENDE",
+               "SEÑOR", "SEÑORA", "SR", "SRA", "SR.", "SRA.",
+               "DR", "DRA", "DR.", "DRA.", "DOCTOR", "DOCTORA"}
 
 # Preposiciones/conectores que NO pueden ser la última palabra de un nombre
 # real válido. Indica que el candidato fue truncado por NER.

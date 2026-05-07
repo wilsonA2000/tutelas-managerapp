@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import logging
+import warnings as _warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -116,11 +117,19 @@ def extract_docx_response_metadata(text: str) -> dict:
 
 
 def classify_by_content(text: str, head_chars: int = 2000) -> list[tuple[str, int]]:
-    """F1 Etapa 2: clasifica por estructura léxica.
+    """[DEPRECATED v9.4] Usar `backend.extraction.pipeline.classify_doc_type` +
+    `zone_classifier` de la cognición v6 (más sofisticado: confidence por zona).
 
+    F1 Etapa 2 legacy: clasifica por estructura léxica.
     Returns: lista de (tipo, score) ordenada por score desc.
-    Un documento puede tener varios tipos (ej. email que contiene sentencia).
+
+    Conservado para retrocompatibilidad de `analyze_document` y callers Gmail.
     """
+    _warnings.warn(
+        "classify_by_content está deprecada (v9.4). Usa "
+        "backend.extraction.pipeline.classify_doc_type para nuevos flujos.",
+        DeprecationWarning, stacklevel=2,
+    )
     head = (text or "")[:head_chars]
     if not head.strip():
         return [("SCAN_SIN_TEXTO", 100)]
@@ -155,7 +164,18 @@ IDENTIFIER_PATTERNS = {
 
 
 def extract_all_identifiers(text: str) -> dict[str, list[str]]:
-    """F1 Etapa 4: extrae todos los identificadores numéricos del texto."""
+    """[DEPRECATED v9.4] Usar `backend.cognition.canonical_identifiers
+    .harvest_from_case_ir` de cognición v6 (añade position_confidence,
+    physical_signal y likelihood ratio para Bayesian).
+
+    F1 Etapa 4 legacy: extrae todos los identificadores numéricos del texto.
+    Conservado para callers Gmail/folder_correlator.
+    """
+    _warnings.warn(
+        "extract_all_identifiers está deprecada (v9.4). Usa "
+        "backend.cognition.canonical_identifiers.harvest_from_case_ir.",
+        DeprecationWarning, stacklevel=2,
+    )
     result = {}
     text_clean = text or ""
     for name, pattern in IDENTIFIER_PATTERNS.items():
@@ -188,7 +208,18 @@ ENTITY_PATTERNS = {
 
 
 def extract_entities(text: str, doc_type: str = "") -> dict[str, str]:
-    """F1 Etapa 3: extrae entidades según tipo de documento."""
+    """[DEPRECATED v9.4] Usar `backend.cognition.entity_extractor.extract_actors`
+    de cognición v6 (infiere roles legales, reconoce KNOWN_INSTITUTIONS,
+    fallback spaCy NER).
+
+    F1 Etapa 3 legacy: extrae entidades según tipo de documento.
+    Conservado para callers Gmail/folder_correlator.
+    """
+    _warnings.warn(
+        "extract_entities está deprecada (v9.4). Usa "
+        "backend.cognition.entity_extractor.extract_actors.",
+        DeprecationWarning, stacklevel=2,
+    )
     text_head = (text or "")[:5000]
     result = {}
 

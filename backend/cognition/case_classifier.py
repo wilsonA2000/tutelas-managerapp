@@ -21,6 +21,7 @@ from backend.cognition.procedural_timeline import ProcessTimeline
 # ============================================================
 
 CASE_ORIGINS = ("TUTELA", "INCIDENTE_HUERFANO", "AMBIGUO")
+
 INCIDENT_STATES = (
     "N/A",           # no hay incidente
     "ACTIVO",        # incidente abierto, sin sanción ni archivo
@@ -58,11 +59,18 @@ def classify_case(case, timeline: ProcessTimeline) -> CaseClassification:
     reasons: list[str] = []
     positions = timeline.positions()
 
-    has_auto = "AUTO_ADMISORIO" in positions
+    # AUTO_VINCULA es procesalmente equivalente a AUTO_ADMISORIO: ambos son
+    # autos que el juez emite tras admitir la tutela. El auto admisorio que
+    # vincula a terceros es el caso típico cuando la SED Santander es vinculada.
+    has_auto = any(p in positions for p in ("AUTO_ADMISORIO", "AUTO_VINCULA"))
     has_sentencia = "FALLO_1ST" in positions or "FALLO_2ND" in positions
     has_solicitud = "SOLICITUD" in positions
     has_incidente = any(p in positions for p in
                         ("INCIDENTE", "AUTO_INCIDENTE", "SANCION", "CUMPLIMIENTO"))
+    # Evidencia indirecta: si la SED ya respondió (RESPUESTA) o si hay
+    # impugnación, necesariamente hubo auto admisorio aunque no esté digitalizado.
+    has_respuesta = "RESPUESTA" in positions
+    has_impugnacion = "IMPUGNACION" in positions or "AUTO_IMPUGNACION" in positions
 
     # Determinar origen
     if has_auto or has_solicitud:
@@ -74,6 +82,12 @@ def classify_case(case, timeline: ProcessTimeline) -> CaseClassification:
         origen = "TUTELA"
         reasons.append("Solo sentencia (ingreso tardío al sistema)")
         confidence = 0.75
+    elif has_impugnacion or has_respuesta:
+        # Hubo respuesta de la SED o impugnación: la tutela existió aunque
+        # las piezas iniciales no estén en DB.
+        origen = "TUTELA"
+        reasons.append("Evidencia procesal indirecta (respuesta SED o impugnación)")
+        confidence = 0.7
     elif has_incidente and not has_auto and not has_solicitud:
         # Solo docs de incidente → huérfano (tutela madre no está en DB)
         origen = "INCIDENTE_HUERFANO"

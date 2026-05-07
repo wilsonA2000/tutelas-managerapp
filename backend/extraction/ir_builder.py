@@ -176,10 +176,20 @@ def _build_pdf_ir(file_path: str, doc_type: str) -> DocumentIR:
     page_count = len(doc)
     has_ocr = False
 
+    # v6.1.1: silenciar warnings MuPDF a nivel C (PDFs con structure tree corrupta)
+    try:
+        fitz.TOOLS.mupdf_disable_errors()
+    except Exception:
+        pass
+
     for page_num in range(page_count):
         page = doc[page_num]
         page_height = page.rect.height
-        page_dict = page.get_text("dict")
+        try:
+            page_dict = page.get_text("dict")
+        except Exception as e:
+            logger.debug("get_text('dict') falló pág %d (%s); usando texto plano sin zonas", page_num, e)
+            page_dict = {"blocks": []}
         page_text = page.get_text("text")
         full_text_parts.append(page_text)
 

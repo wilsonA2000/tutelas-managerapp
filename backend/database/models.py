@@ -30,6 +30,15 @@ class Case(Base):
     asunto = Column(Text)
     pretensiones = Column(Text)
     oficina_responsable = Column(String)
+    # v8.0: jerarquía SED 3 niveles (Decretos 544/2021 + 048/2022)
+    direccion = Column(String, index=True)  # L1: APOYO_DIRECTO / DIRECCION_TALENTO_DOCENTE / DIRECCION_ESTRATEGICA / DIRECCION_PERMANENCIA / DIRECCION_ADMIN_FINANCIERA
+    grupo = Column(String, index=True)      # L2: NOMINA / HISTORIAS_LABORALES / FINANCIERA / CALIDAD_EDUCATIVA / etc. (17 valores)
+    equipo = Column(String)                 # L3: EQUIPO_TESORERIA / EQUIPO_PRESUPUESTO / EQUIPO_CONTABILIDAD / EQUIPO_FONDOS_SERVICIOS (solo bajo Financiera)
+    # v8.2: campos canónicos resueltos contra abogados_sed.json + sed_org.py
+    abogado_canonical = Column(String, index=True)         # Uno de los 17 abogados oficiales o NULL si firmante operativo
+    abogado_canonical_confidence = Column(Float)            # 0.0 - 1.0
+    dependencia_canonical = Column(String, index=True)      # código SED_ORG (DIRECCION_TALENTO_DOCENTE, etc.)
+    dependencia_canonical_confidence = Column(Float)
     estado = Column(String, index=True)  # ACTIVO / INACTIVO
     fecha_respuesta = Column(String)
     sentido_fallo_1st = Column(String, index=True)  # CONCEDE / NIEGA / IMPROCEDENTE
@@ -66,6 +75,11 @@ class Case(Base):
     estado_incidente = Column(String, nullable=True, index=True)  # N/A / ACTIVO / EN_CONSULTA / EN_SANCION / ARCHIVADO / CUMPLIDO
     entropy_score = Column(Float, nullable=True)                  # H(caso) post-extracción
     convergence_iterations = Column(Integer, nullable=True)       # cuántas iteraciones necesitó el pipeline
+
+    # F2 (2026-05-02): confidence scoring por campo. JSON con shape
+    # {field_name: {"score": 0.0-1.0, "band": "OK"|"REVISAR"|"BAJO", "evidence": {...}}}
+    # Permite UI marcar extracciones débiles para revisión humana antes de exportar.
+    field_confidences_json = Column(Text, nullable=True)
     folder_path = Column(String)
     processing_status = Column(String, default="PENDIENTE", index=True)  # PENDIENTE / EXTRAYENDO / REVISION / COMPLETO
     tipo_actuacion = Column(String, default="TUTELA")  # TUTELA / INCIDENTE
@@ -123,6 +137,13 @@ class Case(Base):
         "DECISION_INCIDENTE_3": "decision_incidente_3",
         "OBSERVACIONES": "observaciones",
         "CATEGORIA_TEMATICA": "categoria_tematica",
+        # v8.0: jerarquía organigrama SED
+        "DIRECCION": "direccion",
+        "GRUPO": "grupo",
+        "EQUIPO": "equipo",
+        # v8.2: campos canónicos resueltos contra abogados_sed.json + sed_org.py
+        "ABOGADO_CANONICAL": "abogado_canonical",
+        "DEPENDENCIA_CANONICAL": "dependencia_canonical",
     }
 
     def to_dict(self, include_doc_count: bool = False):
@@ -305,6 +326,74 @@ class ComplianceTracking(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     case = relationship("Case", backref="compliance_records")
+
+
+class CaseActuacion(Base):
+    """Bitácora de actuaciones administrativas por caso (importadas del cuadro
+    de control externo de la oficina jurídica).
+
+    Cada fila es una actuación cronológica registrada por la abogada coordinadora:
+    si el mismo radicado tuvo 4 actuaciones (escrito, recurso, fallo, RTA), habrá
+    4 filas. Permite reconstruir cómo cambió la asignación / observaciones del
+    caso en el tiempo, sin sobrescribir info del pipeline.
+    """
+    __tablename__ = "case_actuaciones"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), nullable=True, index=True)
+    radicado_corto = Column(String, index=True)        # "2026-00057" para matching
+    radicado_forest = Column(String)
+    fecha_actuacion = Column(String)                    # DD/MM/YYYY si se conoce
+    tipo_actuacion = Column(String)                     # TUTELA / DESACATO / RECURSO / RTA / OTRO
+    abogado_short = Column(String)                      # Como aparece en Excel: VICTOR, ANGELICA
+    abogado_canonical = Column(String)                  # Resuelto contra abogados oficiales
+    dependencia_raw = Column(String)                    # TALENTO HUMANO, ESTRATEGICA
+    dependencia_canonical = Column(String)              # DIRECCION_TALENTO_DOCENTE etc
+    tema = Column(String)                               # TRASLADO, INCLUSION, CUPO, etc
+    observaciones = Column(Text)                        # Lo que la coordinadora escribió
+    accionante = Column(String)                         # Como aparece en Excel
+    correo_juzgado = Column(String)                     # Para validación cruzada
+    source = Column(String, default="control_tutelas_xlsx")  # Trazabilidad
+    source_version = Column(String)                     # Fecha de exportación del Excel
+    imported_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    case = relationship("Case", backref="actuaciones_registradas")
+
+
+class CorteRevision(Base):
+    """Cases en revisión de la Corte Constitucional (sentencias T-)."""
+    __tablename__ = "corte_revision"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), nullable=True, index=True)
+    radicado_t = Column(String, nullable=False, index=True)   # 'T-9.698.713'
+    radicado_corto = Column(String)                            # '2023-104'
+    accionante = Column(String)
+    tema = Column(String)
+    correo_juzgado = Column(String)
+    sentencia_hito = Column(String)                            # 'T-303 de 2024'
+    observaciones = Column(Text)
+    estado_revision = Column(String, default="EN_CORTE")
+    fecha_seleccion = Column(String)
+    fecha_fallo_corte = Column(String)
+    sentido_fallo_corte = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DirectorioCorreos(Base):
+    """Directorio de contactos por dependencia/tema (importado del Excel hoja CORREOS)."""
+    __tablename__ = "directorio_correos"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dependencia_canonical = Column(String, nullable=False, index=True)
+    tema = Column(String, nullable=False)
+    correos = Column(Text, nullable=False)
+    responsable = Column(String)
+    notas = Column(String)
+    activo = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class TokenUsage(Base):

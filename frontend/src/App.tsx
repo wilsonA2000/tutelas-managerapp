@@ -37,35 +37,96 @@ import AgentTools from './pages/AgentTools'
 import CleanupPanel from './pages/CleanupPanel'
 import EarlyWarning from './pages/EarlyWarning'
 import ExecutiveDashboard from './pages/ExecutiveDashboard'
+import AuditoriaFallos from './pages/AuditoriaFallos'
 import Login from './pages/Login'
 import ProgressModal from './components/ProgressModal'
 import NotificationCenter from './components/NotificationCenter'
-import AgentChat from './components/AgentChat'
+import CognitiveChat from './components/CognitiveChat'
 import { useAuth } from './contexts/AuthContext'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 
+// Navegación principal — orientada a abogado
 const navItems = [
-  { to: '/', label: 'Panel Principal', icon: LayoutDashboard, exact: true },
-  { to: '/ejecutivo', label: 'Ejecutivo', icon: TrendingUp },
+  { to: '/', label: 'Panel principal', icon: LayoutDashboard, exact: true },
   { to: '/cases', label: 'Tutelas', icon: Scale },
   { to: '/cuadro', label: 'Cuadro', icon: Table2 },
   { to: '/seguimiento', label: 'Seguimiento', icon: ShieldAlert },
-  { to: '/alertas', label: 'Alertas', icon: AlertTriangle },
+  { to: '/auditoria', label: 'Auditoría fallos', icon: Scale },
   { to: '/emails', label: 'Correos', icon: Mail },
   { to: '/intelligence', label: 'Inteligencia', icon: Brain },
   { to: '/reports', label: 'Reportes', icon: FileSpreadsheet },
-  { to: '/extraction', label: 'Extraccion', icon: Cpu },
-  { to: '/agent', label: 'Agente IA', icon: Wrench },
-  { to: '/cleanup', label: 'Limpieza', icon: Sparkles },
-  { to: '/settings', label: 'Configuracion', icon: Settings },
 ]
+
+// Sección "Administración" — colapsada por defecto. Tareas técnicas / dev.
+const adminItems = [
+  { to: '/ejecutivo', label: 'Tablero ejecutivo', icon: TrendingUp },
+  { to: '/alertas', label: 'Alertas tempranas', icon: AlertTriangle },
+  { to: '/extraction', label: 'Procesamiento', icon: Cpu },
+  { to: '/cleanup', label: 'Mantenimiento', icon: Sparkles },
+  { to: '/agent', label: 'Herramientas IA', icon: Wrench },
+  { to: '/settings', label: 'Configuración', icon: Settings },
+]
+
+interface NavItemDef {
+  to: string
+  label: string
+  icon: React.ComponentType<{ size?: number; className?: string }>
+  exact?: boolean
+}
+
+function renderNavItem(
+  item: NavItemDef,
+  location: { pathname: string },
+  collapsed: boolean,
+  setMobileOpen: (b: boolean) => void,
+) {
+  const { to, label, icon: Icon, exact } = item
+  const isActive = exact
+    ? location.pathname === to
+    : location.pathname.startsWith(to)
+
+  const link = (
+    <NavLink
+      to={to}
+      onClick={() => setMobileOpen(false)}
+      aria-current={isActive ? 'page' : undefined}
+      aria-label={collapsed ? label : undefined}
+      className={`
+        flex items-center gap-2.5 px-2.5 py-2 rounded-md text-[13px] font-medium
+        transition-colors duration-100
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60
+        ${isActive
+          ? 'bg-white/15 text-white'
+          : 'text-white/70 hover:bg-white/10 hover:text-white'
+        }
+        ${collapsed ? 'justify-center' : ''}
+      `}
+    >
+      <Icon size={16} className="flex-shrink-0" />
+      {!collapsed && <span className="truncate">{label}</span>}
+    </NavLink>
+  )
+
+  if (collapsed) {
+    return (
+      <Tooltip key={to}>
+        <TooltipTrigger render={<div />}>
+          {link}
+        </TooltipTrigger>
+        <TooltipContent side="right">{label}</TooltipContent>
+      </Tooltip>
+    )
+  }
+  return <div key={to}>{link}</div>
+}
 
 export default function App() {
   const { isAuthenticated, fullName, logout } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [adminOpen, setAdminOpen] = useState(false)
   const location = useLocation()
 
   if (!isAuthenticated) {
@@ -85,7 +146,7 @@ export default function App() {
       </a>
       <div className="flex h-screen bg-background overflow-hidden">
         <ProgressModal />
-        <AgentChat />
+        <CognitiveChat />
 
         {/* Mobile overlay */}
         <AnimatePresence>
@@ -131,47 +192,34 @@ export default function App() {
           {/* Navigation */}
           <ScrollArea className="flex-1">
             <nav className="px-2 py-3 space-y-0.5">
-              {navItems.map(({ to, label, icon: Icon, exact }) => {
-                const isActive = exact
-                  ? location.pathname === to
-                  : location.pathname.startsWith(to)
+              {navItems.map((item) => renderNavItem(item, location, collapsed, setMobileOpen))}
 
-                const link = (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    onClick={() => setMobileOpen(false)}
-                    aria-current={isActive ? 'page' : undefined}
-                    aria-label={collapsed ? label : undefined}
-                    className={`
-                      flex items-center gap-2.5 px-2.5 py-2 rounded-md text-[13px] font-medium
-                      transition-colors duration-100
-                      focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60
-                      ${isActive
-                        ? 'bg-white/15 text-white'
-                        : 'text-white/70 hover:bg-white/10 hover:text-white'
-                      }
-                      ${collapsed ? 'justify-center' : ''}
-                    `}
+              {/* Sección Administración — colapsable, oculta detalles técnicos */}
+              {!collapsed && (
+                <div className="mt-4 pt-3 border-t border-white/10">
+                  <button
+                    type="button"
+                    onClick={() => setAdminOpen(!adminOpen)}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[10px] uppercase tracking-wider font-semibold text-white/40 hover:text-white/70 transition-colors"
                   >
-                    <Icon size={16} className="flex-shrink-0" aria-hidden="true" />
-                    {!collapsed && <span className="truncate">{label}</span>}
-                  </NavLink>
-                )
-
-                if (collapsed) {
-                  return (
-                    <Tooltip key={to}>
-                      <TooltipTrigger render={<div />}>
-                        {link}
-                      </TooltipTrigger>
-                      <TooltipContent side="right">{label}</TooltipContent>
-                    </Tooltip>
-                  )
-                }
-
-                return link
-              })}
+                    {adminOpen ? <ChevronLeft size={11} className="rotate-90" /> : <ChevronRight size={11} />}
+                    Administración
+                  </button>
+                  <AnimatePresence initial={false}>
+                    {adminOpen && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.15 }}
+                        className="overflow-hidden space-y-0.5"
+                      >
+                        {adminItems.map((item) => renderNavItem(item, location, false, setMobileOpen))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              )}
             </nav>
           </ScrollArea>
 
@@ -266,6 +314,7 @@ export default function App() {
                   <Route path="/cleanup" element={<CleanupPanel />} />
                   <Route path="/alertas" element={<EarlyWarning />} />
                   <Route path="/ejecutivo" element={<ExecutiveDashboard />} />
+                  <Route path="/auditoria" element={<AuditoriaFallos />} />
                 </Routes>
               </motion.div>
             </AnimatePresence>

@@ -1,0 +1,103 @@
+{
+  "tipo": {
+    "target": "tipo",
+    "n_train": 2440,
+    "n_test": 1929,
+    "n_classes": 2,
+    "split_strategy": "temporal_2023-24_vs_2025-26",
+    "cv_macro_f1_mean": 0.5361744074889042,
+    "cv_macro_f1_std": 0.015810638983779546,
+    "test_accuracy": 0.7667185069984448,
+    "test_macro_f1": 0.5313795650070828,
+    "classes": [
+      "DESACATO",
+      "TUTELA"
+    ],
+    "saved": "/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026/tutelas-app/backend/ml/artifacts/tipo.joblib"
+  },
+  "direccion": {
+    "target": "direccion",
+    "n_train": 2099,
+    "n_test": 1566,
+    "n_classes": 6,
+    "split_strategy": "temporal_2023-24_vs_2025-26",
+    "cv_macro_f1_mean": 0.6065024299439343,
+    "cv_macro_f1_std": 0.05389837558052045,
+    "test_accuracy": 0.7279693486590039,
+    "test_macro_f1": 0.40657900432546573,
+    "classes": [
+      "APOYO_DIRECTO",
+      "DIRECCION_ADMIN_FINANCIERA",
+      "DIRECCION_ESTRATEGICA",
+      "DIRECCION_PERMANENCIA",
+      "DIRECCION_TALENTO_DOCENTE",
+      "MULTI"
+    ],
+    "saved": "/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026/tutelas-app/backend/ml/artifacts/direccion.joblib"
+  },
+  "dependencia": {
+    "target": "dependencia",
+    "n_train": 2088,
+    "n_test": 1563,
+    "n_classes": 13,
+    "split_strategy": "temporal_2023-24_vs_2025-26",
+    "cv_macro_f1_mean": 0.59609733058418,
+    "cv_macro_f1_std": 0.06933191481656821,
+    "test_accuracy": 0.6206014075495841,
+    "test_macro_f1": 0.31733253535721173,
+    "classes": [
+      "BIENES_SERVICIOS",
+      "CALIDAD_EDUCATIVA",
+      "COBERTURA_EDUCATIVA",
+      "DIRECCION_ADMIN_FINANCIERA",
+      "DIRECCION_ESTRATEGICA",
+      "DIRECCION_PERMANENCIA",
+      "DIRECCION_TALENTO_DOCENTE",
+      "EQUIPO_TESORERIA",
+      "FINANCIERA",
+      "HISTORIAS_LABORALES",
+      "INSPECCION_VIGILANCIA",
+      "MULTI",
+      "NOMINA"
+    ],
+    "saved": "/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026/tutelas-app/backend/ml/artifacts/dependencia.joblib"
+  },
+  "tema_normalized": {
+    "target": "tema_normalized",
+    "n_train": 1891,
+    "n_test": 1459,
+    "n_classes": 24,
+    "split_strategy": "temporal_2023-24_vs_2025-26",
+    "cv_macro_f1_mean": 0.9041305664185921,
+    "cv_macro_f1_std": 0.030168701544814516,
+    "test_accuracy": 0.9225496915695682,
+    "test_macro_f1": 0.8472490040302653,
+    "classes": [
+      "",
+      "CERTIFICADOS",
+      "CETIL_SAT",
+      "CNSC_CONCURSO",
+      "COMODATO",
+      "DERECHO_PETICION",
+      "DESCUENTOS",
+      "DOCENTES",
+      "DOCENTE_APOYO",
+      "ESTABILIDAD_REINTEGRO",
+      "FALTA_LEGITIMACION",
+      "INCLUSION_DISCAPACIDAD",
+      "INFRAESTRUCTURA",
+      "MATRICULA_CUPO",
+      "NOMBRAMIENTO",
+      "PAE_ALIMENTACION",
+      "PENSION",
+      "PERMUTA",
+      "RETEN",
+      "SALARIOS_PRESTACIONES",
+      "SALUD_EPS",
+      "TRANSPORTE_ESCOLAR",
+      "TRASLADO",
+      "TUTOR_SOMBRA"
+    ],
+    "saved": "/mnt/c/Users/wilso/Documents/GOBERNACION DE SANTANDER/TUTELAS 2026/tutelas-app/backend/ml/artifacts/tema_normalized.joblib"
+  }
+}

@@ -15,6 +15,28 @@ data/*.bak
 data/*.db.bak
 data/*.pre_*
 
+# Datasets locales (pueden contener datos sensibles de tutelas reales)
+data/iuris_lora_dataset*.jsonl
+data/entropy_*.csv
+data/entropy_*.json
+data/audit_*.csv
+data/reorg_*.csv
+data/lora_*results.json
+data/phase_c_*.json
+data/sample20*.json
+
+# Modelos LLM locales (>2GB cada uno, no se versionan)
+data/lora-models/
+
+# Backups de archivos fuente (.pre_*.bak)
+**/*.pre_v*.bak
+
+# Index FAISS/TF-IDF (se reconstruye con script)
+backend/ml/embeddings/store/
+
+# Screenshots de e2e (resultados temporales)
+frontend/screenshots-*/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -61,6 +83,8 @@ data/sandbox/
 data/*.md
 backend_preaudit_v*/
 backend_backup_*/
+backups/
+pod_dump_*/
 
 # Playwright MCP y screenshots de diagnostico
 .playwright-mcp/
@@ -77,3 +101,4 @@ screenshots/
 
 
 data/case_cache.stamp
+screenshots-v6016/

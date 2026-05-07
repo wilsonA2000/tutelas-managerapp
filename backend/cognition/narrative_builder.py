@@ -17,19 +17,47 @@ from backend.cognition.entity_extractor import ActorSet
 
 
 def build_derecho_vulnerado(full_text: str, existing: str = "") -> str:
-    """Genera lista 'DERECHO1 - DERECHO2 - ...' ordenada por frecuencia/peso.
+    """Genera lista 'DERECHO1 - DERECHO2 - ...' por relevancia (top-3).
 
-    Si `existing` (de regex anterior) contiene valores, los fusiona sin duplicar.
+    v6.1.1 fix regresión: el algoritmo anterior unía TODOS los derechos
+    matched, produciendo el mismo string en cada caso (porque casi todas
+    las tutelas mencionan docente+EPS+transporte). Ahora cuenta cuántas
+    KEYWORD_DERECHOS patterns matchean en el texto y devuelve top-3.
     """
-    from_text = infer_derechos_from_dx(full_text)
-    existing_list = [d.strip() for d in re.split(r"\s*-\s*", existing) if d.strip()] if existing else []
+    from collections import Counter
+    from backend.cognition.cie10_to_derecho import (
+        KEYWORD_DERECHOS, CIE10_FAMILY_DERECHOS, _extract_cie10_codes,
+        _normalize_derecho,
+    )
+
+    counts: Counter[str] = Counter()
+
+    # Peso 3: CIE-10 codes explícitos (señal médica fuerte)
+    for code in _extract_cie10_codes(full_text.upper()):
+        if code in CIE10_FAMILY_DERECHOS:
+            for d in CIE10_FAMILY_DERECHOS[code]:
+                counts[_normalize_derecho(d)] += 3
+
+    # Peso 1: por cada match de keyword pattern, sumar 1 a cada derecho asociado
+    for pat, derechos in KEYWORD_DERECHOS:
+        n_matches = len(pat.findall(full_text))
+        if n_matches:
+            for d in derechos:
+                counts[_normalize_derecho(d)] += n_matches
+
+    top = [d for d, _ in counts.most_common(3)]
+
+    existing_list = [
+        d.strip().upper() for d in re.split(r"\s*-\s*", existing) if d and d.strip()
+    ] if existing else []
     combined: list[str] = []
     seen: set[str] = set()
-    for d in existing_list + from_text:
-        key = d.upper()
-        if key not in seen:
-            seen.add(key)
-            combined.append(d.upper())
+    for d in existing_list + top:
+        if d not in seen:
+            seen.add(d)
+            combined.append(d)
+        if len(combined) >= 5:
+            break
     return " - ".join(combined)
 
 
@@ -123,38 +151,120 @@ def build_asunto(
     return asunto
 
 
+PRETENSIONES_HEADER_PATTERN = re.compile(
+    r"\b(?:PRETENSIONES|PETICIONES|SOLICITUDES|II?\s*[\.\)]\s*PRETENSIONES|"
+    r"EN\s+CONSECUENCIA(?:\s+SOLICITO)?)\b\s*[:.\-]?",
+    re.IGNORECASE,
+)
+
+# Headers que típicamente cierran la sección de pretensiones
+PRETENSIONES_END_PATTERN = re.compile(
+    r"\b(?:HECHOS|ANTECEDENTES|FUNDAMENTOS\s+DE\s+DERECHO|FUNDAMENTOS\s+JUR[IÍ]DICOS|"
+    r"PRUEBAS|JURAMENTO|NOTIFICACIONES|ANEXOS|COMPETENCIA|MEDIDA\s+PROVISIONAL|"
+    r"DERECHO[S]?\s+VULNERAD|MARCO\s+CONSTITUCIONAL|VI?\s*[\.\)]\s*HECHOS)\b",
+    re.IGNORECASE,
+)
+
+# v9.4.3: cortar el full_text antes de la sección de RESPUESTA/CONTESTACIÓN
+# del accionado para evitar capturar SUS pretensiones (que son defensa,
+# no las del accionante). Caso real bug #1: caso #1 capturó "Que se declare
+# la improcedencia de las pretensiones" — eso era la respuesta SED.
+RESPUESTA_ACCIONADO_PATTERN = re.compile(
+    r"\b(?:RESPUESTA\s+A\s+LA\s+ACCI[OÓ]N|CONTESTACI[OÓ]N\s+A\s+LA\s+TUTELA|"
+    r"OPOSICI[OÓ]N\s+A\s+LA\s+TUTELA|EN\s+RESPUESTA\s+A\s+LA\s+ACCI[OÓ]N|"
+    r"DEFENSA\s+DE\s+LA\s+ACCIONADA|"
+    r"improcedencia\s+de\s+las\s+pretensiones|"
+    r"se\s+rechac[ee]n?\s+las\s+pretensiones|"
+    r"se\s+nieguen?\s+las\s+pretensiones|"
+    r"sea\s+desestimada\s+la\s+acci[oó]n)\b",
+    re.IGNORECASE,
+)
+
+PRETENSIONES_MAX_CHARS = 4000
+
+
+def _strip_respuesta_accionado(full_text: str) -> str:
+    """v9.4.3: trunca el texto en el primer header de RESPUESTA del accionado.
+
+    Esto evita que build_pretensiones capture la sección PRETENSIONES de la
+    contestación del accionado (donde el accionado pide 'declarar improcedentes'
+    las pretensiones del accionante).
+    """
+    if not full_text:
+        return full_text
+    m = RESPUESTA_ACCIONADO_PATTERN.search(full_text)
+    if m:
+        return full_text[:m.start()]
+    return full_text
+
+
 def build_pretensiones(
     actors: ActorSet,
     derecho_vulnerado: str,
     full_text: str,
     asunto: str = "",
 ) -> str:
-    """Construye PRETENSIONES en 1-3 líneas desde la acción detectada."""
-    accionado = _primary_accionado(actors) or "la entidad accionada"
+    """Construye PRETENSIONES en modo VERBATIM (v9.4).
 
-    # Buscar el verbo "solicita/ordenar" y la oración siguiente
-    m = re.search(
-        r"(?:solicit[ao]\b|pido\b|pretend[eo]\b|ordenar\b|disponer\b|se\s+ordene)\s+"
-        r"([^.]{20,220}[\.\,])",
-        full_text,
-        re.IGNORECASE,
-    )
-    extracted = m.group(1).strip() if m else ""
+    Wilson explícitamente requirió: "las pretensiones deben ser transcritas tal
+    cual, no resumidas, no parafraseadas". Por eso esta función YA NO genera
+    paráfrasis ni plantillas. Solo localiza la sección 'PRETENSIONES' del
+    escrito de tutela y la copia literal hasta el siguiente header.
 
-    if extracted:
-        return f"Que se {extracted.rstrip(',.')}."
+    Si no se encuentra la sección de pretensiones, retorna cadena vacía
+    (no inventa). El campo se rellenará después por la capa Qwen
+    (target=pretensiones_verbatim) o queda en blanco para revisión humana.
 
-    # Fallback: inferir desde el asunto/derecho
-    if "traslado docente" in asunto.lower():
-        return "Que se ordene el traslado del docente a la institución solicitada."
-    if "nombramiento" in asunto.lower():
-        return f"Que se ordene al {accionado} realizar el nombramiento del docente."
-    if "reintegro" in asunto.lower():
-        return "Que se ordene el reintegro al cargo y el pago de salarios dejados de percibir."
-    if "petici[oó]n" in asunto.lower() or "petición" in asunto.lower():
-        return "Que se ordene responder de fondo el derecho de petición dentro del término legal."
-    primary = derecho_vulnerado.split(" - ")[0] if derecho_vulnerado else "los derechos invocados"
-    return f"Que se amparen {primary.lower()} y se ordene al {accionado} las medidas conducentes."
+    Args:
+      actors: ActorSet (no usado en VERBATIM, mantenido por compat de firma)
+      derecho_vulnerado: ídem
+      full_text: texto completo del expediente (escrito tutela + otros)
+      asunto: ídem
+
+    Returns:
+      str con las pretensiones literales (máx 4000 chars) o "" si no se halla.
+    """
+    if not full_text:
+        return ""
+
+    # v9.4.3: cortar antes de la sección de respuesta del accionado para no
+    # capturar SUS pretensiones de defensa.
+    text = _strip_respuesta_accionado(full_text)
+
+    # Localizar primer header "PRETENSIONES" o equivalente en el escrito de tutela
+    m_start = PRETENSIONES_HEADER_PATTERN.search(text)
+    if not m_start:
+        return ""  # honestidad: sin sección clara, mejor vacío que inventar
+    full_text = text  # reasignar para el resto de la función
+
+    start_idx = m_start.end()
+    tail = full_text[start_idx:]
+
+    # Localizar el siguiente header que cierre la sección
+    m_end = PRETENSIONES_END_PATTERN.search(tail)
+    end_idx_tail = m_end.start() if m_end else min(len(tail), PRETENSIONES_MAX_CHARS)
+
+    bloque = tail[:end_idx_tail].strip()
+
+    # Limpieza mínima: quitar saltos múltiples consecutivos pero preservar
+    # los saltos que separan numeración (1., 2., 3., PRIMERA, SEGUNDA…).
+    bloque = re.sub(r"\n{3,}", "\n\n", bloque)
+    bloque = re.sub(r"[ \t]+", " ", bloque)
+    bloque = bloque.strip(" .:;-\n")
+
+    # Si el bloque es demasiado corto (<30 chars) probablemente la captura falló
+    if len(bloque) < 30:
+        return ""
+
+    # Truncar a max sin cortar palabra
+    if len(bloque) > PRETENSIONES_MAX_CHARS:
+        cut = bloque[:PRETENSIONES_MAX_CHARS]
+        last_space = cut.rfind(" ")
+        if last_space > PRETENSIONES_MAX_CHARS - 200:
+            cut = cut[:last_space]
+        bloque = cut.rstrip(" .,;:") + "…"
+
+    return bloque
 
 
 def build_observaciones(

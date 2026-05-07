@@ -4,10 +4,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import {
   ArrowLeft, Save, FileText, ExternalLink, Loader2,
-  AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package,
+  AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package, Sparkles, ShieldCheck,
 } from 'lucide-react'
-import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, setPiiMode, getPiiHints } from '../services/api'
+import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, setPiiMode, getPiiHints, validateCase } from '../services/api'
 import StatusBadge from '../components/StatusBadge'
+import SimilarCasesPanel from '../components/SimilarCasesPanel'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -37,89 +38,91 @@ interface SectionDef {
 
 const SECTIONS: SectionDef[] = [
   {
-    title: 'Identificacion',
+    title: 'Identificación del expediente',
     fields: [
-      { key: 'RADICADO_23_DIGITOS', label: 'Radicado 23 Digitos', type: 'text', mono: true },
+      { key: 'RADICADO_23_DIGITOS', label: 'Radicado (23 dígitos)', type: 'text', mono: true },
       { key: 'RADICADO_FOREST', label: 'Radicado FOREST', type: 'text', mono: true },
     ],
   },
   {
-    title: 'Partes',
+    title: 'Partes procesales',
     fields: [
       { key: 'ACCIONANTE', label: 'Accionante', type: 'text' },
-      { key: 'ACCIONADOS', label: 'Accionados', type: 'textarea' },
+      { key: 'ACCIONADOS', label: 'Accionado(s)', type: 'textarea' },
       { key: 'VINCULADOS', label: 'Vinculados', type: 'textarea' },
     ],
   },
   {
-    title: 'Proceso',
+    title: 'Proceso y hechos',
     fields: [
-      { key: 'JUZGADO', label: 'Juzgado', type: 'text' },
-      { key: 'CIUDAD', label: 'Ciudad', type: 'text' },
-      { key: 'FECHA_INGRESO', label: 'Fecha de Ingreso', type: 'date' },
-      { key: 'DERECHO_VULNERADO', label: 'Derecho Vulnerado', type: 'textarea' },
-      { key: 'ASUNTO', label: 'Asunto', type: 'textarea' },
-      { key: 'PRETENSIONES', label: 'Pretensiones', type: 'textarea' },
+      { key: 'JUZGADO', label: 'Juzgado de primera instancia', type: 'text' },
+      { key: 'CIUDAD', label: 'Municipio donde se vulneró el derecho', type: 'text' },
+      { key: 'FECHA_INGRESO', label: 'Fecha de ingreso', type: 'date' },
+      { key: 'DERECHO_VULNERADO', label: 'Derechos vulnerados', type: 'textarea' },
+      { key: 'ASUNTO', label: 'Asunto (resumen)', type: 'textarea' },
+      { key: 'PRETENSIONES', label: 'Pretensiones (transcripción literal)', type: 'textarea' },
     ],
   },
   {
-    title: 'Gestion',
+    title: 'Gestión interna SED',
     fields: [
-      { key: 'OFICINA_RESPONSABLE', label: 'Oficina Responsable', type: 'text' },
-      { key: 'ABOGADO_RESPONSABLE', label: 'Abogado Responsable', type: 'text' },
-      { key: 'ESTADO', label: 'Estado', type: 'select', options: ['ACTIVO', 'INACTIVO'] },
-      { key: 'FECHA_RESPUESTA', label: 'Fecha de Respuesta', type: 'date' },
+      { key: 'ABOGADO_CANONICAL', label: 'Abogado de tutelas (oficial)', type: 'text' },
+      { key: 'ABOGADO_RESPONSABLE', label: 'Firmante en documentos', type: 'text' },
+      { key: 'DEPENDENCIA_CANONICAL', label: 'Dependencia (código SED)', type: 'text' },
+      { key: 'OFICINA_RESPONSABLE', label: 'Oficina responsable (extraída)', type: 'text' },
+      { key: 'ESTADO', label: 'Estado del trámite', type: 'select', options: ['ACTIVO', 'INACTIVO'] },
+      { key: 'FECHA_RESPUESTA', label: 'Fecha de respuesta de la SED', type: 'date' },
     ],
   },
   {
-    title: 'Fallo Primera Instancia',
+    title: 'Fallo de primera instancia',
     fields: [
-      { key: 'SENTIDO_FALLO_1ST', label: 'Sentido del Fallo', type: 'select', options: ['CONCEDE', 'NIEGA', 'IMPROCEDENTE'] },
-      { key: 'FECHA_FALLO_1ST', label: 'Fecha del Fallo', type: 'date' },
+      { key: 'SENTIDO_FALLO_1ST', label: 'Sentido del fallo', type: 'select', options: ['CONCEDE', 'NIEGA', 'IMPROCEDENTE'] },
+      { key: 'FECHA_FALLO_1ST', label: 'Fecha del fallo', type: 'date' },
     ],
   },
   {
-    title: 'Impugnacion',
+    title: 'Recurso de impugnación',
     fields: [
-      { key: 'IMPUGNACION', label: 'Impugnacion', type: 'select', options: ['SI', 'NO'] },
-      { key: 'QUIEN_IMPUGNO', label: 'Quien Impugno', type: 'select', options: ['Accionante', 'Accionado', 'Vinculado'] },
-      { key: 'FOREST_IMPUGNACION', label: 'FOREST Impugnacion', type: 'text', mono: true },
-      { key: 'JUZGADO_2ND', label: 'Juzgado Segunda Instancia', type: 'text' },
-      { key: 'SENTIDO_FALLO_2ND', label: 'Sentido Fallo 2da Instancia', type: 'select', options: ['Confirma', 'Revoca', 'Modifica'] },
-      { key: 'FECHA_FALLO_2ND', label: 'Fecha Fallo 2da Instancia', type: 'date' },
+      { key: 'IMPUGNACION', label: '¿Hay impugnación?', type: 'select', options: ['SI', 'NO'] },
+      { key: 'QUIEN_IMPUGNO', label: 'Quién impugnó', type: 'select', options: ['Accionante', 'Accionado', 'Vinculado'] },
+      { key: 'FOREST_IMPUGNACION', label: 'Radicado FOREST de la impugnación', type: 'text', mono: true },
+      { key: 'JUZGADO_2ND', label: 'Juzgado de segunda instancia', type: 'text' },
+      { key: 'SENTIDO_FALLO_2ND', label: 'Sentido del fallo de 2da instancia', type: 'select', options: ['Confirma', 'Revoca', 'Modifica'] },
+      { key: 'FECHA_FALLO_2ND', label: 'Fecha del fallo de 2da instancia', type: 'date' },
     ],
   },
   {
-    title: 'Incidente de Desacato 1',
+    title: 'Incidente de desacato (primer trámite)',
     fields: [
-      { key: 'INCIDENTE', label: 'Incidente', type: 'select', options: ['SI', 'NO'] },
-      { key: 'FECHA_APERTURA_INCIDENTE', label: 'Fecha Apertura', type: 'date' },
-      { key: 'RESPONSABLE_DESACATO', label: 'Responsable Desacato', type: 'text' },
-      { key: 'DECISION_INCIDENTE', label: 'Decision Incidente', type: 'textarea' },
+      { key: 'INCIDENTE', label: '¿Se abrió incidente?', type: 'select', options: ['SI', 'NO'] },
+      { key: 'FECHA_APERTURA_INCIDENTE', label: 'Fecha de apertura del incidente', type: 'date' },
+      { key: 'RESPONSABLE_DESACATO', label: 'Responsable del desacato', type: 'text' },
+      { key: 'DECISION_INCIDENTE', label: 'Decisión del juez sobre el incidente', type: 'textarea' },
     ],
   },
   {
-    title: 'Incidente de Desacato 2',
+    title: 'Incidente de desacato (segundo trámite)',
     fields: [
-      { key: 'INCIDENTE_2', label: 'Incidente 2', type: 'select', options: ['SI', 'NO'] },
-      { key: 'FECHA_APERTURA_INCIDENTE_2', label: 'Fecha Apertura', type: 'date' },
-      { key: 'RESPONSABLE_DESACATO_2', label: 'Responsable Desacato', type: 'text' },
-      { key: 'DECISION_INCIDENTE_2', label: 'Decision Incidente', type: 'textarea' },
+      { key: 'INCIDENTE_2', label: '¿Hay segundo incidente?', type: 'select', options: ['SI', 'NO'] },
+      { key: 'FECHA_APERTURA_INCIDENTE_2', label: 'Fecha de apertura', type: 'date' },
+      { key: 'RESPONSABLE_DESACATO_2', label: 'Responsable del desacato', type: 'text' },
+      { key: 'DECISION_INCIDENTE_2', label: 'Decisión del juez', type: 'textarea' },
     ],
   },
   {
-    title: 'Incidente de Desacato 3',
+    title: 'Incidente de desacato (tercer trámite)',
     fields: [
-      { key: 'INCIDENTE_3', label: 'Incidente 3', type: 'select', options: ['SI', 'NO'] },
-      { key: 'FECHA_APERTURA_INCIDENTE_3', label: 'Fecha Apertura', type: 'date' },
-      { key: 'RESPONSABLE_DESACATO_3', label: 'Responsable Desacato', type: 'text' },
-      { key: 'DECISION_INCIDENTE_3', label: 'Decision Incidente', type: 'textarea' },
+      { key: 'INCIDENTE_3', label: '¿Hay tercer incidente?', type: 'select', options: ['SI', 'NO'] },
+      { key: 'FECHA_APERTURA_INCIDENTE_3', label: 'Fecha de apertura', type: 'date' },
+      { key: 'RESPONSABLE_DESACATO_3', label: 'Responsable del desacato', type: 'text' },
+      { key: 'DECISION_INCIDENTE_3', label: 'Decisión del juez', type: 'textarea' },
     ],
   },
   {
-    title: 'Observaciones',
+    title: 'Observaciones del expediente',
     fields: [
-      { key: 'OBSERVACIONES', label: 'Observaciones', type: 'textarea' },
+      { key: 'OBSERVACIONES', label: 'Notas y trazabilidad', type: 'textarea' },
     ],
   },
 ]
@@ -446,28 +449,40 @@ function ResizablePanels({ caseData, fields, handleChange, onDeleteDoc }: {
 function RightPanelWithTabs({ caseId, docs, onDeleteDoc }: {
   caseId: number; docs: Array<{ id: number; filename: string; doc_type: string; verificacion?: string; verificacion_detalle?: string }>; onDeleteDoc: (docId: number) => void
 }) {
-  const [tab, setTab] = useState<'docs' | 'emails'>('docs')
+  const [tab, setTab] = useState<'docs' | 'emails' | 'similar'>('docs')
   const packagesQ = useQuery({ queryKey: ['case-email-packages', caseId], queryFn: () => getCaseEmailPackages(caseId), enabled: tab === 'emails' })
+
+  const TabButton = ({ id, icon, label, badge }: { id: typeof tab; icon: React.ReactNode; label: string; badge?: React.ReactNode }) => (
+    <button
+      onClick={() => setTab(id)}
+      className={cn(
+        'flex-1 px-3 py-2.5 text-sm font-medium flex items-center justify-center gap-2 border-b-2 transition-colors',
+        tab === id ? 'border-primary text-primary bg-card' : 'border-transparent text-muted-foreground hover:text-foreground'
+      )}
+    >
+      {icon}
+      {label}
+      {badge}
+    </button>
+  )
 
   return (
     <>
       <div className="flex-shrink-0 bg-muted border-b border-border">
         <div className="flex">
-          <button onClick={() => setTab('docs')} className={cn('flex-1 px-4 py-2.5 text-sm font-medium flex items-center justify-center gap-2 border-b-2 transition-colors', tab === 'docs' ? 'border-primary text-primary bg-card' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-            <FileText size={14} />
-            Documentos ({docs.length})
-          </button>
-          <button onClick={() => setTab('emails')} className={cn('flex-1 px-4 py-2.5 text-sm font-medium flex items-center justify-center gap-2 border-b-2 transition-colors', tab === 'emails' ? 'border-primary text-primary bg-card' : 'border-transparent text-muted-foreground hover:text-foreground')}>
-            <Mail size={14} />
-            Correos
-            {packagesQ.data && packagesQ.data.packages_count > 0 && (
+          <TabButton id="docs" icon={<FileText size={14} />} label={`Documentos (${docs.length})`} />
+          <TabButton id="emails" icon={<Mail size={14} />} label="Correos" badge={
+            packagesQ.data && packagesQ.data.packages_count > 0 ? (
               <Badge variant="secondary" className="text-[10px] px-1.5">{packagesQ.data.packages_count}</Badge>
-            )}
-          </button>
+            ) : undefined
+          } />
+          <TabButton id="similar" icon={<Sparkles size={14} />} label="Casos parecidos" />
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {tab === 'docs' ? <DocumentPanel docs={docs} onDeleteDoc={onDeleteDoc} /> : <EmailPackagesTimeline query={packagesQ} />}
+        {tab === 'docs' && <DocumentPanel docs={docs} onDeleteDoc={onDeleteDoc} />}
+        {tab === 'emails' && <EmailPackagesTimeline query={packagesQ} />}
+        {tab === 'similar' && <SimilarCasesPanel caseId={caseId} />}
       </div>
     </>
   )
@@ -587,6 +602,22 @@ export default function CaseDetail() {
     staleTime: 60_000,
   })
 
+  // v8.1: validador heurístico
+  const validateMut = useMutation({
+    mutationFn: () => validateCase(caseId, false),
+    onSuccess: (data: any) => {
+      const h = data?.heuristic || {}
+      const findings = Object.entries(h).filter(([_, info]: any) => info?.verdict !== 'OK')
+      if (findings.length === 0) {
+        toast.success(`✅ Validación: todos los campos OK (${data.elapsed_s}s)`)
+      } else {
+        const msg = findings.map(([f, info]: any) => `${f}: ${info.razon.slice(0,60)}`).join('\n')
+        toast(`⚠️ ${findings.length} hallazgo(s):\n${msg}`, { icon: '🔍', duration: 8000 })
+      }
+    },
+    onError: () => toast.error('Error al validar caso'),
+  })
+
   const piiMut = useMutation({
     mutationFn: (mode: 'selective' | 'aggressive' | null) => setPiiMode(caseId, mode),
     onSuccess: (data) => {
@@ -639,7 +670,9 @@ export default function CaseDetail() {
           </Button>
           <div>
             <h1 className="text-sm font-semibold text-foreground leading-tight">{caseData.folder_name}</h1>
-            <p className="text-xs text-muted-foreground mt-0.5">ID #{caseId} — {caseData.documents?.length ?? 0} documento(s)</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Expediente #{caseId} · {caseData.documents?.length ?? 0} documento{(caseData.documents?.length ?? 0) === 1 ? '' : 's'}
+            </p>
           </div>
         </div>
 
@@ -668,6 +701,9 @@ export default function CaseDetail() {
             🔒 {(caseData as any).pii_mode === 'aggressive' ? 'Aggressive' : 'Selective'}
           </Button>
           {dirty && <Badge variant="outline" className="text-amber-700 border-amber-200 bg-amber-50">Cambios sin guardar</Badge>}
+          <Button variant="ghost" size="icon-sm" onClick={() => validateMut.mutate()} disabled={validateMut.isPending} title="Validar caso (firmante↔accionante, mezcla rad)">
+            {validateMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+          </Button>
           <Button variant="ghost" size="icon-sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} title="Sincronizar carpeta">
             <RefreshCw size={14} className={syncMutation.isPending || caseQ.isFetching ? 'animate-spin' : ''} />
           </Button>

@@ -247,11 +247,394 @@ def extract_decision(text: str, zones: DocZones | None = None) -> Decision:
     # 3. Impugnación
     if re.search(r"\b(?:se\s+)?IMPUGN(?:A|ACI[ÓO]N)\b", text, re.IGNORECASE):
         dec.impugnacion = "SI"
-        # quien: accionante o accionado
-        m = re.search(r"impugn(?:a|ó|ación)\s+(?:el\s+|la\s+)?(accionante|accionado|tutelante|demandado|Secretar[íi]a|Gobernaci[óo]n)", text, re.IGNORECASE)
-        if m:
-            dec.quien_impugno = m.group(1).capitalize()
+        dec.quien_impugno = _detect_quien_impugno(text)
     elif dec.sentido:
         dec.impugnacion = "NO"
 
     return dec
+
+
+# ─── v9.4.5: Extractores específicos para campos <50% cobertura ──────
+
+# Entidades públicas que suelen ser ACCIONADO
+ENTIDADES_PUBLICAS_PATTERN = re.compile(
+    r"\b(?:Secretar[íi]a|Gobernaci[óo]n|Alcald[íi]a|Ministerio|"
+    r"Departamento\s+de\s+Santander|Ente\s+Territorial|"
+    r"Gobierno|Procuradur[íi]a|Defensor[íi]a|Instituto)\b",
+    re.IGNORECASE,
+)
+
+# Patrón "X impugna/impugnó" capturando el sujeto (~50 chars antes)
+IMPUGNADOR_PATTERN = re.compile(
+    r"([^.\n]{5,120}?)\s+impugn(?:[oó]|a|aci[oó]n)\s+(?:el\s+fallo|la\s+(?:tutela|sentencia|decisi[oó]n))",
+    re.IGNORECASE,
+)
+
+
+def _detect_quien_impugno(text: str) -> str:
+    """v9.4.5: detecta ACCIONANTE/ACCIONADO/MINISTERIO_PUBLICO en texto.
+
+    Busca patrón "X impugna el fallo" y clasifica X según contenga entidad
+    pública (ACCIONADO) o nombre propio (ACCIONANTE).
+    """
+    head = text[:8000]  # los autos de impugnación citan al impugnador en cabeza
+    for m in IMPUGNADOR_PATTERN.finditer(head):
+        sujeto = m.group(1).strip()
+        if ENTIDADES_PUBLICAS_PATTERN.search(sujeto):
+            return "ACCIONADO"
+        # Si el sujeto contiene nombre propio (mayúsculas iniciales o cédula)
+        if re.search(r"\b[A-ZÁÉÍÓÚÑ]{2,}\s+[A-ZÁÉÍÓÚÑ]{2,}", sujeto) or "tutelante" in sujeto.lower() or "accionante" in sujeto.lower():
+            return "ACCIONANTE"
+    # Fallback: ministerio público / agente oficioso
+    if re.search(r"\b(?:Personero|Defensor\s+del\s+Pueblo|Procurador|Ministerio\s+P[úu]blico)\b", head, re.IGNORECASE):
+        return "MINISTERIO_PUBLICO"
+    return ""
+
+
+# Patrón FOREST radicado típico
+FOREST_PATTERN = re.compile(r"\b(\d{6,8})\b")  # 6-8 dígitos
+
+
+def extract_forest_impugnacion(text: str, filename: str = "") -> str:
+    """v9.4.5 + audit 2026-05-03: extrae FOREST de docs de impugnación / 2da instancia.
+
+    Audit empírico identificó marker DOMINANTE en corpus SED Santander:
+    "Con número de radicado NNNNNNNNNNN" (11 dígitos) en email automático
+    de "Dirección de Atención al Ciudadano Gobernación de Santander" que
+    notifica recepción de auto de impugnación.
+
+    Cobertura esperada: 7/7 (100%) en docs que tengan ese email.
+    """
+    if not text:
+        return ""
+    text_head = text[:8000]
+
+    # Pattern dominante del corpus (audit 2026-05-03):
+    # "...recibido y enviado a TUTELAS GOBERNACION/EDUCACION, para lo
+    #  pertinente. Con número de radicado [11 DÍGITOS]"
+    # FOREST típico: 11 dígitos empezando con año (20XX).
+    # Endurecido para descartar prefijos rad_23 que también tienen 11+ dígitos.
+    m_corpus = re.search(
+        r"Con\s+n[uú]mero\s+de\s+radicado\s+(20\d{8,13})",
+        text_head, re.IGNORECASE,
+    )
+    if m_corpus:
+        return m_corpus.group(1)
+
+    # Fallback v9.4.5: si el doc indica 2da instancia, buscar patrones genéricos
+    fn_lower = filename.lower()
+    is_2da = (
+        "impugna" in fn_lower or "impugnacion" in fn_lower or
+        "segunda" in fn_lower or "tribunal" in fn_lower or
+        re.search(r"\b(?:fallo\s+de\s+)?segunda\s+instancia|tribunal\s+(?:superior|administrativo)",
+                  text_head, re.IGNORECASE)
+    )
+    if not is_2da:
+        return ""
+    m = re.search(
+        r"(?:radicado|radicaci[oó]n|FOREST|n[uú]mero\s+de\s+proceso)\s*[:.\-]?\s*(\d{6,12})",
+        text_head, re.IGNORECASE,
+    )
+    if m:
+        return m.group(1)
+    return ""
+
+
+# Patrones para responsable_desacato — v9.4.7 (auditoría exhaustiva muestras SED)
+RESPONSABLE_DESACATO_PATTERNS = [
+    # "APERTURAR ... contra el señor [NOMBRE], identificado con C.C."
+    re.compile(
+        r"APERTURAR[^.]{0,200}?contra\s+(?:el\s+(?:se[ñn]ora?|doctora?|dr\.?|dra\.?)\s+)?"
+        r"([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s]{8,80}?)"
+        r",?\s*identificad[oa]",
+        re.IGNORECASE,
+    ),
+    # "REQUERIR a [NOMBRE] para que..."
+    re.compile(
+        r"REQUERIR\s+a\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s]{8,80}?)\s+"
+        r"(?:para\s+que|en\s+su\s+calidad|en\s+calidad)",
+        re.IGNORECASE,
+    ),
+    # v9.4.7: "DECLARAR que los señores X, en su calidad de Y" (auto sanción)
+    re.compile(
+        r"DECLARAR\s+que\s+(?:los?\s+(?:se[ñn]ores?|se[ñn]ora|doctora?)\s+)?"
+        r"([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s]{8,150}?)"
+        r",?\s+en\s+(?:su\s+)?(?:calidad|condici[oó]n)\s+de",
+        re.IGNORECASE,
+    ),
+    # v9.4.7: "INAPLICACION ... al señor X, en su calidad de" (auto inaplicación)
+    re.compile(
+        r"(?:al?\s+(?:se[ñn]ora?|doctora?))\s+"
+        r"([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s]{8,80}?)"
+        r",?\s+en\s+(?:su\s+)?(?:calidad|condici[oó]n)\s+de",
+        re.IGNORECASE,
+    ),
+    # v9.4.7: "INCIDENTANDO: NOMBRE/ENTIDAD" (header de auto)
+    re.compile(
+        r"INCIDENTAND[OA]\s*[:.\-]\s*"
+        r"([A-ZÁÉÍÓÚÑa-záéíóúñ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s,–\-]{8,120}?)"
+        r"(?:\s*\n|\s+ACCION|\s+RADICA|\s+CONSTANCIA|\.)",
+        re.IGNORECASE,
+    ),
+    # "incidente de desacato contra [NOMBRES o ENTIDAD]" (auto apertura)
+    re.compile(
+        r"incidente\s+de\s+desacato\s+contra\s+"
+        r"(?:el\s+(?:se[ñn]ora?|doctora?)\s+)?"
+        r"([A-ZÁÉÍÓÚÑa-záéíóúñ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s,–\-]{10,150}?)"
+        r"(?:,?\s+(?:identificad[oa]|en\s+(?:su|calidad)|en\s+raz[oó]n)|,?\s*\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # Patrón fallback antiguo
+    re.compile(
+        r"(?:funcionari[oa]\s+(?:incidentad[oa]|sancionad[oa]|requerid[oa]))\s*[:.\-]?\s+"
+        r"([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{8,80})",
+        re.IGNORECASE,
+    ),
+    # B.2 (2026-05-03): "REQUERIRÁ a la Dra. NAME - CARGO" (futuro)
+    # — pre-incidente, AutoRequierePrevioApertura. Caso real 123.
+    re.compile(
+        r"(?:se\s+)?REQUERIR(?:Á|ÁS|ÁN|IÓ|IDO|IDA|SE)\s+a\s+"
+        r"(?:la?\s+)?(?:Dra?\.?|Dr\.?|señora?|señor)?\s*"
+        r"([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s]{8,80}?)"
+        r"\s*[\-–—]\s*(?:SECRETARIA?|GOBERNADOR|DIRECTOR|JEFE|COORDINADOR|FUNCIONARIO)",
+        re.IGNORECASE,
+    ),
+    # B.2: "VINCULAR / VINCULA al señor NAME" (auto vinculación al incidente)
+    re.compile(
+        r"VINCULAR?\s+(?:al?\s+(?:señora?|doctora?|Dra?\.?|Dr\.?))?\s*"
+        r"([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s]{8,80}?)"
+        r"(?:,\s*identificad|,?\s+en\s+(?:su|calidad)|\s*[\-–—]\s*(?:SECRETARIA?|GOBERNADOR|DIRECTOR))",
+        re.IGNORECASE,
+    ),
+    # B.2: "ORDENAR a NAME, en su calidad de" (auto orden cumplimiento)
+    re.compile(
+        r"ORDENAR\s+a\s+(?:la?\s+)?(?:Dra?\.?|Dr\.?|señora?|señor)?\s*"
+        r"([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s]{8,80}?)"
+        r"\s*(?:,\s*en\s+(?:su|calidad)|\s*[\-–—]\s*(?:SECRETARIA?|GOBERNADOR|DIRECTOR))",
+        re.IGNORECASE,
+    ),
+    # B.2: "EXHORTAR a NAME, ..."
+    re.compile(
+        r"EXHORTAR\s+a\s+(?:la?\s+)?(?:Dra?\.?|Dr\.?|señora?|señor)?\s*"
+        r"([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s]{8,80}?)"
+        r"\s*(?:,\s*en\s+(?:su|calidad)|\s*[\-–—]\s*(?:SECRETARIA?|GOBERNADOR|DIRECTOR)|\s+para\s+que)",
+        re.IGNORECASE,
+    ),
+    # CORRECCIÓN audit 2026-05-03: en el corpus SED, responsable_desacato es el
+    # abogado/persona DESIGNADA del equipo Apoyo Jurídico para gestionar la
+    # respuesta al proceso. El marcador real es "PROYECTÓ: [NOMBRE]" en la
+    # Carta de Respuesta SED (mayor cobertura: 5/16 con este pattern).
+    re.compile(
+        r"PROYECT[ÓO]\s*[:.\-]?\s*"
+        r"([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s]{8,80}?)"
+        r"(?:\s*[\-–—]\s*(?:ABOGAD[OA]|CONTRATISTA|ESP|GRUPO|APOYO)|\s*\.|\s*\n|\s+APROB[ÓO])",
+        re.IGNORECASE,
+    ),
+    # "Proyecto: NOMBRE. Abogado Esp-Contratista DAF" (variante sin tilde)
+    # Requiere ≥2 palabras capitalizadas tras ":" para evitar matchear
+    # "Proyecto de inversión alguna" (caso real ruidoso descubierto en audit).
+    re.compile(
+        r"(?:^|\n)\s*Proyect[oó]\s*[:.\-]\s*"
+        r"([A-ZÁÉÍÓÚÑ][a-záéíóúñA-ZÁÉÍÓÚÑ\.]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñA-ZÁÉÍÓÚÑ\.]+){1,5})"
+        r"\s*(?:[\.,\n]|\s+(?:Abogad|Esp|Contratista|DAF|Director))",
+        re.MULTILINE,
+    ),
+    # Fallback: "APROBÓ: NOMBRE" cuando PROYECTÓ no aparece
+    re.compile(
+        r"APROB[ÓO]\s*[:.\-]?\s*"
+        r"([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\.\s]{8,80}?)"
+        r"(?:\s*[\-–—]\s*(?:L[IÍ]DER|JEFE|COORDINADOR|DIRECTOR)|\s*\.|\s*\n)",
+        re.IGNORECASE,
+    ),
+]
+
+# Roles/frases genéricas que NO son nombres (filtros de salida)
+RESPONSABLE_BLACKLIST = {
+    "PARTE INCIDENTADA", "INCIDENTADO", "INCIDENTADA",
+    "EL FUNCIONARIO", "EL DEPARTAMENTO", "EL SEÑOR",
+    "QUIEN", "SECRETARI", "GOBERNADOR",
+    # B.2 (2026-05-03): genéricos adicionales
+    "LA ACCIONADA", "EL ACCIONADO", "LA ACCIONANTE", "EL ACCIONANTE",
+    "LA TUTELANTE", "EL TUTELANTE", "LA DEMANDADA", "EL DEMANDADO",
+    "LA AUTORIDAD", "EL AUTORIDAD", "LA ENTIDAD",
+}
+
+# Audit empírico 2026-05-03: palabras stop que indican que el match es una
+# frase descriptiva, no un nombre propio. Si el resultado contiene CUALQUIERA
+# de estas, descartar (caso real: "de inversión alguna radicado por el Municipio").
+RESPONSABLE_STOP_WORDS = {
+    "inversión", "inversion", "proceso", "municipio", "expediente",
+    "certificado", "certificados", "disponibilidad", "presupuesto",
+    "decreto", "ley", "constitución", "constitucion", "sentencia",
+    "auto", "fallo", "tutela", "incidente", "desacato",
+    "respectivos", "respectiva", "alguna", "ninguna", "presente",
+    "anterior", "siguiente", "mediante", "conforme", "fundamental",
+    "fundamentales", "presupuestal", "judicial", "judiciales",
+}
+
+# B.2 (2026-05-03): prefijos honoríficos a stripear del comienzo del nombre.
+_RESPONSABLE_PREFIX_RE = re.compile(
+    r"^(?:la?\s+|el\s+)?(?:dra?\.?|dr\.?|doctora?|señora?|señor)\s*\.?\s*",
+    re.IGNORECASE,
+)
+
+
+def extract_responsable_desacato(text: str) -> str:
+    """v9.4.6 + B.2: extrae nombre del funcionario público sancionado en incidente.
+
+    Busca patrones reales SED Santander:
+      - 'APERTURAR ... contra el señor X, identificado con C.C.'
+      - 'REQUERIR a X para que en su calidad de Y'
+      - 'REQUERIRÁ a la Dra. X - SECRETARIA' (futuro, B.2)
+      - 'VINCULAR al señor X, identificado' (B.2)
+      - 'incidente de desacato contra X' (entidad o nombre)
+    """
+    if not text:
+        return ""
+    head = text[:8000]
+    for pat in RESPONSABLE_DESACATO_PATTERNS:
+        m = pat.search(head)
+        if m:
+            name = re.sub(r"\s+", " ", m.group(1)).strip(" ,.;:")
+            # B.2: strip prefijos honoríficos al comienzo
+            name = _RESPONSABLE_PREFIX_RE.sub("", name).strip(" ,.;:")
+            # Validaciones
+            if len(name) < 8 or len(name) > 150:
+                continue
+            upper = name.upper().strip()
+            # Filtrar genéricos exactos o casi exactos
+            if upper in RESPONSABLE_BLACKLIST:
+                continue
+            if upper in ("LA PARTE INCIDENTADA", "EL INCIDENTADO", "LA INCIDENTADA",
+                          "PARTE INCIDENTADA", "QUIEN", "EL FUNCIONARIO"):
+                continue
+            # Audit 2026-05-03: rechazar si contiene stop words descriptivas
+            words_lower = name.lower().split()
+            if any(w in RESPONSABLE_STOP_WORDS for w in words_lower):
+                continue
+            # Audit 2026-05-03: requerir al menos 2 palabras tipo nombre propio
+            # (cada palabra inicia con mayúscula y tiene ≥3 chars).
+            cap_words = [w for w in name.split()
+                          if len(w) >= 3 and w[0].isupper()]
+            if len(cap_words) < 2:
+                continue
+            return name
+    return ""
+
+
+# Patrones para decision_incidente — v9.4.6 (basados en autos reales SED)
+# La sección RESUELVE PRIMERO suele tener un verbo imperativo + acción concreta.
+DECISION_INCIDENTE_VERBOS = (
+    "REQUERIR", "APERTURAR", "ADELANTAR", "SANCIONAR", "IMPONER",
+    "DECLARAR", "ARCHIVAR", "COMPULSAR", "EXHORTAR", "REMITIR",
+    "DECRETAR", "ORDENAR", "RECHAZAR", "NEGAR", "ABSTENERSE",
+    "CERRAR", "CONFIRMAR", "REVOCAR", "MODIFICAR",
+)
+_VERBOS_RE = "|".join(DECISION_INCIDENTE_VERBOS)
+
+DECISION_INCIDENTE_PATTERNS = [
+    # v9.4.7: "RESUELVE PRIMERO: VERBO ..." multi-línea (autos reales tienen \n)
+    re.compile(
+        rf"RESUELVE\s*[:.]?\s*PRIMERO\s*[:.]?\s*"
+        rf"(({_VERBOS_RE})\b[^.]{{10,400}}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # PRIMERO: VERBO (multi-línea, con o sin RESUELVE)
+    re.compile(
+        rf"(?:^|\n)\s*PRIMERO\s*[:.]\s*"
+        rf"(({_VERBOS_RE})\b[^.]{{10,400}}\.)",
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    ),
+    # "han incurrido en Desacato" → declaración explícita de desacato
+    re.compile(
+        r"((?:han|ha)\s+incurrid[oa]\s+en\s+(?:Desacato|incumplimiento)[^.]{0,300}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # "Sanciona con N días de arresto"
+    re.compile(
+        r"(SANCIONA(?:R)?\s+[^.]{5,200}?\d+\s+d[íi]as?\s+de\s+arresto[^.]{0,100}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # "Declara terminado / cumplido"
+    re.compile(
+        r"(DECLAR[AE]\s+(?:el\s+)?(?:cumplimiento|terminad[oa]|terminaci[oó]n)[^.]{0,200}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # "Archiva por cumplimiento / hecho superado"
+    re.compile(
+        r"(ARCHIV[AE]R?\s+(?:el\s+(?:incidente|desacato))?\s*"
+        r"(?:por\s+)?(?:cumplimiento|carencia\s+actual\s+de\s+objeto|hecho\s+superado)[^.]{0,100}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # B.3 (2026-05-03): "REQUIERE PREVIO APERTURA FORMAL DE INCIDENTE" — auto pre-incidente
+    re.compile(
+        r"(REQUIE?RE?\s+PREVIO\s+APERTURA\s+(?:FORMAL\s+)?(?:DEL?\s+)?INCIDENTE\s+(?:DE\s+)?DESACATO[^.]{0,200})",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # B.3: "VINCULA / VINCULAR ... al incidente" — auto vinculación
+    re.compile(
+        r"(VINCUL(?:AR|A|ANDO|ESE)\s+(?:al?\s+)?[^.]{5,250}?(?:al\s+(?:tr[áa]mite\s+)?incident\w*|al\s+contradictorio)[^.]{0,100}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # B.3: "ADMITE / ADMITIR incidente" — apertura formal
+    re.compile(
+        r"(ADMIT(?:E|IR|ASE|IDO)\s+(?:el\s+)?(?:tr[áa]mite\s+)?(?:del?\s+)?incidente\s+(?:de\s+)?desacato[^.]{0,200}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # B.3: "CONCEDE / NIEGA / CONFIRMA / REVOCA impugnación o sanción" — fallos de impugnación que reemplazan decisión incidente
+    re.compile(
+        r"((?:CONCEDE|NIEGA|CONFIRMA|REVOCA|MODIFICA)\s+(?:la\s+|el\s+|parcialmente\s+)?"
+        r"(?:impugnaci[oó]n|sanci[oó]n|sentencia|incidente|desacato|fallo)[^.]{0,250}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # B.3: "ORDENAR dar inicio al trámite de Cumplimiento"
+    re.compile(
+        r"(ORDENAR\s+dar\s+inicio\s+al\s+tr[áa]mite\s+(?:de\s+)?(?:cumplimiento|incident\w*|desacato)[^.]{0,250}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # v9.4.7: "INAPLICACION DE LAS SANCIONES"
+    re.compile(
+        r"(INAPLICACI[OÓ]N\s+DE\s+LAS\s+SANCIONES[^.]{0,200}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # v9.4.7: "ABSTENERSE de continuar"
+    re.compile(
+        r"(ABSTENERSE\s+(?:de\s+)?(?:continuar|sancionar|imponer)[^.]{0,150}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # v9.4.7: "REVOCA la sanción"
+    re.compile(
+        r"(REVOC[AE]R?\s+(?:la\s+)?(?:sanci[oó]n|decisi[oó]n)[^.]{0,150}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # v9.4.7: "CONFIRMA la sanción"
+    re.compile(
+        r"(CONFIRM[AE]R?\s+(?:la\s+)?(?:sanci[oó]n|decisi[oó]n|auto)[^.]{0,150}\.)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+]
+
+
+def extract_decision_incidente(text: str) -> str:
+    """v9.4.6: síntesis de la decisión sobre el incidente de desacato.
+
+    Busca la sección RESUELVE/DECIDE y extrae el primer verbo imperativo
+    (REQUERIR, APERTURAR, SANCIONAR, ARCHIVAR, etc.) con su complemento.
+    """
+    if not text:
+        return ""
+    # v9.4.7: aumentar ventana porque autos reales son más largos
+    head = text[:12000]
+    # Priorizar zona RESUELVE
+    m = re.search(r"\b(?:RESUELVE|DECIDE|DECISI[ÓO]N)\b", head, re.IGNORECASE)
+    region = head[m.start():] if m else head
+    region = region[:6000]
+    for pat in DECISION_INCIDENTE_PATTERNS:
+        m2 = pat.search(region)
+        if m2:
+            decision = m2.group(1) if m2.groups() else m2.group(0)
+            # Limpieza: colapsar whitespace + quitar saltos de tabla/header en el medio
+            decision = re.sub(r"\s+", " ", decision).strip(" ,.;-:")
+            if len(decision) >= 15:
+                return decision[:400]
+    return ""

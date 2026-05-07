@@ -193,20 +193,20 @@ export default function Dashboard() {
         icon={LayoutDashboard}
       />
 
-      {/* Control Panel */}
+      {/* Acciones rápidas — solo lo que un abogado necesita a diario */}
       <div>
-        <SectionTitle title="Centro de Control" />
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <SectionTitle title="Acciones rápidas" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Gmail */}
           <Card>
             <CardContent className="pt-4 space-y-3">
               <div className="flex items-center gap-2">
                 <Mail size={16} className="text-blue-600" />
-                <span className="text-sm font-medium">Revisar Gmail</span>
+                <span className="text-sm font-medium">Revisar correo institucional</span>
               </div>
               <p className="text-xs text-muted-foreground">
-                Descarga correos nuevos, adjuntos y extrae datos
-                {monitor?.last_check && `. Ultima: ${new Date(monitor.last_check).toLocaleTimeString('es-CO')}`}
+                Descarga correos nuevos del juzgado y vincula adjuntos al caso correspondiente
+                {monitor?.last_check && `. Última: ${new Date(monitor.last_check).toLocaleTimeString('es-CO')}`}
               </p>
               {gmailChecking && (
                 <div className="space-y-1.5">
@@ -234,63 +234,21 @@ export default function Dashboard() {
                 className="w-full bg-blue-600 hover:bg-blue-700"
               >
                 {gmailChecking ? <Loader2 size={13} className="animate-spin" /> : <Mail size={13} />}
-                {gmailChecking ? 'Revisando...' : 'Revisar Gmail Ahora'}
+                {gmailChecking ? 'Revisando...' : 'Revisar correo ahora'}
               </Button>
             </CardContent>
           </Card>
 
-          {/* Extraction */}
-          <Card>
-            <CardContent className="pt-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Cpu size={16} className="text-primary" />
-                <span className="text-sm font-medium">Extraccion IA</span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Procesar todos los casos pendientes con IA. Lee documentos y extrae los 28 campos.
-              </p>
-              {isExtracting && progress?.total > 0 && (
-                <div className="space-y-1.5">
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span className="truncate max-w-[140px]">{progress.case_name}</span>
-                    <span>{progress.current}/{progress.total} ({progress.success ?? 0} OK, {progress.errors ?? 0} err)</span>
-                  </div>
-                  <Progress value={(progress.current / progress.total) * 100} className="h-1.5" />
-                </div>
-              )}
-              {isExtracting ? (
-                <Button
-                  onClick={() => stopExtractionMut.mutate()}
-                  variant="destructive"
-                  size="sm"
-                  className="w-full"
-                >
-                  <XCircle size={13} />
-                  Detener Extraccion
-                </Button>
-              ) : (
-                <Button
-                  onClick={() => runAllMut.mutate()}
-                  disabled={runAllMut.isPending}
-                  size="sm"
-                  className="w-full"
-                >
-                  <Play size={13} />
-                  Extraer Pendientes
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Excel */}
+          {/* Excel — corte del cuadro */}
           <Card>
             <CardContent className="pt-4 space-y-3">
               <div className="flex items-center gap-2">
                 <Download size={16} className="text-emerald-600" />
-                <span className="text-sm font-medium">Corte Excel</span>
+                <span className="text-sm font-medium">Descargar cuadro de tutelas</span>
               </div>
               <p className="text-xs text-muted-foreground">
-                Genera y descarga el Excel con el estado actual de todos los casos.
+                Genera el Excel con el estado actual de todas las tutelas (28 columnas: partes, juzgado,
+                fallos, incidentes, dirección SED).
               </p>
               <Button
                 onClick={() => excelMut.mutate()}
@@ -299,47 +257,28 @@ export default function Dashboard() {
                 className="w-full bg-emerald-600 hover:bg-emerald-700"
               >
                 {excelMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-                {excelMut.isPending ? 'Generando...' : 'Descargar Corte Excel'}
+                {excelMut.isPending ? 'Generando...' : 'Descargar Excel'}
               </Button>
             </CardContent>
           </Card>
-
-          {/* Workflow */}
-          <Card>
-            <CardContent className="pt-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <FileText size={16} className="text-primary" />
-                <span className="text-sm font-medium">Flujo de Trabajo</span>
-              </div>
-              <div className="space-y-2 text-xs text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                  <span>Gmail: revision manual por operador</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span>IA extrae datos de docs + emails</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-violet-500" />
-                  <span>Datos se actualizan en tiempo real</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                  <span>Excel: solo cuando tu lo pidas</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
         </div>
+        {isExtracting && progress?.total > 0 && (
+          <div className="mt-3 px-3 py-2 rounded-lg bg-muted/40 border border-border">
+            <div className="flex justify-between text-xs text-muted-foreground mb-1">
+              <span>Procesamiento en curso</span>
+              <span>{progress.current}/{progress.total}</span>
+            </div>
+            <Progress value={(progress.current / progress.total) * 100} className="h-1.5" />
+          </div>
+        )}
       </div>
 
-      {/* Quality Panel */}
+      {/* Quality Panel — calidad documental del expediente */}
       {kpis?.calidad && (
         <Card>
           <CardContent className="pt-4">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-medium">Confiabilidad de Datos</span>
+              <span className="text-sm font-medium">Calidad del expediente</span>
               <span className={`text-xl font-bold ${
                 (kpis.calidad.confiabilidad ?? 0) >= 80 ? 'text-emerald-600' :
                 (kpis.calidad.confiabilidad ?? 0) >= 60 ? 'text-amber-500' : 'text-destructive'
@@ -371,7 +310,7 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       <div>
-        <SectionTitle title="Resumen General" />
+        <SectionTitle title="Resumen del cuadro de tutelas" />
         <motion.div
           variants={staggerContainer}
           initial="hidden"

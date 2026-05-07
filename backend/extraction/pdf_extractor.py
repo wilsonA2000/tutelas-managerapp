@@ -1,84 +1,56 @@
-"""Extractor robusto de PDFs usando pdfplumber. Sin truncacion."""
+"""Extractor de PDFs minimalista — solo pymupdf.
 
-from dataclasses import dataclass, field
+Reemplaza la versión legacy con pdfplumber. Mantiene la misma firma
+para compatibilidad con código que la consume.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 
-
-@dataclass
-class PageResult:
-    page_number: int
-    text: str
-    has_images: bool = False
-    needs_ocr: bool = False
+logger = logging.getLogger("tutelas.pdf_extractor")
 
 
 @dataclass
-class PDFExtractionResult:
+class PDFResult:
     text: str
-    pages: list[PageResult] = field(default_factory=list)
-    page_count: int = 0
-    method: str = "pdfplumber"
+    method: str = "pymupdf"
+    pages: int = 0
     has_scanned_pages: bool = False
     error: str | None = None
 
 
-def extract_pdf(file_path: str | Path) -> PDFExtractionResult:
-    """Extraer texto COMPLETO de un PDF. Sin truncar."""
+def extract_pdf(file_path: str | Path) -> PDFResult:
+    """Extrae texto de PDF con pymupdf. Sin fallback OCR."""
     file_path = Path(file_path)
     if not file_path.exists():
-        return PDFExtractionResult(text="", error=f"Archivo no existe: {file_path}")
+        return PDFResult(text="", error=f"Archivo no existe: {file_path}")
 
     try:
-        import pdfplumber
+        import pymupdf
+    except ImportError:
+        return PDFResult(text="", error="pymupdf no instalado")
 
-        all_text = []
-        pages = []
-        has_scanned = False
-
-        with pdfplumber.open(str(file_path)) as pdf:
-            for i, page in enumerate(pdf.pages):
-                page_num = i + 1
-
-                # Extraer texto
-                text = page.extract_text() or ""
-
-                # Extraer tablas si las hay
-                tables = page.extract_tables()
-                table_text = ""
-                if tables:
-                    for table in tables:
-                        for row in table:
-                            if row:
-                                cells = [str(c).strip() if c else "" for c in row]
-                                table_text += " | ".join(cells) + "\n"
-
-                combined = text
-                if table_text and table_text.strip() not in text:
-                    combined += "\n[TABLA]\n" + table_text
-
-                # Detectar paginas escaneadas (sin texto pero con imagenes)
-                has_images = bool(page.images)
-                needs_ocr = has_images and len(text.strip()) < 50
-
-                if needs_ocr:
-                    has_scanned = True
-
-                pages.append(PageResult(
-                    page_number=page_num,
-                    text=combined,
-                    has_images=has_images,
-                    needs_ocr=needs_ocr,
-                ))
-
-                all_text.append(f"--- PAGINA {page_num} ---\n{combined}")
-
-            return PDFExtractionResult(
-                text="\n\n".join(all_text),
-                pages=pages,
-                page_count=len(pdf.pages),
-                method="pdfplumber",
-                has_scanned_pages=has_scanned,
-            )
-
+    try:
+        doc = pymupdf.open(str(file_path))
+        text_parts = []
+        n_pages = doc.page_count
+        scanned_pages = 0
+        for i in range(n_pages):
+            page_text = doc[i].get_text()
+            text_parts.append(page_text)
+            # Heurística: página con muy poco texto y muchas imágenes = escaneada
+            if len(page_text.strip()) < 50:
+                scanned_pages += 1
+        doc.close()
+        return PDFResult(
+            text="\n".join(text_parts),
+            method="pymupdf",
+            pages=n_pages,
+            has_scanned_pages=(scanned_pages > 0),
+        )
     except Exception as e:
-        return PDFExtractionResult(text="", error=f"Error extrayendo PDF: {e}")
+        logger.warning("pymupdf falló en %s: %s", file_path.name, str(e)[:100])
+        return PDFResult(text="", error=str(e)[:200], method="pymupdf_error")

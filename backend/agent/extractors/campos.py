@@ -145,6 +145,64 @@ class JuzgadoExtractor(FieldExtractor):
         r"(?:\s+(?:y\s+)?(?:\w+\s+){0,4})?(?:de|del)\s+[\w\sáéíóúñÁÉÍÓÚÑ,]+)"
     )
 
+    @staticmethod
+    def _trim_juzgado(juzgado: str) -> str:
+        """v9.4: Recorta el nombre del juzgado al final del municipio Santander.
+
+        Soluciona casos como:
+          'JUZGADO PRIMERO PROMISCUO MUNICIPAL CIMITARRA SANTANDER ACTA DE REPARTO CIVIL No'
+          → 'JUZGADO PRIMERO PROMISCUO MUNICIPAL CIMITARRA SANTANDER'
+          'JUZGADO CUARTO PROMISCUO MUNICIPAL DE SAN GIL Veintinueve de febrero...'
+          → 'JUZGADO CUARTO PROMISCUO MUNICIPAL DE SAN GIL'
+        """
+        import unicodedata
+        try:
+            from backend.cognition.legal_schema import MUNICIPIOS_SANTANDER
+        except Exception:
+            MUNICIPIOS_SANTANDER = set()
+
+        def _norm(s: str) -> str:
+            s2 = unicodedata.normalize("NFD", s.upper())
+            return "".join(c for c in s2 if unicodedata.category(c) != "Mn")
+
+        txt_norm = _norm(juzgado)
+
+        # Buscar el primer municipio que aparezca (precedido de espacio)
+        # y cortar justo después de él (+ " SANTANDER" si sigue).
+        best_end = -1
+        for muni in sorted(MUNICIPIOS_SANTANDER, key=len, reverse=True):
+            idx = txt_norm.find(" " + muni)
+            if idx >= 0:
+                end = idx + 1 + len(muni)
+                # Verificar que sea palabra completa (no prefijo de otra)
+                next_char = txt_norm[end:end+1]
+                if next_char in ("", " ", ",", ".", ";", ":"):
+                    if best_end == -1 or end < best_end:
+                        best_end = end
+
+        if best_end > 0:
+            result = juzgado[:best_end].rstrip(" ,.;")
+            # Si sigue " SANTANDER" o ", Santander", incluirlo
+            rest = juzgado[best_end:].lstrip(" ,")
+            if rest[:9].upper().startswith("SANTANDER"):
+                # Tomar la palabra "Santander" tal como está en original
+                result = result + " " + rest.split()[0].rstrip(",.")
+            return result
+
+        # Fallback: cortar en frases típicas de basura post-juzgado
+        cuts = re.split(
+            r"\s+(?:Buen\s+d[ií]a|Se\s+remite|me\s+permito|no\s+obstante|"
+            r"ante\s+la|dentro\s+de\s+la|mediante|Accionante|Accionado|Se[ñn]or|"
+            r"ACTA|REPARTO|RADICACI|por\s+considerar|al\s+confirmar|"
+            r"le\s+ha|ha\s+compartido|Cod|C[oó]d|NIT|Despacho|Auto|quien|"
+            # Números escritos en español (cardinales que indican fecha)
+            r"Veint[ie]\w*|Trein\w*|Cuaren\w*|Cincuen\w*|Sesen\w*|Seten\w*|"
+            r"Ochen\w*|Noven\w*|Cien\w*|Once|Doce|Trece|Catorce|Quince|"
+            r"Dieci\w+|Diecis\w+)",
+            juzgado, flags=re.IGNORECASE, maxsplit=1,
+        )
+        return cuts[0].rstrip(" ,.;")
+
     def extract_regex(self, documents: list[dict], emails: list = None) -> ExtractionResult | None:
         # Priorizar zona HEADER de auto admisorio
         for doc in documents:
@@ -160,11 +218,7 @@ class JuzgadoExtractor(FieldExtractor):
                 if m:
                     juzgado = m.group(1).strip()
                     juzgado = re.sub(r"\s+", " ", juzgado).strip(" ,.")
-                    # Truncar en frases que ya no son parte del nombre del juzgado
-                    juzgado = re.split(
-                        r"\s+(?:le\s+ha|ha\s+compartido|Cod|C[oó]d|NIT|Despacho|Auto|RADICACI|quien)",
-                        juzgado, flags=re.IGNORECASE
-                    )[0].strip(" ,.")
+                    juzgado = self._trim_juzgado(juzgado)
                     return ExtractionResult(
                         value=juzgado, confidence=90,
                         source=doc.get("filename", ""),
@@ -179,10 +233,7 @@ class JuzgadoExtractor(FieldExtractor):
                 m = self._RE_JUZGADO.search(text[:3000])
                 if m:
                     juzgado = re.sub(r"\s+", " ", m.group(1)).strip(" ,.")
-                    juzgado = re.split(
-                        r"\s+(?:le\s+ha|ha\s+compartido|Cod|C[oó]d|NIT|Despacho|Auto|RADICACI|quien)",
-                        juzgado, flags=re.IGNORECASE
-                    )[0].strip(" ,.")
+                    juzgado = self._trim_juzgado(juzgado)
                     return ExtractionResult(
                         value=juzgado, confidence=70,
                         source=doc.get("filename", ""),
@@ -190,6 +241,72 @@ class JuzgadoExtractor(FieldExtractor):
                         reasoning="Juzgado en texto plano",
                     )
         return None
+
+
+# ---------------------------------------------------------------------------
+# Juzgado Segunda Instancia Extractor (v9.4.3) — regex complementario
+# al legal_schema. Si el documento ya menciona el tribunal explícitamente,
+# preferimos esa fuente sobre la derivación.
+# ---------------------------------------------------------------------------
+
+class JuzgadoSegundaExtractor(FieldExtractor):
+    field_name = "juzgado_2nd"
+    prefer_regex = False
+
+    _RE_TRIBUNAL = re.compile(
+        r"(?i)("
+        r"Tribunal\s+(?:Superior\s+del\s+Distrito\s+Judicial\s+de|Contencioso\s+Administrativo\s+de|Administrativo\s+de)\s+(?:Bucaramanga|San\s+Gil|Santander)"
+        r"(?:\s*[\-,]\s*Sala\s+(?:Civil(?:[\s\-]Familia)?|Penal|Laboral|[ÚU]nica))?"
+        r")"
+    )
+    # Captura "Juzgado X del Circuito de [Ciudad]" cuando se cita como 2da instancia
+    _RE_CIRCUITO = re.compile(
+        r"(?i)(juzgado\s+\w+\s+(?:promiscuo|civil|penal|laboral|administrativo|familia)"
+        r"(?:\s+\w+){0,3}\s+del\s+circuito\s+de\s+\w+(?:\s+\w+)?)"
+    )
+
+    def extract_regex(self, documents: list[dict], emails: list = None) -> ExtractionResult | None:
+        # Buscar primero en documentos típicos de 2da instancia (sentencia, fallo)
+        priority_types = ("PDF_SENTENCIA", "PDF_AUTO_ADMISORIO", "DOCX_OTRO")
+        candidates: list[tuple[int, str, str]] = []  # (priority, value, source)
+
+        for doc in documents:
+            doc_type = doc.get("doc_type", "")
+            text = doc.get("text", "") or doc.get("full_text", "")
+            if not text:
+                continue
+            head = text[:5000]
+
+            # Regex 1: Tribunal explícito (alta confianza)
+            m = self._RE_TRIBUNAL.search(head)
+            if m:
+                value = re.sub(r"\s+", " ", m.group(1)).strip(" ,.")
+                candidates.append((90 if doc_type in priority_types else 70,
+                                    value, doc.get("filename", "")))
+                continue
+
+            # Regex 2: Juzgado del Circuito
+            m = self._RE_CIRCUITO.search(head)
+            if m:
+                value = re.sub(r"\s+", " ", m.group(1)).strip(" ,.")
+                # Solo si es un doc de 2da o aparece en contexto "segunda instancia"
+                if "segunda instancia" in head.lower() or "impugnac" in head.lower():
+                    candidates.append((75 if doc_type in priority_types else 50,
+                                        value, doc.get("filename", "")))
+
+        if not candidates:
+            return None
+
+        # Tomar la candidata de mayor confianza
+        candidates.sort(key=lambda c: -c[0])
+        priority, value, source = candidates[0]
+        # Aplicar trim defensivo
+        value = JuzgadoExtractor._trim_juzgado(value)
+        return ExtractionResult(
+            value=value, confidence=priority,
+            source=source, method="ir_regex",
+            reasoning=f"Juzgado 2da instancia regex en {source}",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +318,31 @@ class CiudadExtractor(FieldExtractor):
     prefer_regex = False
 
     def extract_regex(self, documents: list[dict], emails: list = None) -> ExtractionResult | None:
-        # Buscar patron personero en cualquier documento
+        # v8.1: validar contra los 87 municipios oficiales de Santander.
+        # Antes capturaba frases random como "PODER PÚBLICO", "EDUCACIÓN DE SANTANDER",
+        # "la Tarjeta Profesional" porque la regex era demasiado laxa.
+        from backend.agent.extractors.municipios_santander import (
+            find_municipio_in_text, is_municipio_santander, MUNICIPIOS_SANTANDER,
+        )
+
+        # Estrategia 1: buscar municipio mencionado explícitamente en HEADER de sentencia
+        # (donde aparece "JUZGADO X DE FLORIDABLANCA" o similar).
+        for doc in documents:
+            if doc.get("doc_type") not in ("PDF_SENTENCIA", "PDF_AUTO_ADMISORIO"):
+                continue
+            for z in doc.get("zones", []):
+                if not isinstance(z, dict) or z.get("zone_type") != "HEADER":
+                    continue
+                muni = find_municipio_in_text(z.get("text", "")[:1000])
+                if muni:
+                    return ExtractionResult(
+                        value=muni.title(), confidence=90,
+                        source=doc.get("filename", ""),
+                        method="ir_header_validated",
+                        reasoning=f"Municipio Santander en HEADER de {doc.get('filename', '')}",
+                    )
+
+        # Estrategia 2: patrón PERSONERO + validación contra lista
         for doc in documents:
             text = doc.get("text", "") or doc.get("full_text", "")
             if not text:
@@ -210,37 +351,30 @@ class CiudadExtractor(FieldExtractor):
             if m:
                 ciudad = m.group(1).strip()
                 ciudad = CITY_CLEANUP.sub("", ciudad).strip()
-                # Truncar en palabras que no son parte del nombre de la ciudad
                 ciudad = re.split(
                     r"\s+(?:en\s+|quien|para|por|como|a\s+trav|contra|accionante|demandante)",
                     ciudad, flags=re.IGNORECASE
                 )[0].strip(" ,.-")
-                if len(ciudad) >= 3:
+                if is_municipio_santander(ciudad):
                     return ExtractionResult(
-                        value=ciudad, confidence=85,
+                        value=ciudad.title(), confidence=85,
                         source=doc.get("filename", ""),
-                        method="regex_personero",
-                        reasoning=f"Ciudad de patron personero en {doc.get('filename', '')}",
+                        method="regex_personero_validated",
+                        reasoning=f"Personero de {ciudad} en {doc.get('filename', '')}",
                     )
 
-        # Buscar en zona HEADER de sentencia
-        for doc in documents:
-            if doc.get("doc_type") not in ("PDF_SENTENCIA", "PDF_AUTO_ADMISORIO"):
-                continue
-            for z in doc.get("zones", []):
-                if not isinstance(z, dict) or z.get("zone_type") != "HEADER":
-                    continue
-                # Patron "DE BUCARAMANGA", "DE FLORIDABLANCA"
-                m = re.search(r"(?i)(?:DE|DEL)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñA-ZÁÉÍÓÚÑ\s]{3,25}?)(?:\s*$|\s+C[oó]d)", z.get("text", ""))
-                if m:
-                    ciudad = m.group(1).strip()
-                    if len(ciudad) >= 3:
-                        return ExtractionResult(
-                            value=ciudad, confidence=75,
-                            source=doc.get("filename", ""),
-                            method="ir_header",
-                            reasoning=f"Ciudad en HEADER de {doc.get('filename', '')}",
-                        )
+        # Estrategia 3: scan en cuerpo del primer doc buscando municipios mencionados
+        for doc in documents[:3]:  # solo primeros 3 docs
+            text = (doc.get("text", "") or doc.get("full_text", ""))[:5000]
+            muni = find_municipio_in_text(text)
+            if muni:
+                return ExtractionResult(
+                    value=muni.title(), confidence=70,
+                    source=doc.get("filename", ""),
+                    method="body_municipio_match",
+                    reasoning=f"Municipio Santander mencionado en cuerpo: {muni}",
+                )
+
         return None
 
 

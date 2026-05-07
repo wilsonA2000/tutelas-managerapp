@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.database.database import init_db, get_db, SessionLocal
 from backend.database.seed import run_seed
-from backend.routers import cases, documents, extraction, dashboard, reports, emails, seguimiento
+from backend.routers import cases, documents, extraction, dashboard, reports, emails, seguimiento, import_control, auditoria_fallos, auxiliares
 from backend.email.gmail_monitor import check_inbox, get_gmail_total, sync_inbox
 from backend.extraction.unified_cognitive import unified_extract_dispatch
 from backend.database.models import Case, Email
@@ -276,6 +276,9 @@ app.include_router(dashboard.router)
 app.include_router(reports.router)
 app.include_router(emails.router)
 app.include_router(seguimiento.router)
+app.include_router(import_control.router)
+app.include_router(auditoria_fallos.router)
+app.include_router(auxiliares.router)
 from backend.routers.knowledge import router as knowledge_router
 app.include_router(knowledge_router)
 from backend.alerts.router import router as alerts_router

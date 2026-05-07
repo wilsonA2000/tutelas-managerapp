@@ -20,7 +20,11 @@ from typing import Any
 from backend.agent.extractors.base import ExtractionResult
 from backend.cognition.zone_classifier import classify_zones
 from backend.cognition.entity_extractor import extract_actors
-from backend.cognition.decision_extractor import extract_decision
+from backend.cognition.decision_extractor import (
+    extract_decision,
+    extract_responsable_desacato, extract_decision_incidente,
+    extract_forest_impugnacion,
+)
 from backend.cognition.folder_renamer import clean_accionante, is_likely_real_name
 from backend.cognition.narrative_builder import (
     build_asunto, build_pretensiones, build_observaciones, build_derecho_vulnerado,
@@ -250,6 +254,30 @@ def cognitive_fill(
         _maybe_set("impugnacion", decision.impugnacion, 75, "cognition/decision_extractor")
     if decision.quien_impugno:
         _maybe_set("quien_impugno", decision.quien_impugno, 70, "cognition/decision_extractor")
+
+    # v9.4.5: extractores específicos campos <50% cobertura
+    # Iterar documentos: cada uno puede aportar un dato distinto
+    for d in documents or []:
+        dtext = d.get("text", "") or d.get("full_text", "")
+        if not dtext:
+            continue
+        fname = d.get("filename", "")
+        # FOREST de impugnación: solo en docs de 2da instancia
+        forest_2nd = extract_forest_impugnacion(dtext, fname)
+        if forest_2nd:
+            _maybe_set("forest_impugnacion", forest_2nd, 80,
+                       "cognition/decision_extractor")
+        # Responsable desacato: solo en docs de incidente
+        if "incident" in fname.lower() or "desacato" in fname.lower() or \
+                d.get("doc_type") == "INCIDENTE":
+            resp = extract_responsable_desacato(dtext)
+            if resp:
+                _maybe_set("responsable_desacato", resp, 70,
+                           "cognition/decision_extractor")
+            decis = extract_decision_incidente(dtext)
+            if decis:
+                _maybe_set("decision_incidente", decis, 70,
+                           "cognition/decision_extractor")
 
     # Campos narrativos (asunto / pretensiones / observaciones)
     asunto = build_asunto(actors, dv or prev_dv, full_text)

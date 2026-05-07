@@ -1,191 +1,83 @@
-"""
-Capa de normalizacion documental: 3 tiers para PDF, PaddleOCR para escaneados.
+"""Normalizador documental minimalista — solo pymupdf.
 
-Tier 1: pdftext (rapido, sin modelos, mejor que pdfplumber)
-Tier 2: Marker (opt-in, ~2GB modelos, mejor layout/tablas)
-Tier 3: pdfplumber + Tesseract (legacy fallback)
-
-DOCX siempre usa python-docx (preserva footer con abogado).
-Imagenes: PaddleOCR → Tesseract fallback.
+Sin fallbacks legacy (pdftext, pdfplumber, marker, paddleocr, tesseract).
+Si pymupdf no extrae texto (PDF imagen escaneada sin OCR), devuelve vacío.
+Esa información se considera "vacío legítimo" — no se invierte tiempo en OCR
+incierto que produce ruido.
 """
 
-import gc
+from __future__ import annotations
+
 import logging
 import os
-import re
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-logger = logging.getLogger("tutelas.normalizer")
+# Permitir imágenes muy grandes (escaneados jurídicos)
+try:
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+except Exception:
+    pass
 
-logging.getLogger("ppocr").setLevel(logging.WARNING)
-logging.getLogger("paddle").setLevel(logging.WARNING)
+logger = logging.getLogger("tutelas.normalizer")
 
 
 @dataclass
 class NormalizationResult:
     text: str
-    method: str = "legacy"
+    method: str = "pymupdf"
     pages: int = 0
     has_ocr_pages: bool = False
     error: str | None = None
     markdown: bool = False
 
 
-# ---------------------------------------------------------------------------
-# Lazy singletons (thread-safe initialization)
-# ---------------------------------------------------------------------------
-import threading
-_singleton_lock = threading.Lock()
-_pdftext_available: bool | None = None
-_marker_converter = None
-_paddle_ocr = None
-
-
-def _check_pdftext() -> bool:
-    global _pdftext_available
-    if _pdftext_available is not None:
-        return _pdftext_available
+def _extract_pdf_pymupdf(file_path: Path) -> NormalizationResult:
+    """Extrae texto de PDF usando pymupdf (PyMuPDF/fitz). Único motor."""
     try:
-        from pdftext.extraction import plain_text_output  # noqa: F401
-        _pdftext_available = True
-        logger.info("pdftext disponible")
-    except ImportError:
-        _pdftext_available = False
-    return _pdftext_available
+        import pymupdf
+    except ImportError as e:
+        return NormalizationResult(text="", error=f"pymupdf no instalado: {e}")
 
+    try:
+        doc = pymupdf.open(str(file_path))
+        text_parts = []
+        n = doc.page_count
+        for i in range(n):
+            text_parts.append(doc[i].get_text())
+        doc.close()
+        text = "\n".join(text_parts)
+        return NormalizationResult(text=text, method="pymupdf", pages=n)
+    except Exception as e:
+        logger.warning("pymupdf falló en %s: %s", file_path.name, str(e)[:100])
+        return NormalizationResult(text="", error=str(e)[:200], method="pymupdf_error")
 
-def _get_marker_converter():
-    global _marker_converter
-    if _marker_converter is not None:
-        return _marker_converter
-    with _singleton_lock:
-        if _marker_converter is not None:
-            return _marker_converter
-        try:
-            from marker.converters.pdf import PdfConverter
-            from marker.models import create_model_dict
-
-            artifact_dict = create_model_dict(device="cpu")
-            _marker_converter = PdfConverter(
-                artifact_dict=artifact_dict,
-                config={"output_format": "markdown", "languages": ["es", "en"]},
-            )
-            logger.info("Marker PDF converter inicializado (CPU)")
-            return _marker_converter
-        except Exception as e:
-            logger.warning(f"No se pudo inicializar Marker: {e}")
-            return None
-
-
-def _get_paddle_ocr():
-    global _paddle_ocr
-    if _paddle_ocr is not None:
-        return _paddle_ocr
-    with _singleton_lock:
-        if _paddle_ocr is not None:
-            return _paddle_ocr
-        try:
-            os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
-            from paddleocr import PaddleOCR
-            _paddle_ocr = PaddleOCR(use_angle_cls=True, lang="es", use_gpu=False, show_log=False)
-            logger.info("PaddleOCR inicializado (CPU, espanol)")
-            return _paddle_ocr
-        except Exception as e:
-            logger.warning(f"No se pudo inicializar PaddleOCR: {e}")
-            return None
-
-
-# ---------------------------------------------------------------------------
-# Normalizadores por tipo
-# ---------------------------------------------------------------------------
 
 def normalize_pdf(file_path: str | Path) -> NormalizationResult:
-    """PDF: cascada tier 1 → 2 → 3.
-
-    v6.0.1: gate de tamaño — para PDFs >20MB se salta pdftext (pdfium ha
-    demostrado abortar con SIGTRAP en PDFs pesados/mal formados, tumbando
-    el proceso sin traceback). Va directo a lightweight OCR con fitz.
-    """
+    """Extrae texto de PDF. Solo pymupdf (sin fallback)."""
     file_path = Path(file_path)
     if not file_path.exists():
         return NormalizationResult(text="", error=f"Archivo no existe: {file_path}")
-
-    # v6.0.1: gate de tamaño antes de tocar pdftext/pdfium
-    try:
-        size_mb = file_path.stat().st_size / (1024 * 1024)
-    except OSError:
-        size_mb = 0
-    if size_mb > 20:
-        logger.info(f"PDF >20MB ({size_mb:.1f}MB), saltando pdftext y usando lightweight: {file_path.name}")
-        return normalize_pdf_lightweight(file_path)
-
-    # Tier 1: pdftext
-    if _check_pdftext():
-        result = _extract_with_pdftext(file_path)
-        if result.text.strip() and len(result.text.strip()) >= 50:
-            if result.has_ocr_pages:
-                result = _supplement_with_ocr(result, file_path)
-            return result
-        # pdftext fallo (escaneado): OCR page-by-page (auto-lightweight para PDFs pesados)
-        if result.has_ocr_pages:
-            ocr_result = _ocr_full_pdf(file_path)
-            if ocr_result.text.strip() and len(ocr_result.text.strip()) >= 20:
-                return ocr_result
-
-    # Tier 2: Marker (solo si habilitado en config)
-    try:
-        from backend.core.settings import settings
-        if settings.NORMALIZER_USE_MARKER:
-            result = _extract_with_marker(file_path)
-            if result.text.strip() and len(result.text.strip()) >= 20:
-                return result
-    except Exception:
-        pass
-
-    # Tier 3: legacy
-    return _legacy_pdf(file_path)
+    return _extract_pdf_pymupdf(file_path)
 
 
 def normalize_image(file_path: str | Path) -> NormalizationResult:
-    """Imagen (screenshot, scan): PaddleOCR → Tesseract."""
-    file_path = Path(file_path)
-    if not file_path.exists():
-        return NormalizationResult(text="", error=f"Archivo no existe: {file_path}")
+    """Imágenes (PNG/JPG): NO se procesan en versión minimalista.
 
-    try:
-        from backend.core.settings import settings
-        use_paddle = settings.NORMALIZER_USE_PADDLEOCR
-    except Exception:
-        use_paddle = True
-
-    if use_paddle:
-        ocr = _get_paddle_ocr()
-        if ocr:
-            try:
-                result = ocr.ocr(str(file_path), cls=True)
-                lines = _paddle_result_to_lines(result)
-                if lines:
-                    return NormalizationResult(
-                        text="\n".join(lines), method="paddleocr",
-                        pages=1, has_ocr_pages=True,
-                    )
-            except Exception as e:
-                logger.warning(f"PaddleOCR fallo para {file_path.name}: {e}")
-
-    # Fallback: Tesseract
-    try:
-        from backend.extraction.ocr_extractor import extract_image_ocr
-        result = extract_image_ocr(file_path)
-        return NormalizationResult(text=result.text, method="tesseract", pages=1, has_ocr_pages=True)
-    except Exception:
-        return NormalizationResult(text="", error="No OCR disponible")
+    Si necesitas OCR de imágenes, instala paddleocr+gpu y reactiva la
+    funcionalidad. Para producción jurídica el 99% de docs son PDFs.
+    """
+    return NormalizationResult(
+        text="", method="not_supported_minimal",
+        error="OCR de imágenes deshabilitado en versión minimalista",
+    )
 
 
 def normalize_docx(file_path: str | Path) -> NormalizationResult:
-    """DOCX: usa python-docx (preserva footers con abogado). NUNCA Marker."""
+    """DOCX: usa python-docx (preserva footers con abogado responsable)."""
     from backend.extraction.docx_extractor import extract_docx
+    file_path = Path(file_path)
     result = extract_docx(file_path)
     if result.error:
         return NormalizationResult(text="", error=result.error)
@@ -193,439 +85,33 @@ def normalize_docx(file_path: str | Path) -> NormalizationResult:
 
 
 def normalize_doc(file_path: str | Path) -> NormalizationResult:
-    """DOC legacy: usa extractor existente."""
+    """DOC (formato viejo Word): usa doc_extractor con antiword/olefile."""
     from backend.extraction.doc_extractor import extract_doc
+    file_path = Path(file_path)
     result = extract_doc(file_path)
     if result.error:
         return NormalizationResult(text="", error=result.error)
     return NormalizationResult(text=result.text, method=f"doc_{result.method}", pages=1)
 
 
-# ---------------------------------------------------------------------------
-# Punto de entrada unico
-# ---------------------------------------------------------------------------
-
-def normalize_document(file_path: str | Path, *, lightweight: bool = False) -> NormalizationResult:
-    """Normaliza cualquier tipo de documento. Fallback a legacy si falla.
-
-    Args:
-        file_path: Ruta al documento.
-        lightweight: Si True, usa OCR a DPI minimo (72) y max 3 paginas.
-            Ideal para PDFs escaneados pesados en entornos con poca RAM (WSL2).
-    """
+def normalize_document(file_path: str | Path) -> NormalizationResult:
+    """Dispatcher por extensión. Soporta PDF, DOCX, DOC, MD."""
     file_path = Path(file_path)
     ext = file_path.suffix.lower()
 
     if ext == ".pdf":
-        if lightweight:
-            return normalize_pdf_lightweight(file_path)
         return normalize_pdf(file_path)
-    elif ext == ".docx":
+    if ext == ".docx":
         return normalize_docx(file_path)
-    elif ext == ".doc":
+    if ext == ".doc":
         return normalize_doc(file_path)
-    elif ext in (".png", ".jpg", ".jpeg", ".bmp", ".gif"):
-        return normalize_image(file_path)
-    elif ext == ".md":
+    if ext == ".md":
         try:
             text = file_path.read_text(encoding="utf-8", errors="replace")
             return NormalizationResult(text=text, method="markdown", pages=1, markdown=True)
         except Exception as e:
-            return NormalizationResult(text="", error=str(e))
-    return NormalizationResult(text="", method="unsupported", error=f"Formato no soportado: {ext}")
-
-
-def normalize_pdf_lightweight(file_path: str | Path) -> NormalizationResult:
-    """PDF escaneado pesado: fitz text → OCR page-by-page a DPI 72, max 3 paginas.
-
-    Diseñado para PDFs de 4-20MB que causan OOM con el pipeline normal.
-    No usa Marker ni pdftext — va directo a fitz + PaddleOCR ligero.
-    """
-    file_path = Path(file_path)
-    if not file_path.exists():
-        return NormalizationResult(text="", error=f"Archivo no existe: {file_path}")
-
-    # Intentar texto nativo con fitz primero (gratis en RAM)
-    try:
-        import fitz
-        doc = fitz.open(str(file_path))
-        pages_text = []
-        for i in range(min(5, doc.page_count)):
-            text = doc[i].get_text("text")
-            if text.strip():
-                pages_text.append(f"--- PAGINA {i + 1} ---\n{text.strip()}")
-        doc.close()
-        combined = "\n\n".join(pages_text).strip()
-        if len(combined) >= 50:
-            return NormalizationResult(
-                text=combined, method="fitz_text_lightweight",
-                pages=len(pages_text), has_ocr_pages=False,
-            )
-    except Exception:
-        pass
-
-    # OCR ligero: DPI 72, max 3 paginas, gc entre cada una
-    return _ocr_full_pdf(file_path, lightweight=True)
-
-
-# ---------------------------------------------------------------------------
-# Funciones internas por tier
-# ---------------------------------------------------------------------------
-
-def _extract_with_pdftext(file_path: Path) -> NormalizationResult:
-    """Tier 1: pdftext — rapido, sin modelos.
-
-    v6.0.1: ejecutado en subprocess aislado porque pdfium ha demostrado
-    abortar con SIGTRAP en PDFs mal formados, tumbando el proceso padre.
-    El subprocess también aplica timeout de 120s contra cuelgues.
-    """
-    import subprocess
-    import sys
-
-    runner_code = (
-        "import sys, json\n"
-        "from pdftext.extraction import paginated_plain_text_output\n"
-        "try:\n"
-        "    pages = paginated_plain_text_output(sys.argv[1])\n"
-        "    print(json.dumps({'ok': True, 'pages': pages}))\n"
-        "except Exception as e:\n"
-        "    print(json.dumps({'ok': False, 'error': str(e)[:200]}))\n"
-    )
-
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", runner_code, str(file_path)],
-            capture_output=True, text=True, timeout=120,
-        )
-    except subprocess.TimeoutExpired:
-        return NormalizationResult(text="", error="pdftext timeout 120s", has_ocr_pages=True)
-    except Exception as e:
-        return NormalizationResult(text="", error=f"pdftext subprocess error: {e}")
-
-    # returncode != 0 o stdout vacío: pdfium abortó (SIGTRAP/SIGSEGV)
-    if proc.returncode != 0 or not proc.stdout.strip():
-        stderr_tail = (proc.stderr or "").strip()[-200:]
-        return NormalizationResult(
-            text="", error=f"pdftext aborted (rc={proc.returncode}): {stderr_tail}",
-            has_ocr_pages=True,  # fallback a OCR
-        )
-
-    import json as _json
-    try:
-        data = _json.loads(proc.stdout.splitlines()[-1])
-    except Exception:
-        return NormalizationResult(text="", error="pdftext JSON parse error", has_ocr_pages=True)
-
-    if not data.get("ok"):
-        return NormalizationResult(text="", error=f"pdftext fallo: {data.get('error','?')}")
-
-    pages = data.get("pages") or []
-    if not pages:
-        return NormalizationResult(text="", error="pdftext: sin paginas")
-
-    all_parts = []
-    scanned_count = 0
-    for i, page_text in enumerate(pages):
-        if len(page_text.strip()) < 50:
-            scanned_count += 1
-        all_parts.append(f"--- PAGINA {i + 1} ---\n{page_text}")
-
-    text = "\n\n".join(all_parts)
-    has_scanned = scanned_count > 0
-
-    # Si mas de la mitad son escaneadas, necesita OCR completo
-    if scanned_count > len(pages) / 2:
-        return NormalizationResult(
-            text="", error="PDF mayormente escaneado",
-            pages=len(pages), has_ocr_pages=True,
-        )
-
-    return NormalizationResult(
-        text=text, method="pdftext", pages=len(pages), has_ocr_pages=has_scanned,
-    )
-
-
-def _extract_with_marker(file_path: Path) -> NormalizationResult:
-    """Tier 2: Marker — mejor calidad con layout. Requiere modelos (~2GB)."""
-    converter = _get_marker_converter()
-    if not converter:
-        return NormalizationResult(text="", error="Marker no disponible")
-    try:
-        rendered = converter(str(file_path))
-        md_text = rendered.markdown if hasattr(rendered, "markdown") else str(rendered)
-        if md_text and len(md_text.strip()) >= 20:
-            return NormalizationResult(
-                text=_clean_markdown(md_text), method="marker",
-                pages=getattr(converter, "page_count", 0) or 0,
-                markdown=True,
-            )
-        return NormalizationResult(text="", error="Marker: texto vacio")
-    except Exception as e:
-        logger.warning(f"Marker fallo para {file_path.name}: {e}")
-        return NormalizationResult(text="", error=str(e))
-
-
-def _legacy_pdf(file_path: Path) -> NormalizationResult:
-    """Tier 3: pdfplumber + Tesseract (extractores originales)."""
-    from backend.extraction.pdf_extractor import extract_pdf
-    from backend.extraction.ocr_extractor import extract_pdf_ocr, is_tesseract_available
-
-    result = extract_pdf(file_path)
-    text = result.text
-    method = result.method
-
-    if result.has_scanned_pages and is_tesseract_available():
-        ocr_result = extract_pdf_ocr(file_path)
-        if ocr_result.text.strip():
-            text += "\n\n[OCR COMPLEMENTARIO]\n" + ocr_result.text
-            method = "pdfplumber+tesseract"
-
-    return NormalizationResult(
-        text=text, method=f"legacy_{method}",
-        pages=result.page_count, has_ocr_pages=result.has_scanned_pages,
-    )
-
-
-def _ocr_full_pdf(file_path: Path, lightweight: bool = False) -> NormalizationResult:
-    """OCR de PDF escaneado: renderiza pagina por pagina con fitz + PaddleOCR.
-
-    Modo normal:  DPI 150, max 10 paginas (buen balance calidad/RAM).
-    Modo ligero:  DPI 72, max 3 paginas (para PDFs pesados, previene OOM).
-    Fallback:     PaddleOCR directo sobre el archivo (legacy).
-
-    Args:
-        file_path: Ruta al PDF.
-        lightweight: Si True, usa DPI minimo y menos paginas para evitar OOM.
-    """
-    try:
-        from backend.core.settings import settings
-        use_paddle = settings.NORMALIZER_USE_PADDLEOCR
-    except Exception:
-        use_paddle = True
-
-    dpi = 72 if lightweight else 150
-    max_pages = 3 if lightweight else 10
-    file_size_mb = file_path.stat().st_size / (1024 * 1024)
-
-    # Auto-lightweight: PDFs >8MB o >20 paginas fuerzan modo ligero
-    if not lightweight and file_size_mb > 8:
-        lightweight = True
-        dpi = 72
-        max_pages = 3
-        logger.info(f"Auto-lightweight para {file_path.name} ({file_size_mb:.1f}MB)")
-
-    if use_paddle:
-        ocr = _get_paddle_ocr()
-        if ocr:
-            result = _ocr_pdf_page_by_page(file_path, ocr, dpi=dpi, max_pages=max_pages)
-            if result.text.strip() and len(result.text.strip()) >= 20:
-                return result
-            # Si page-by-page fallo y no es lightweight, intentar directo como ultimo recurso
-            if not lightweight:
-                try:
-                    direct_result = ocr.ocr(str(file_path), cls=True)
-                    all_pages = []
-                    page_count = 0
-                    if direct_result:
-                        for page_idx, page_data in enumerate(direct_result):
-                            page_count += 1
-                            lines = _paddle_result_to_lines([page_data]) if page_data else []
-                            if lines:
-                                all_pages.append(f"--- PAGINA {page_idx + 1} (OCR) ---\n" + "\n".join(lines))
-                    if all_pages:
-                        return NormalizationResult(
-                            text="\n\n".join(all_pages), method="paddleocr_direct",
-                            pages=page_count, has_ocr_pages=True,
-                        )
-                except Exception as e:
-                    logger.warning(f"PaddleOCR directo fallo para {file_path.name}: {e}")
-
-    # Fallback: Tesseract
-    try:
-        from backend.extraction.ocr_extractor import extract_pdf_ocr, is_tesseract_available
-        if is_tesseract_available():
-            ocr_result = extract_pdf_ocr(file_path)
-            if ocr_result.text.strip():
-                return NormalizationResult(
-                    text=ocr_result.text, method="tesseract",
-                    pages=ocr_result.page_count, has_ocr_pages=True,
-                )
-    except Exception:
-        pass
-
-    return NormalizationResult(text="", error="OCR no disponible", has_ocr_pages=True)
-
-
-def _ocr_pdf_page_by_page(
-    file_path: Path, ocr, *, dpi: int = 150, max_pages: int = 10
-) -> NormalizationResult:
-    """Renderiza cada pagina como imagen con fitz y aplica PaddleOCR.
-
-    Procesa secuencialmente con gc.collect() entre paginas para evitar OOM.
-    Mucho mas eficiente en RAM que pasar el PDF entero a PaddleOCR.
-    """
-    try:
-        import fitz
-    except ImportError:
-        return NormalizationResult(text="", error="fitz (PyMuPDF) no disponible", has_ocr_pages=True)
-
-    all_pages = []
-    page_count = 0
-
-    try:
-        doc = fitz.open(str(file_path))
-        total = min(doc.page_count, max_pages)
-
-        for i in range(total):
-            page = doc[i]
-            mat = fitz.Matrix(dpi / 72, dpi / 72)
-            pix = page.get_pixmap(matrix=mat)
-            img_bytes = pix.tobytes("png")
-            pix = None
-            gc.collect()
-
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                f.write(img_bytes)
-                tmp_path = f.name
-            img_bytes = None
-            gc.collect()
-
-            try:
-                result = ocr.ocr(tmp_path, cls=True)
-                lines = _paddle_result_to_lines(result) if result else []
-                if lines:
-                    all_pages.append(f"--- PAGINA {i + 1} (OCR) ---\n" + "\n".join(lines))
-                page_count += 1
-            except Exception as e:
-                logger.warning(f"OCR pagina {i+1} fallo en {file_path.name}: {e}")
-            finally:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-                gc.collect()
-
-        doc.close()
-    except Exception as e:
-        logger.error(f"fitz fallo para {file_path.name}: {e}")
-        return NormalizationResult(text="", error=str(e), has_ocr_pages=True)
-
-    if all_pages:
-        method = f"paddleocr_paged_{dpi}dpi"
-        return NormalizationResult(
-            text="\n\n".join(all_pages), method=method,
-            pages=page_count, has_ocr_pages=True,
-        )
-
-    return NormalizationResult(text="", error="OCR page-by-page sin texto", has_ocr_pages=True)
-
-
-def _supplement_with_ocr(result: NormalizationResult, file_path: Path) -> NormalizationResult:
-    """Complementar resultado con OCR para paginas escaneadas."""
-    try:
-        from backend.core.settings import settings
-        use_paddle = settings.NORMALIZER_USE_PADDLEOCR
-    except Exception:
-        use_paddle = True
-
-    if use_paddle:
-        ocr = _get_paddle_ocr()
-        if ocr:
-            try:
-                ocr_result = ocr.ocr(str(file_path), cls=True)
-                lines = _paddle_result_to_lines(ocr_result)
-                if lines:
-                    result.text += "\n\n[OCR COMPLEMENTARIO - PaddleOCR]\n" + "\n".join(lines)
-                    result.method += "+paddleocr"
-                    return result
-            except Exception:
-                pass
-
-    # Fallback: Tesseract
-    try:
-        from backend.extraction.ocr_extractor import extract_pdf_ocr, is_tesseract_available
-        if is_tesseract_available():
-            ocr_result = extract_pdf_ocr(file_path)
-            if ocr_result.text.strip():
-                result.text += "\n\n[OCR COMPLEMENTARIO - Tesseract]\n" + ocr_result.text
-                result.method += "+tesseract"
-    except Exception:
-        pass
-
-    return result
-
-
-def _paddle_result_to_lines(result) -> list[str]:
-    """Convertir resultado PaddleOCR a lista de lineas de texto."""
-    lines = []
-    if not result:
-        return lines
-    for page_data in result:
-        if not page_data:
-            continue
-        for line_data in page_data:
-            if line_data and len(line_data) >= 2:
-                text = line_data[1][0] if isinstance(line_data[1], (list, tuple)) else str(line_data[1])
-                lines.append(text)
-    return lines
-
-
-def _clean_markdown(text: str) -> str:
-    """Limpiar artefactos del Markdown generado por Marker."""
-    text = re.sub(r"!\[.*?\]\(data:image/[^)]+\)", "[IMAGEN]", text)
-    text = re.sub(r"\n{4,}", "\n\n\n", text)
-    text = re.sub(r"^\s+$", "", text, flags=re.MULTILINE)
-    return text.strip()
-
-
-# ---------------------------------------------------------------------------
-# Status check
-# ---------------------------------------------------------------------------
-
-def check_normalizer_status() -> dict:
-    """Estado de componentes del normalizer. Para /api/health/normalizer."""
-    try:
-        from backend.core.settings import settings
-        enabled = settings.NORMALIZER_ENABLED
-        marker_enabled = settings.NORMALIZER_USE_MARKER
-        paddle_enabled = settings.NORMALIZER_USE_PADDLEOCR
-    except Exception:
-        enabled = marker_enabled = paddle_enabled = False
-
-    status = {
-        "normalizer_enabled": enabled,
-        "marker_config_enabled": marker_enabled,
-        "paddleocr_config_enabled": paddle_enabled,
-        "pdftext_available": False,
-        "marker_available": False,
-        "marker_models_loaded": _marker_converter is not None,
-        "paddleocr_available": False,
-        "paddleocr_loaded": _paddle_ocr is not None,
-        "tesseract_available": False,
-    }
-
-    try:
-        from pdftext.extraction import plain_text_output  # noqa: F401
-        status["pdftext_available"] = True
-    except ImportError:
-        pass
-
-    try:
-        from marker.converters.pdf import PdfConverter  # noqa: F401
-        status["marker_available"] = True
-    except ImportError:
-        pass
-
-    try:
-        from paddleocr import PaddleOCR  # noqa: F401
-        status["paddleocr_available"] = True
-    except ImportError:
-        pass
-
-    try:
-        from backend.extraction.ocr_extractor import is_tesseract_available
-        status["tesseract_available"] = is_tesseract_available()
-    except Exception:
-        pass
-
-    return status
+            return NormalizationResult(text="", error=str(e)[:200])
+    if ext in (".png", ".jpg", ".jpeg"):
+        return normalize_image(file_path)
+
+    return NormalizationResult(text="", error=f"Formato no soportado: {ext}")

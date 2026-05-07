@@ -205,6 +205,50 @@ def _detect_minor(text: str, accionante_name: str) -> list[Actor]:
     return actors
 
 
+_BAD_ACCIONADO_STARTS = (
+    "REFIERE", "DICTORIO", "CTUAL", "MENCIONA", "INDICA", "SEÑALA", "MANIFIESTA",
+    "EXPRESA", "PRESENTA ", "EFECTÚA", "SOLICITA", "REMITE", "OBSERVA",
+    "EL ", "LA ", "QUE ", "CUAL ", "POR ", "EN ", "COMO ", "DESDE ", "PARA ",
+    "PROFESIONAL ", "TELÉFONO", "TELETONO", "DIRECCIÓN", "SERVICIO ",
+    "NOMBRE ", "REPRESENTANTE", "TÉRMINO", "RESPECTO ", "MEDIANTE ",
+)
+_INST_KEYWORDS = (
+    "SECRETARÍA", "SECRETARIA", "GOBERNACIÓN", "GOBERNACION", "MINISTERIO",
+    "ALCALDÍA", "ALCALDIA", "EPS", "IPS", "ESE", "FOMAG", "FONDO", "INSTITUTO",
+    "UNIVERSIDAD", "JUZGADO", "FIDUCIARIA", "CORPORACIÓN", "CORPORACION",
+    "FUNDACIÓN", "FUNDACION", "ASOCIACIÓN", "ASOCIACION", "COMISIÓN", "COMISION",
+    "PROCURADURÍA", "PROCURADURIA", "DEFENSORÍA", "DEFENSORIA", "PERSONERÍA",
+    "PERSONERIA", "CONTRALORÍA", "CONTRALORIA", "AGENCIA", "DEPARTAMENTO",
+    "REGIONAL", "NACIONAL", "TERRITORIAL", "DIRECCIÓN", "DIRECCION", "ICBF",
+    "MINEDUCACIÓN", "MINSALUD", "DIAN", "DAF", "INPEC", "SAS", "S.A.S",
+    "S.A.", "LTDA", "ARL", "AFP",
+)
+
+
+def _is_valid_accionado(name: str) -> bool:
+    """v6.1.1: filtra fragmentos de prosa que el regex confunde con instituciones.
+
+    Rechaza:
+      - Strings que empiezan con verbos/conectores típicos de oraciones
+      - Strings sin keyword institucional ni estructura "X DE Y"
+    """
+    if not name:
+        return False
+    n = name.strip()
+    if len(n) < 6:
+        return False
+    n_up = n.upper()
+    for bad in _BAD_ACCIONADO_STARTS:
+        if n_up.startswith(bad):
+            return False
+    if any(k in n_up for k in _INST_KEYWORDS):
+        return True
+    # Aceptar formato "PALABRA + DE/DEL + PALABRA" (ej: "MUNICIPIO DE FLORIDABLANCA")
+    if re.search(r"\b[A-ZÑÁÉÍÓÚ]{3,}\s+(?:DE|DEL)\s+[A-ZÑÁÉÍÓÚ]{3,}", n_up):
+        return True
+    return False
+
+
 def extract_actors(text: str, zones: DocZones | None = None) -> ActorSet:
     """Extrae el conjunto de actores del documento con sus roles.
 
@@ -213,10 +257,27 @@ def extract_actors(text: str, zones: DocZones | None = None) -> ActorSet:
     2. Si no hay, buscar patrones narrativos ("interpuesta por X contra Y").
     3. Detectar menores por vínculo ("agente oficiosa de su hija <NOMBRE>").
     4. Fallback: primer nombre propio en zona "admite" ≈ accionante.
+
+    v8.1: distinguir firmante vs accionante. En oficios firmados por
+    alcaldes/personeros/secretarias, el firmante es REPRESENTANTE de la
+    entidad accionada, NO el accionante. Hallazgo de auditoría 2026-05-06:
+    24.6% de cases tenían el accionante mal extraído por confusión
+    firmante↔accionante (ej: case 119 CIELO DÍAZ era alcaldesa, no accionante).
     """
     result = ActorSet()
     if not text:
         return result
+
+    # v8.1: extraer firmantes (al final del documento, después de "Atentamente")
+    # para excluirlos del accionante. Patrón típico de oficio:
+    #   "Atentamente,\n\nNOMBRE PERSONA\nAlcalde/Personera/Secretaria..."
+    firmante_names: set[str] = set()
+    for m in re.finditer(
+        r"(?:Atentamente|Cordialmente|Cordial saludo)[\s,\.]*\n+\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]{6,60})\s*\n+\s*"
+        r"(?:Alcalde|Alcaldesa|Personero|Personera|Secretari[oa]|Director[a]?|Rector[a]?|Gobernador[a]?)",
+        text, re.IGNORECASE,
+    ):
+        firmante_names.add(_clean_name(m.group(1)))
 
     # 1. Patrones narrativos para accionante
     accionante_patterns = [
@@ -231,11 +292,12 @@ def extract_actors(text: str, zones: DocZones | None = None) -> ActorSet:
         m = pat.search(text)
         if m:
             acc_name = _clean_name(m.group(1))
-            if acc_name and len(acc_name) > 5:
+            if acc_name and len(acc_name) > 5 and acc_name not in firmante_names:
                 result.accionantes.append(Actor(role="ACCIONANTE", name=acc_name, confidence=0.85, source_zone="admite"))
                 break
 
     # 1b. Patrón "contra X - Y - Z" (accionados) separado
+    # (helper validador definido a nivel de módulo: _is_valid_accionado)
     m = re.search(
         r"(?:contra|dem[áa]ndase\s+a|dese\s+traslado\s+al?\s+(?:representante\s+legal\s+de\s+)?(?:la\s+|el\s+)?)"
         r"([A-ZÁÉÍÓÚ][A-ZÁÉÍÓÚ\s\-]+?)(?:\.|,\s+por|,\s+respecto|\s+y\s+|\s*$)",
@@ -243,7 +305,7 @@ def extract_actors(text: str, zones: DocZones | None = None) -> ActorSet:
     )
     if m:
         for inst in _split_institutions(m.group(1)):
-            if len(inst) >= 4 and not any(a.name == inst for a in result.accionados):
+            if len(inst) >= 4 and _is_valid_accionado(inst) and not any(a.name == inst for a in result.accionados):
                 result.accionados.append(Actor(role="ACCIONADO", name=inst, confidence=0.7))
 
     # 1c. Vinculados: múltiples patrones
@@ -289,11 +351,11 @@ def extract_actors(text: str, zones: DocZones | None = None) -> ActorSet:
             raw_name = m.group(1)
             if role == "ACCIONADO":
                 for inst in _split_institutions(raw_name):
-                    if not any(a.name == inst for a in result.accionados):
+                    if _is_valid_accionado(inst) and not any(a.name == inst for a in result.accionados):
                         result.accionados.append(Actor(role=role, name=inst, confidence=0.8))
             elif role == "VINCULADO":
                 for inst in _split_institutions(raw_name):
-                    if not any(a.name == inst for a in result.vinculados):
+                    if _is_valid_accionado(inst) and not any(a.name == inst for a in result.vinculados):
                         result.vinculados.append(Actor(role=role, name=inst, confidence=0.75))
             elif role == "ACCIONANTE":
                 name = _clean_name(raw_name)

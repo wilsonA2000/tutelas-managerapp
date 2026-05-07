@@ -349,6 +349,11 @@ def _apply_cognitive_rules(case, doc_ir, ids: IdentifierSet,
     fn_digits = _norm_digits(filename)
     fn_norm = _norm_text(filename)
 
+    # v8.1: filename con sufijo _moved/_relocated/_copia indica copia residual.
+    # No se penaliza, pero los LR del filename se reducen para que no domine.
+    fn_is_residual = bool(re.search(r"_(moved|relocated|copia|copy|audit)\d*", filename, re.IGNORECASE))
+    fn_weight = 0.5 if fn_is_residual else 1.0
+
     # ---- R3: filename contiene rad23 EXACTO del caso ----
     if case_rad23_norm and len(case_rad23_norm) >= 18 and case_rad23_norm[:20] in fn_digits:
         evidence.add("filename_case_rad23", LR_FILENAME_HAS_CASE_RAD23,
@@ -580,6 +585,40 @@ def _apply_cognitive_rules(case, doc_ir, ids: IdentifierSet,
                 _sess.close()
         except Exception:
             pass
+
+    # ---- R12 (v8.1): validación bidireccional rad23 doc vs case ----
+    # Si en el doc se detectó un rad23 que NO coincide con el del case y SÍ pertenece
+    # a OTRO case existente, marcar reasignación / SOSPECHOSO.
+    # Hallazgo de auditoría 2026-05-06: 46.5% de carpetas tenían docs mezclados.
+    if case_rad23_norm and full_text and not target_case_id:
+        rad23_in_doc = re.findall(r"\d{18,23}", full_text[:8000])
+        for raw in rad23_in_doc[:5]:
+            other_norm = _norm_digits(raw)
+            if len(other_norm) < 18 or other_norm[:20] == case_rad23_norm[:20]:
+                continue
+            try:
+                from backend.database.database import SessionLocal
+                from backend.database.models import Case as _Case
+                _sess = SessionLocal()
+                try:
+                    other = _sess.query(_Case).filter(
+                        _Case.processing_status == "COMPLETO"
+                    ).all()
+                    for oc in other:
+                        ocn = _norm_digits(oc.radicado_23_digitos or "")
+                        if len(ocn) >= 18 and ocn[:20] == other_norm[:20] and oc.id != getattr(case, "id", None):
+                            reasons_against.append(
+                                f"R12: doc menciona rad23 de case {oc.id} (pertenece a otro expediente)"
+                            )
+                            target_case_id = oc.id
+                            target_evidence = f"R12_rad23_match:{ocn[:20]}"
+                            break
+                finally:
+                    _sess.close()
+            except Exception:
+                pass
+            if target_case_id:
+                break
 
     return target_case_id, target_evidence
 
