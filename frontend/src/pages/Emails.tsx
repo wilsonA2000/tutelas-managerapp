@@ -7,7 +7,7 @@ import {
   Paperclip, ChevronLeft, X, User,
   Calendar, ArrowRight, FileText, Package,
 } from 'lucide-react'
-import { getEmails, getEmail, checkInbox, getGmailStats, syncAllEmails, getEmailPackage } from '../services/api'
+import { getEmails, getEmail, checkInbox, getGmailStats, getEmailPackage } from '../services/api'
 import { useNavigate } from 'react-router-dom'
 import PageHeader from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
@@ -118,21 +118,6 @@ export default function Emails() {
     onError: () => toast.error('Error al iniciar revision'),
   })
 
-  const syncMutation = useMutation({
-    mutationFn: syncAllEmails,
-    onSuccess: (data) => {
-      if (data.status === 'started') {
-        toast.success('Sincronización completa iniciada...')
-        setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 10000)
-        setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 30000)
-        setTimeout(() => { qc.invalidateQueries({ queryKey: ['emails'] }); qc.invalidateQueries({ queryKey: ['gmail-stats'] }) }, 60000)
-      } else if (data.status === 'running') {
-        toast('Ya hay una sincronizacion en progreso', { icon: '\u2139\uFE0F' })
-      }
-    },
-    onError: () => toast.error('Error al iniciar sincronizacion'),
-  })
-
   const emails: EmailItem[] = emailsQ.data?.items ?? []
   const total = emailsQ.data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / 30))
@@ -165,20 +150,6 @@ export default function Emails() {
 
   const headerActions = (
     <div className="flex items-center gap-2">
-      {gmailStatsQ.data?.faltan > 0 && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => syncMutation.mutate()}
-          disabled={syncMutation.isPending}
-          className="border-amber-300 text-amber-700 hover:bg-amber-50 hover:text-amber-800"
-        >
-          {syncMutation.isPending
-            ? <Loader2 size={14} className="animate-spin mr-1.5" />
-            : <RefreshCw size={14} className="mr-1.5" />}
-          {syncMutation.isPending ? 'Sincronizando...' : `Sync ${gmailStatsQ.data.faltan} faltantes`}
-        </Button>
-      )}
       <Button
         size="sm"
         onClick={() => checkMutation.mutate()}
@@ -187,7 +158,7 @@ export default function Emails() {
         {checkMutation.isPending
           ? <Loader2 size={14} className="animate-spin mr-1.5" />
           : <Inbox size={14} className="mr-1.5" />}
-        {checkMutation.isPending ? 'Revisando...' : 'Revisar Bandeja'}
+        {checkMutation.isPending ? 'Sincronizando...' : 'Sincronizar Bandeja'}
       </Button>
     </div>
   )

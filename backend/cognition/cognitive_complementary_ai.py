@@ -180,10 +180,15 @@ def fill_missing_fields_with_ia(db, case, full_text: str) -> dict:
     """Fase 6.5: invoca LLM local para llenar campos faltantes aplicables.
 
     No-op si LLM_LOCAL_PRIMARY != true o no hay campos faltantes/texto.
-    Retorna dict con stats: {missing, filled, tokens}.
+    Retorna dict con stats: {missing, filled, tokens, focused_filled}.
 
     v8.1: si `db` está disponible, reordena el texto por autoridad de docs
     (JUDICIAL primero) antes de pasarlo al LLM.
+
+    v8.3: para los 5 campos críticos (quien_impugno, fecha_apertura_incidente,
+    responsable_desacato, juzgado_2nd, sentido_fallo_2nd) usa primero
+    `focused_field_extractors` con prompts ultra-específicos + guards
+    (enum, regex, cita literal). Solo cae al prompt genérico para el resto.
     """
     if os.getenv("LLM_LOCAL_PRIMARY", "").lower() != "true":
         return {"skipped": "LLM_LOCAL_PRIMARY not enabled"}
@@ -200,6 +205,45 @@ def fill_missing_fields_with_ia(db, case, full_text: str) -> dict:
 
     if not full_text or len(full_text.strip()) < 200:
         return {"missing": len(missing), "filled": 0, "reason": "text_insufficient"}
+
+    # v8.3: pasada focalizada para campos críticos
+    focused_filled = 0
+    focused_field_confidences: dict[str, float] = {}
+    try:
+        from backend.cognition.focused_field_extractors import (
+            FIELD_PROMPTS as _FOCUSED_FIELDS,
+            extract_focused_for_case,
+        )
+        focus_targets = [f for f in missing if f in _FOCUSED_FIELDS]
+        if focus_targets:
+            results = extract_focused_for_case(case, full_text, fields=focus_targets)
+            for fname, res in results.items():
+                if res.value and res.confidence >= 0.5 and not getattr(case, fname, None):
+                    setattr(case, fname, str(res.value)[:500])
+                    focused_field_confidences[fname] = res.confidence
+                    focused_filled += 1
+            if focused_filled:
+                # Persistir en field_confidences_json (sub-key por campo)
+                try:
+                    existing = json.loads(case.field_confidences_json or "{}")
+                except Exception:
+                    existing = {}
+                for fname, conf in focused_field_confidences.items():
+                    existing[fname] = {
+                        "score": conf, "band": "OK" if conf >= 0.85 else "REVISAR",
+                        "evidence": {"source": "focused_llm"},
+                    }
+                case.field_confidences_json = json.dumps(existing, ensure_ascii=False)
+                db.commit()
+                logger.info("V8.3 case=%d focused llenó %d/%d campos críticos",
+                            case.id, focused_filled, len(focus_targets))
+            # Re-evaluar missing (los focalizados ya llenos)
+            missing = _identify_missing_fields(case)
+            if not missing:
+                return {"missing": 0, "filled": focused_filled, "focused_filled": focused_filled}
+    except Exception as e:
+        logger.warning("V8.3 focused fallo case=%d: %s — fallback a prompt genérico",
+                       case.id, str(e)[:100])
 
     system, user = _build_prompt(case, full_text, missing)
 

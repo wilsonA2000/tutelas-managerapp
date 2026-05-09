@@ -132,9 +132,6 @@ export const getCaseEmailPackages = (caseId: number) =>
 export const checkInbox = () =>
   api.post('/emails/check', {}, { timeout: 10000 }).then(r => r.data);
 
-export const syncAllEmails = () =>
-  api.post('/emails/sync', {}, { timeout: 10000 }).then(r => r.data);
-
 export const getGmailStats = () =>
   api.get('/emails/gmail-stats').then(r => r.data);
 

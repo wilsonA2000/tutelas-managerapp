@@ -216,6 +216,105 @@ def compute_by_estado_incidente(cases: list[Case]) -> dict:
     return dict(buckets)
 
 
+def compute_fallo_2nd_distribution(cases: list[Case]) -> list[dict]:
+    """v8.3: distribución sentido_fallo_2nd (segunda instancia)."""
+    buckets: Counter[str] = Counter()
+    for c in cases:
+        s = _norm(c.sentido_fallo_2nd)
+        if not s or s in ("N/A", "NULL", "PENDIENTE"):
+            continue
+        if "CONFIRMA" in s:
+            buckets["CONFIRMA"] += 1
+        elif "REVOCA" in s:
+            buckets["REVOCA"] += 1
+        elif "MODIFICA" in s:
+            buckets["MODIFICA"] += 1
+        elif "INHIBE" in s:
+            buckets["INHIBE"] += 1
+        elif "NULIDAD" in s:
+            buckets["NULIDAD"] += 1
+        else:
+            buckets["OTRO"] += 1
+    total = sum(buckets.values())
+    return [
+        {"sentido": k, "count": v, "pct": round(100 * v / total, 1) if total else 0}
+        for k, v in buckets.most_common()
+    ]
+
+
+def compute_pipeline_funnel(cases: list[Case]) -> list[dict]:
+    """v8.3: funnel ejecutivo de fallos (TUTELA → fallo_1ST → impugnado → fallo_2ND → incidente → cumplido).
+
+    Metafora visual para el Secretario: cuántas tutelas ingresan vs cuántas terminan
+    en sancion/cumplimiento. Cada nivel es un subset estricto del anterior.
+    """
+    total = len(cases)
+    fallo_1 = sum(1 for c in cases if _norm(c.sentido_fallo_1st) and _norm(c.sentido_fallo_1st) not in ("N/A", "PENDIENTE"))
+    impugnados = sum(1 for c in cases if _norm(c.impugnacion).startswith("S"))
+    fallo_2 = sum(1 for c in cases if _norm(c.sentido_fallo_2nd) and _norm(c.sentido_fallo_2nd) not in ("N/A", "PENDIENTE"))
+    incidente = sum(1 for c in cases if _norm(c.incidente).startswith("S"))
+    cumplidos = sum(1 for c in cases if (c.estado_incidente or "").upper() == "CUMPLIDO")
+    return [
+        {"stage": "TUTELA", "label": "Tutelas activas", "count": total, "pct_total": 100.0},
+        {"stage": "FALLO_1ST", "label": "Con fallo 1ª instancia", "count": fallo_1,
+         "pct_total": round(100 * fallo_1 / total, 1) if total else 0},
+        {"stage": "IMPUGNADO", "label": "Impugnadas", "count": impugnados,
+         "pct_total": round(100 * impugnados / total, 1) if total else 0},
+        {"stage": "FALLO_2ND", "label": "Con fallo 2ª instancia", "count": fallo_2,
+         "pct_total": round(100 * fallo_2 / total, 1) if total else 0},
+        {"stage": "INCIDENTE", "label": "Con incidente desacato", "count": incidente,
+         "pct_total": round(100 * incidente / total, 1) if total else 0},
+        {"stage": "CUMPLIDO", "label": "Cumplido / archivado", "count": cumplidos,
+         "pct_total": round(100 * cumplidos / total, 1) if total else 0},
+    ]
+
+
+def compute_compliance_plazos(cases: list[Case], db_session=None) -> dict:
+    """v8.3: plazos de cumplimiento de fallos CONCEDE.
+
+    Detecta cases con fallo CONCEDE/AMPARA donde han pasado >5 días desde
+    fecha_fallo_1st sin cumplimiento registrado (señal de riesgo de incidente
+    de desacato). Reusa heurística de R8 EarlyWarning.
+    """
+    today = datetime.utcnow()
+    concedidas_pendientes = []
+    concedidas_a_tiempo = 0
+    en_sancion = 0
+    apercibimiento = 0
+
+    for c in cases:
+        senso = _norm(c.sentido_fallo_1st)
+        if not ("CONCEDE" in senso or "AMPARA" in senso):
+            continue
+        fecha_fallo = _parse(c.fecha_fallo_1st)
+        if not fecha_fallo:
+            continue
+        dias = (today - fecha_fallo).days
+        estado = (c.estado_incidente or "").upper()
+        if estado == "EN_SANCION":
+            en_sancion += 1
+            continue
+        if estado == "CUMPLIDO":
+            concedidas_a_tiempo += 1
+            continue
+        if dias > 10:
+            concedidas_pendientes.append({
+                "case_id": c.id,
+                "folder_name": c.folder_name,
+                "dias_desde_fallo": dias,
+                "fecha_fallo": c.fecha_fallo_1st,
+                "abogado": c.abogado_canonical or c.abogado_responsable,
+            })
+
+    return {
+        "concedidas_pendientes_cumplimiento": len(concedidas_pendientes),
+        "concedidas_cumplidas_a_tiempo": concedidas_a_tiempo,
+        "en_sancion": en_sancion,
+        "top_pendientes": sorted(concedidas_pendientes,
+                                  key=lambda x: -x["dias_desde_fallo"])[:10],
+    }
+
+
 def compute_impugnacion_rate(cases: list[Case]) -> dict:
     con_fallo = [c for c in cases if _norm(c.sentido_fallo_1st)
                  and _norm(c.sentido_fallo_1st) not in ("N/A", "PENDIENTE")]
@@ -250,6 +349,9 @@ def executive_dashboard(db: Session) -> dict:
     compliance = compute_compliance_rate(all_cases)
     response = compute_response_times(all_cases)
     fallos = compute_fallos_distribution(all_cases)
+    fallos_2nd = compute_fallo_2nd_distribution(all_cases)
+    pipeline = compute_pipeline_funnel(all_cases)
+    plazos = compute_compliance_plazos(all_cases)
     by_month = compute_by_month(all_cases)
     top_municipios = compute_top_municipios(all_cases)
     top_oficinas = compute_top_oficinas(all_cases)
@@ -280,6 +382,9 @@ def executive_dashboard(db: Session) -> dict:
         "response_times": response,
         "impugnacion": impugnacion,
         "fallos_distribution": fallos,
+        "fallos_2nd_distribution": fallos_2nd,
+        "pipeline_funnel": pipeline,
+        "compliance_plazos": plazos,
         "by_month": by_month,
         "by_origen": by_origen,
         "by_estado_incidente": by_estado_incidente,

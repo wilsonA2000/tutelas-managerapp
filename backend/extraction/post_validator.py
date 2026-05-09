@@ -328,4 +328,89 @@ def validate_extraction(case, fields: dict) -> tuple[dict, list[str]]:
             f"(oficial={rc_official or 'NULL'}, folder={rc_folder or 'NULL'}) — revisar"
         )
 
+    # ============================================================
+    # F11 (v8.3): impugnacion=NO debe implicar fallo_2nd vacio.
+    # Si la IA o el regex llenaron fallo_2nd cuando impugnacion=NO,
+    # los limpiamos y marcamos warning. Evita las 42 inconsistencias
+    # detectadas por audit_cases R1.
+    # ============================================================
+    impugnacion_val = (
+        fields.get("impugnacion", "")
+        or fields.get("IMPUGNACION", "")
+        or getattr(case, "impugnacion", "") or ""
+    ).strip().upper()
+    if impugnacion_val == "NO":
+        for f_2nd in ("sentido_fallo_2nd", "juzgado_2nd", "fecha_fallo_2nd",
+                       "SENTIDO_FALLO_2ND", "JUZGADO_2ND", "FECHA_FALLO_2ND"):
+            v = fields.get(f_2nd, "")
+            if v and str(v).strip():
+                corrected[f_2nd.lower()] = ""
+                warnings.append(
+                    f"F11: impugnacion=NO pero {f_2nd}={v!r} — eliminado por incoherencia"
+                )
+
+    # ============================================================
+    # F12 (v8.3): juzgado y juzgado_2nd no pueden ser idénticos.
+    # 2a instancia siempre es jerárquicamente superior.
+    # ============================================================
+    j1 = (
+        fields.get("juzgado", "") or fields.get("JUZGADO", "")
+        or getattr(case, "juzgado", "") or ""
+    ).strip().upper()
+    j2 = (
+        fields.get("juzgado_2nd", "") or fields.get("JUZGADO_2ND", "")
+        or getattr(case, "juzgado_2nd", "") or ""
+    ).strip().upper()
+    if j1 and j2 and j1 == j2:
+        corrected["juzgado_2nd"] = ""
+        warnings.append(
+            f"F12: juzgado y juzgado_2nd idénticos ({j1}) — juzgado_2nd eliminado"
+        )
+
+    # ============================================================
+    # F13 (v8.3): orden cronológico fechas. Si una fecha posterior es
+    # anterior a una previa, descartar la inconsistente (mantener la primera).
+    # Aplica solo entre pares directos. fecha_ingreso es ancla.
+    # ============================================================
+    def _date_tuple(field_key):
+        for k in (field_key, field_key.upper()):
+            v = fields.get(k, "")
+            if v:
+                m = re.match(r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})', str(v))
+                if m:
+                    try:
+                        d, mth, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                        if 1 <= d <= 31 and 1 <= mth <= 12 and 2018 <= y <= 2030:
+                            return (y, mth, d), v, k
+                    except (ValueError, TypeError):
+                        pass
+        existing = getattr(case, field_key, None)
+        if existing:
+            m = re.match(r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})', str(existing))
+            if m:
+                try:
+                    d, mth, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                    if 1 <= d <= 31 and 1 <= mth <= 12 and 2018 <= y <= 2030:
+                        return (y, mth, d), existing, field_key
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+    # F13 v8.3.1: detecta fechas inconsistentes pero NO las modifica.
+    # Razon: el bug raiz puede estar en una fecha ANTERIOR de la cadena
+    # (ej. fecha_ingreso erronea). Auto-eliminar la "posterior" puede
+    # borrar el dato correcto. Solo emite warning para revisión humana.
+    chrono_seq = ["fecha_ingreso", "fecha_fallo_1st", "fecha_fallo_2nd",
+                   "fecha_apertura_incidente"]
+    prev = None
+    for fkey in chrono_seq:
+        cur = _date_tuple(fkey)
+        if cur is None:
+            continue
+        if prev is not None and cur[0] < prev[0]:
+            warnings.append(
+                f"F13: {fkey}={cur[1]} es anterior a {prev[2]}={prev[1]} — REVISAR (sin auto-correccion)"
+            )
+        prev = cur
+
     return corrected, warnings

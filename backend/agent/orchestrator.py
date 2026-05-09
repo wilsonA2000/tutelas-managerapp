@@ -71,63 +71,37 @@ Responde SOLO JSON válido."""
 
 
 def _call_ai_classify(prompt: str, max_retries: int = 3) -> dict:
-    """Clasificar documentos usando Smart Router (DeepSeek primary, Haiku fallback)."""
+    """Clasificar documentos vía LLM local (LOCAL_ONLY).
+
+    Antes usaba Smart Router (DeepSeek/Haiku) — refactorizado a llama-server
+    local Qwen3 para mantener LOCAL_ONLY=true. Si LLM local falla, devuelve {}
+    y el orchestrator asume todos los docs OK (filename-based fallback).
+    """
     try:
-        from backend.agent.smart_router import route
-        from backend.extraction.ai_extractor import PROVIDERS
-
-        decision = route("extraction")
-        provider = decision.provider
-        model = decision.model
-        env_key = PROVIDERS.get(provider, {}).get("env_key", "")
-        api_key = os.getenv(env_key, "") if env_key else ""
-
-        if not api_key:
-            logger.warning("No API key for classification, skipping")
-            return {}
-
+        from backend.extraction.ai_extractor import _call_local, _LOCAL_MODEL
+        # /no_think evita que Qwen3 gaste tokens en <think> y devuelva vacío
+        messages = [
+            {"role": "user", "content": "/no_think\n" + prompt + "\n\nResponde SOLO JSON válido."},
+        ]
         for attempt in range(max_retries):
             try:
-                if provider == "deepseek":
-                    from openai import OpenAI
-                    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-                    r = client.chat.completions.create(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.1, max_tokens=4000,
-                        response_format={"type": "json_object"},
-                    )
-                    text = r.choices[0].message.content.strip()
-                elif provider == "anthropic":
-                    import anthropic
-                    client = anthropic.Anthropic(api_key=api_key)
-                    r = client.messages.create(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt + "\n\nResponde SOLO JSON válido."}],
-                        temperature=0.1, max_tokens=4000,
-                    )
-                    text = r.content[0].text.strip()
-                else:
-                    return {}
-
-                if "```" in text:
-                    text = re.sub(r"```(?:json)?\s*", "", text).strip()
-                    text = re.sub(r"\s*```$", "", text).strip()
-                # Extract JSON if wrapped in text
-                json_match = re.search(r'\{[\s\S]*\}', text)
+                raw, _, _ = _call_local(messages, _LOCAL_MODEL, max_tokens=1024)
+                if "```" in raw:
+                    raw = re.sub(r"```(?:json)?\s*", "", raw).strip()
+                    raw = re.sub(r"\s*```$", "", raw).strip()
+                json_match = re.search(r'\{[\s\S]*\}', raw)
                 if json_match:
                     return json.loads(json_match.group())
-                return json.loads(text)
+                return json.loads(raw) if raw.strip() else {}
             except Exception as e:
-                if "429" in str(e) or "rate" in str(e).lower():
-                    wait = 15 * (attempt + 1)
-                    logger.warning(f"Rate limit clasificación ({provider}), esperando {wait}s...")
-                    time.sleep(wait)
+                if attempt < max_retries - 1:
+                    logger.warning(f"AI classify attempt {attempt+1} fail: {str(e)[:100]}")
+                    time.sleep(2)
                 else:
-                    logger.error(f"AI classify error ({provider}/{model}): {e}")
+                    logger.error(f"AI classify final error: {str(e)[:200]}")
                     return {}
     except Exception as e:
-        logger.error(f"AI classify init error: {e}")
+        logger.error(f"AI classify init error: {str(e)[:200]}")
     return {}
 
 
@@ -414,55 +388,112 @@ def smart_extract_case(db: Session, case_id: int, base_dir: str, classify_docs: 
 
 
 def _call_ai_extraction(context: CaseContext, known_fields: dict) -> dict[str, ExtractionResult]:
-    """Llamar a IA con el contexto completo del caso."""
+    """Llamar al LLM como COMPILADOR (contrato SYSTEM_PROMPT_COMPILER.md).
+
+    El LLM recibe JSON con campos_extraidos + campos_huecos + evidencia_textual
+    (≤1500 chars filtrados por marcadores documentados) y devuelve solo los
+    huecos. Reemplaza el patrón legacy de mandar texto plano completo.
+    """
     try:
-        from backend.extraction.ai_extractor import extract_with_ai, SYSTEM_PROMPT
+        from backend.extraction.ai_extractor import (
+            _call_local, _load_system_prompt, _parse_ai_json,
+        )
+        from backend.extraction.compiler_io import (
+            build_compiler_payload, apply_post_validators,
+        )
 
-        # Build doc_texts for the existing AI extractor
-        doc_texts = []
-
-        # Restriccion anti-contaminacion: el caso actual
-        doc_texts.append({"filename": "RESTRICCION_CASO", "text": f"RESTRICCION CRITICA: Este caso es '{context.folder_name}'. TODOS los campos extraidos DEBEN corresponder a este caso. Si encuentras datos de otro caso/radicado diferente, IGNORA esos datos."})
-
-        # Inject known data first
-        if known_fields:
-            known_parts = ["DATOS YA EXTRAÍDOS POR REGEX (usar como referencia, NO sobreescribir si son correctos):"]
-            for field, result in known_fields.items():
-                known_parts.append(f"  {field}: {result.value} (confianza: {result.confidence}%, fuente: {result.source})")
-            doc_texts.append({"filename": "DATOS_CONOCIDOS", "text": "\n".join(known_parts)})
-
-        # Add corrections as few-shot
-        if context.corrections:
-            correction_parts = ["CORRECCIONES HISTÓRICAS (aprende de estos errores anteriores):"]
-            for c in context.corrections:
-                correction_parts.append(f"  Campo {c.field_name}: IA dijo '{c.ai_value}' pero correcto es '{c.corrected_value}'")
-            doc_texts.append({"filename": "CORRECCIONES", "text": "\n".join(correction_parts)})
-
-        # Add documents
+        # Documentos: docs reales + emails como docs sintéticos para evidencia
+        documents: list[dict] = []
         for doc in sorted(context.documents, key=lambda d: d.priority):
-            doc_texts.append({"filename": doc.filename, "text": doc.content[:30000]})
-
-        # Add emails
+            documents.append({
+                "filename": doc.filename,
+                "text": (doc.content or "")[:8000],
+                "doc_type": getattr(doc, "doc_type", "OTRO"),
+            })
         for em in context.emails:
-            email_text = f"Subject: {em.subject}\nFrom: {em.sender}\nDate: {em.date}\n\n{em.body}"
-            doc_texts.append({"filename": f"email_{em.email_id}", "text": email_text})
+            documents.append({
+                "filename": f"email_{em.email_id}",
+                "text": (
+                    f"Subject: {em.subject}\nFrom: {em.sender}\n"
+                    f"Date: {em.date}\n\n{em.body}"
+                )[:8000],
+                "doc_type": "EMAIL_MD",
+            })
 
-        if not doc_texts:
+        # Inyectar correcciones históricas como hint en metadata
+        metadata_extra: dict = {}
+        if context.corrections:
+            metadata_extra["correcciones_historicas"] = [
+                {"campo": c.field_name, "ia": c.ai_value, "correcto": c.corrected_value}
+                for c in context.corrections[:10]
+            ]
+
+        payload = build_compiler_payload(
+            known_fields=known_fields,
+            documents=documents,
+            folder_name=context.folder_name,
+            metadata_extra=metadata_extra,
+        )
+
+        if not payload["campos_huecos"]:
+            logger.info(
+                "AI compiler: 0 huecos para %s, skip LLM", context.folder_name
+            )
             return {}
 
-        # Call AI
-        ai_result = extract_with_ai(doc_texts, folder_name=context.folder_name)
+        # /no_think obligatorio: Qwen3 base sin esto gasta todos los tokens
+        # en <think> y devuelve content vacío (CLAUDE.md v8.3 finding).
+        user_msg = "/no_think\n" + json.dumps(payload, ensure_ascii=False)
+        messages = [
+            {"role": "system", "content": _load_system_prompt()},
+            {"role": "user", "content": user_msg},
+        ]
 
-        # Convert to ExtractionResult dict
-        results = {}
-        for field_name, field_result in ai_result.fields.items():
+        logger.info(
+            "AI compiler: %d huecos, %d chars evidencia, folder=%s",
+            len(payload["campos_huecos"]),
+            len(payload["evidencia_textual"]),
+            context.folder_name,
+        )
+
+        raw, in_tok, out_tok = _call_local(messages, max_tokens=2048)
+        logger.info("AI compiler raw response (in=%d, out=%d): %r", in_tok, out_tok, raw[:600])
+        parsed = _parse_ai_json(raw) if raw.strip() else {}
+
+        # Solo aceptar campos que estaban en huecos (defensa anti-contaminación)
+        holes_set = {h.lower() for h in payload["campos_huecos"]}
+        results: dict[str, ExtractionResult] = {}
+        for field_name, field_result in parsed.items():
+            if field_name.lower() not in holes_set:
+                continue
             results[field_name.lower()] = ExtractionResult(
                 value=field_result.value,
-                confidence={"ALTA": 85, "MEDIA": 60, "BAJA": 35}.get(field_result.confidence, 50),
-                source=field_result.source,
-                method="ai",
-                reasoning=f"Extraído por IA desde {field_result.source}",
+                confidence={"ALTA": 85, "MEDIA": 60, "BAJA": 35}.get(
+                    field_result.confidence, 50
+                ),
+                source=field_result.source or "compiler",
+                method="ai_compiler",
+                reasoning=f"Llenado por LLM compilador (hueco) desde {field_result.source or 'evidencia'}",
             )
+
+        # Post-validators determinísticos (reglas .md corpus SED)
+        inferred = apply_post_validators(
+            {k: v.value for k, v in results.items()}, known_fields
+        )
+        for fname, val in inferred.items():
+            results[fname] = ExtractionResult(
+                value=val,
+                confidence=80,
+                source="post_validator_rule",
+                method="deterministic",
+                reasoning=f"Inferido por regla del .md corpus SED",
+            )
+
+        logger.info(
+            "AI compiler: %d/%d huecos llenados (in_tok=%d, out_tok=%d) +%d inferidos",
+            len(results) - len(inferred), len(payload["campos_huecos"]),
+            in_tok, out_tok, len(inferred),
+        )
         return results
 
     except Exception as e:

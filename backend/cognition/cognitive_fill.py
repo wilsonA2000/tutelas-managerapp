@@ -161,6 +161,147 @@ def _pick_accionante_from_text(full_text: str, juzgado: str = "") -> str:
 _pick_accionante_from_ner = _pick_accionante_from_text
 
 
+# ============================================================
+# Guards deterministas (v8.3) — evitan que cognitive_fill llene
+# campos contradictorios con la etapa procesal real del expediente.
+# Caso típico que motivó esto: docs solo contienen Auto Avoca + escrito
+# tutela con jurisprudencia citada largamente — el extractor confundía
+# citaciones de la Corte Constitucional como juzgado_2nd, "CONFIRMA"
+# de jurisprudencia como sentido_fallo_2nd, etc.
+# ============================================================
+
+# Patrones de filename / texto cabecera por etapa procesal
+_STAGE_KW_FALLO_1ST = (
+    "FALLOPRIMERA", "FALLO PRIMERA", "FALLO 1RA", "FALLO 1ERA",
+    "SENTENCIAPRIMERA", "SENTENCIA PRIMERA", "SENTENCIA1RA",
+    "PRIMERAINSTANCIA", "PRIMERA INSTANCIA",
+)
+_STAGE_KW_FALLO_2ND = (
+    "FALLO2DA", "FALLO 2DA", "FALLO SEGUNDA", "SENTENCIA2DA", "SENTENCIA 2DA",
+    "SEGUNDAINSTANCIA", "SEGUNDA INSTANCIA", "CONFIRMAFALLO", "REVOCAFALLO",
+)
+_STAGE_KW_IMPUGN = (
+    "IMPUGNAC", "IMPUGNA", "CONCEDEIMPUGN", "CONCEDE IMPUGN",
+)
+_STAGE_KW_INCIDENTE = (
+    "INCIDENTE", "DESACATO", "SANCION", "SANCIONA",
+)
+_STAGE_KW_INICIAL_ONLY = (
+    "AUTOADMITE", "AUTO ADMITE", "AUTOAVOCA", "AUTO AVOCA",
+    "AVOCATUTELA", "AVOCA TUTELA", "AVOCACONOC", "AVOCA CONOC",
+    "TUTELACON", "TUTELA CON", "ESCRITOTUTELA", "ESCRITO TUTELA",
+    "DEMANDATUTELA", "DEMANDA TUTELA",
+)
+
+
+def _detect_stage_flags(documents: list[dict] | None) -> dict:
+    """Detecta etapa procesal a partir de filenames + doc_types.
+
+    Returns flags estrictos:
+      has_fallo_1st, has_impugnacion, has_fallo_2nd, has_incidente,
+      is_inicial_only (todos los docs son auto admisorio / tutela escrito).
+    """
+    flags = {
+        "has_fallo_1st": False, "has_impugnacion": False,
+        "has_fallo_2nd": False, "has_incidente": False,
+        "is_inicial_only": True,
+    }
+    if not documents:
+        flags["is_inicial_only"] = False  # sin docs no podemos afirmar nada
+        return flags
+
+    has_any_non_inicial = False
+    for d in documents:
+        fn_up = (d.get("filename") or "").upper().replace("_", " ").replace("-", " ")
+        doc_type = (d.get("doc_type") or "").upper()
+
+        is_fallo_2nd = any(kw in fn_up for kw in _STAGE_KW_FALLO_2ND)
+        is_fallo_1st = (
+            any(kw in fn_up for kw in _STAGE_KW_FALLO_1ST)
+            or (doc_type == "PDF_SENTENCIA" and not is_fallo_2nd)
+        )
+        is_impugn = any(kw in fn_up for kw in _STAGE_KW_IMPUGN)
+        is_incid = any(kw in fn_up for kw in _STAGE_KW_INCIDENTE) or doc_type == "INCIDENTE"
+
+        if is_fallo_2nd:
+            flags["has_fallo_2nd"] = True
+            has_any_non_inicial = True
+        if is_fallo_1st:
+            flags["has_fallo_1st"] = True
+            has_any_non_inicial = True
+        if is_impugn:
+            flags["has_impugnacion"] = True
+            has_any_non_inicial = True
+        if is_incid:
+            flags["has_incidente"] = True
+            has_any_non_inicial = True
+
+    flags["is_inicial_only"] = not has_any_non_inicial
+    return flags
+
+
+# Patrones de citación de jurisprudencia (señal de "marco teórico")
+_JURISPRUDENCE_PATTERNS = [
+    re.compile(r"\bAuto\s+\d{1,4}\s+de\s+20?\d{2}\b", re.IGNORECASE),
+    re.compile(r"\bSentencia\s+[TCSU]+-?\d+\b", re.IGNORECASE),
+    re.compile(r"\bM\.\s*P\.\s*[A-ZÁÉÍÓÚÑ]"),  # "M.P. Carlos..."
+    re.compile(r"\bCfr\.\s*", re.IGNORECASE),
+    re.compile(r"\bnegrillas?\s+fuera\s+del\s+texto\b", re.IGNORECASE),
+]
+
+
+def _heavy_jurisprudence_citations(text: str, threshold: int = 5) -> int:
+    """Cuenta citaciones de jurisprudencia. >=threshold = doc cita marco teórico."""
+    if not text:
+        return 0
+    sample = text[:10000]
+    count = 0
+    for pat in _JURISPRUDENCE_PATTERNS:
+        count += len(pat.findall(sample))
+    return count
+
+
+_DATE_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$")
+
+
+def _date_to_tuple(d: str) -> tuple | None:
+    """Convierte 'DD/MM/YYYY' → (y, m, d) tuple comparable. None si inválida."""
+    if not d:
+        return None
+    m = _DATE_RE.match(d.strip())
+    if not m:
+        return None
+    return (int(m.group(3)), int(m.group(2)), int(m.group(1)))
+
+
+def _is_after_or_equal(candidate: str, reference: str) -> bool:
+    """True si candidate >= reference. Ambas DD/MM/YYYY. Si alguna inválida → True (no rechaza)."""
+    a = _date_to_tuple(candidate)
+    b = _date_to_tuple(reference)
+    if not a or not b:
+        return True
+    return a >= b
+
+
+# Códigos de juzgado en rad23 que SÍ pueden tener "Corte Suprema/Constitucional" como 2nd
+_HIGH_COURT_RAD_SEGMENTS = {"4006", "4007"}  # Tribunales superiores
+
+
+def _is_high_court_2nd_legitimate(juzgado_2nd: str, rad23: str) -> bool:
+    """True si 'Corte Suprema/Constitucional' es legítimo como juzgado_2nd
+    (caso de tutelas en grado de revisión / casación). Por defecto NO."""
+    if not juzgado_2nd:
+        return True
+    j_up = juzgado_2nd.upper()
+    if "CORTE SUPREMA" not in j_up and "CORTE CONSTITUCIONAL" not in j_up:
+        return True  # no es alta corte → no aplica este check
+    digits = re.sub(r"\D", "", rad23 or "")
+    if len(digits) < 12:
+        return False
+    seg_5_9 = digits[5:9]
+    return seg_5_9 in _HIGH_COURT_RAD_SEGMENTS
+
+
 def cognitive_fill(
     case_meta: dict[str, Any],
     full_text: str,
@@ -187,6 +328,16 @@ def cognitive_fill(
     zones = classify_zones(full_text)
     actors = extract_actors(full_text, zones)
     decision = extract_decision(full_text, zones)
+
+    # v8.3 — Detección de etapa procesal por filenames + doc_types.
+    # Bloquea extracción de campos que NO pueden existir en la etapa actual
+    # (ej: caso solo con AUTO_AVOCA no puede tener fallo, ni 2da, ni impugnación).
+    stage = _detect_stage_flags(documents)
+    fecha_ingreso_ref = case_meta.get("fecha_ingreso", "") or ""
+    rad23_ref = case_meta.get("radicado_23_digitos", "") or ""
+    # Conteo de citas de jurisprudencia para gating de pretensiones/observaciones
+    jurisprudence_count = _heavy_jurisprudence_citations(full_text)
+    heavy_jurisprudence = jurisprudence_count >= 5
 
     out: dict[str, ExtractionResult] = {}
 
@@ -241,18 +392,44 @@ def cognitive_fill(
     if dv:
         _maybe_set("derecho_vulnerado", dv, 78, "cognition/cie10_keyword")
 
-    # Decisión primera instancia
-    if decision.sentido:
+    # Decisión primera instancia — gating por etapa procesal (v8.3)
+    if decision.sentido and stage["has_fallo_1st"]:
         _maybe_set("sentido_fallo_1st", decision.sentido, 80, "cognition/decision_extractor")
-    if decision.fecha:
-        _maybe_set("fecha_fallo_1st", decision.fecha, 80, "cognition/decision_extractor")
-    if decision.segunda_instancia:
+    elif decision.sentido and not stage["has_fallo_1st"]:
+        _logger.info("cognitive_fill case=%s STAGE_GUARD: sentido_fallo_1st rechazado (etapa solo inicial, no hay doc de fallo)", case_meta.get("id"))
+
+    if decision.fecha and stage["has_fallo_1st"]:
+        # Validar fecha_fallo >= fecha_ingreso (no se puede fallar antes de ingresar)
+        if _is_after_or_equal(decision.fecha, fecha_ingreso_ref):
+            _maybe_set("fecha_fallo_1st", decision.fecha, 80, "cognition/decision_extractor")
+        else:
+            _logger.info("cognitive_fill case=%s STAGE_GUARD: fecha_fallo_1st=%s rechazada (< fecha_ingreso=%s)",
+                         case_meta.get("id"), decision.fecha, fecha_ingreso_ref)
+
+    # Segunda instancia — solo si hay doc de fallo 2nd O de impugnación que ya fue resuelta
+    if decision.segunda_instancia and stage["has_fallo_2nd"]:
         _maybe_set("sentido_fallo_2nd", decision.segunda_instancia, 75, "cognition/decision_extractor")
-    if decision.fecha_segunda:
-        _maybe_set("fecha_fallo_2nd", decision.fecha_segunda, 75, "cognition/decision_extractor")
-    if decision.impugnacion:
+    elif decision.segunda_instancia:
+        _logger.info("cognitive_fill case=%s STAGE_GUARD: sentido_fallo_2nd rechazado (no hay doc fallo 2da)", case_meta.get("id"))
+
+    if decision.fecha_segunda and stage["has_fallo_2nd"]:
+        if _is_after_or_equal(decision.fecha_segunda, fecha_ingreso_ref):
+            _maybe_set("fecha_fallo_2nd", decision.fecha_segunda, 75, "cognition/decision_extractor")
+        else:
+            _logger.info("cognitive_fill case=%s STAGE_GUARD: fecha_fallo_2nd=%s rechazada (< fecha_ingreso)",
+                         case_meta.get("id"), decision.fecha_segunda)
+
+    # Impugnación — solo si hay doc de impugnación O de fallo 2nd
+    if decision.impugnacion and (stage["has_impugnacion"] or stage["has_fallo_2nd"]):
         _maybe_set("impugnacion", decision.impugnacion, 75, "cognition/decision_extractor")
-    if decision.quien_impugno:
+    elif stage["is_inicial_only"]:
+        # Solo docs iniciales (auto avoca + escrito) → forzar impugnacion=NO
+        _maybe_set("impugnacion", "NO", 70, "cognition/stage_inicial_only")
+    elif decision.impugnacion:
+        _logger.info("cognitive_fill case=%s STAGE_GUARD: impugnacion=%s rechazada (sin doc de impugnación ni fallo 2nd)",
+                     case_meta.get("id"), decision.impugnacion)
+
+    if decision.quien_impugno and (stage["has_impugnacion"] or stage["has_fallo_2nd"]):
         _maybe_set("quien_impugno", decision.quien_impugno, 70, "cognition/decision_extractor")
 
     # v9.4.5: extractores específicos campos <50% cobertura
@@ -280,11 +457,24 @@ def cognitive_fill(
                            "cognition/decision_extractor")
 
     # Campos narrativos (asunto / pretensiones / observaciones)
-    asunto = build_asunto(actors, dv or prev_dv, full_text)
-    pret = build_pretensiones(actors, dv or prev_dv, full_text, asunto)
+    # v8.3: si el caso ya tiene derecho_vulnerado en DB, usarlo para coherencia
+    # narrativa. Evita que la observación diga "alegó educación" cuando la DB
+    # tiene "PETICION y SEGURIDAD SOCIAL".
+    persisted_dv = (case_meta.get("derecho_vulnerado") or "").strip()
+    dv_for_narrative = persisted_dv or dv or prev_dv
+    asunto = build_asunto(actors, dv_for_narrative, full_text)
+    pret = build_pretensiones(actors, dv_for_narrative, full_text, asunto)
 
     _maybe_set("asunto", asunto, 65, "cognition/narrative_builder")
-    _maybe_set("pretensiones", pret, 65, "cognition/narrative_builder")
+    # Guard v8.3: si el texto del expediente cita ≥5 jurisprudencias
+    # (Auto NNN de YYYY, Sentencia T-/SU-, M.P., Cfr.), las pretensiones
+    # extraídas suelen ser fragmentos de marco teórico citado por el juez,
+    # no peticiones reales del accionante. Mejor dejar vacío que llenar mal.
+    if pret and heavy_jurisprudence:
+        _logger.info("cognitive_fill case=%s STAGE_GUARD: pretensiones rechazadas (texto con %d citas de jurisprudencia, probable contaminación)",
+                     case_meta.get("id"), jurisprudence_count)
+    else:
+        _maybe_set("pretensiones", pret, 65, "cognition/narrative_builder")
 
     obs_meta = {
         "fecha_ingreso": case_meta.get("fecha_ingreso", ""),
@@ -293,7 +483,22 @@ def cognitive_fill(
         "abogado_responsable": case_meta.get("abogado_responsable", ""),
         "incidente": case_meta.get("incidente", ""),
     }
-    obs = build_observaciones(actors, dv or prev_dv, decision, obs_meta,
+
+    # v8.3 Guard: filtrar `decision` según etapa procesal antes de narrar.
+    # Sin esto, build_observaciones repite "Mediante fallo... CONCEDE... 2da
+    # instancia CONFIRMA..." aunque los gates anteriores hayan rechazado
+    # persistir esos campos.
+    import dataclasses as _dc
+    decision_filtered = _dc.replace(
+        decision,
+        sentido=decision.sentido if stage["has_fallo_1st"] else "",
+        fecha=decision.fecha if (stage["has_fallo_1st"] and _is_after_or_equal(decision.fecha, fecha_ingreso_ref)) else "",
+        segunda_instancia=decision.segunda_instancia if stage["has_fallo_2nd"] else "",
+        fecha_segunda=decision.fecha_segunda if (stage["has_fallo_2nd"] and _is_after_or_equal(decision.fecha_segunda, fecha_ingreso_ref)) else "",
+        impugnacion=decision.impugnacion if (stage["has_impugnacion"] or stage["has_fallo_2nd"]) else ("NO" if stage["is_inicial_only"] else ""),
+        quien_impugno=decision.quien_impugno if (stage["has_impugnacion"] or stage["has_fallo_2nd"]) else "",
+    )
+    obs = build_observaciones(actors, dv_for_narrative, decision_filtered, obs_meta,
                               events=None, documents=documents)
     _maybe_set("observaciones", obs, 60, "cognition/narrative_builder")
 

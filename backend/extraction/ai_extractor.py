@@ -32,6 +32,20 @@ _logger = logger
 _LOCAL_URL = os.getenv("LLM_LOCAL_URL", "http://127.0.0.1:8765")
 _LOCAL_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "qwen3-4b-iuris")
 _LOCAL_TIMEOUT = int(os.getenv("LLM_LOCAL_TIMEOUT", "180"))
+_SYSTEM_PROMPT_PATH = os.getenv("LLM_LOCAL_SYSTEM_PROMPT_PATH", "docs/iuris/SYSTEM_PROMPT_COMPILER.md")
+
+
+def _load_system_prompt() -> str:
+    """Carga prompt auditado desde disco; cae al hardcoded si no existe."""
+    try:
+        path = Path(_SYSTEM_PROMPT_PATH)
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent.parent.parent / _SYSTEM_PROMPT_PATH
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    except Exception as e:
+        logger.warning("No pude cargar system prompt %s: %s", _SYSTEM_PROMPT_PATH, e)
+    return SYSTEM_PROMPT
 
 
 @dataclass
@@ -77,7 +91,7 @@ Reglas:
 # ============================================================
 
 def _call_local(messages: list[dict], model: str = _LOCAL_MODEL,
-                max_tokens: int = 4096) -> tuple[str, int, int]:
+                max_tokens: int = 1024) -> tuple[str, int, int]:
     """Llama al servidor llama-server local. NO tiene fallback.
 
     Si falla, levanta excepción — el caller debe manejar.
@@ -219,6 +233,9 @@ def extract_with_ai(documents: list[dict], folder_name: str = "",
             continue
         if not _is_critical_pdf(doc.get("filename", "")) and len(text) > 25000:
             text = text[:20000] + "\n[...CONTENIDO TRUNCADO...]\n" + text[-5000:]
+        elif len(text) > 15000:
+            # cap también docs críticos para no inflar el prompt en CPU 4B
+            text = text[:10000] + "\n[...CONTENIDO TRUNCADO...]\n" + text[-3000:]
         doc_type = doc.get("doc_type", "OTRO")
         doc_texts.append(f"\n===ARCHIVO: {doc['filename']} [TIPO: {doc_type}]===\n{text}")
 
@@ -238,11 +255,11 @@ def extract_with_ai(documents: list[dict], folder_name: str = "",
         )
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _load_system_prompt()},
             {"role": "user", "content": user_message},
         ]
 
-        raw, in_tok, out_tok = _call_local(messages, _LOCAL_MODEL, max_tokens=4096)
+        raw, in_tok, out_tok = _call_local(messages, _LOCAL_MODEL, max_tokens=1024)
         duration_ms = int((time.time() - start_time) * 1000)
 
         all_fields = _parse_ai_json(raw)

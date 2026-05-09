@@ -17,7 +17,7 @@ interface ProcessInfo {
 
 const PROCESSES: ProcessInfo[] = [
   { key: 'sync', label: 'Sincronizando Carpetas', statusFn: getSyncStatus, cancelFn: cancelSync },
-  { key: 'gmail', label: 'Revisando Gmail', statusFn: getCheckInboxStatus, cancelFn: cancelCheckInbox },
+  { key: 'gmail', label: 'Sincronizando Bandeja', statusFn: getCheckInboxStatus, cancelFn: cancelCheckInbox },
   { key: 'extraction', label: 'Extraccion IA', statusFn: getExtractionProgress, cancelFn: stopExtraction },
 ]
 
@@ -117,10 +117,22 @@ function ProcessTracker({ process }: { process: ProcessInfo }) {
               {docsVerified > 0 && <span className="text-blue-300">{docsVerified}{docsTotal > 0 ? `/${docsTotal}` : ''} docs</span>}
             </div>
           )}
+          {/* Sync Gmail: chips de importados / omitidos / último asunto */}
+          {((data.imported as number) > 0 || (data.skipped as number) > 0) && (
+            <div className="flex gap-3 mt-1 text-xs text-white/60">
+              {(data.imported as number) > 0 && <span className="text-green-300">{data.imported as number} importados</span>}
+              {(data.skipped as number) > 0 && <span className="text-white/50">{data.skipped as number} omitidos</span>}
+            </div>
+          )}
+          {(data.last_email_subject as string) && (
+            <p className="text-[11px] text-white/50 truncate mt-1" title={data.last_email_subject as string}>
+              Último: {data.last_email_subject as string}
+            </p>
+          )}
         </>
       )}
 
-      {step && !phase && <p className="text-xs text-white/60 truncate mt-1">{step}</p>}
+      {step && <p className="text-xs text-white/60 truncate mt-1">{step}</p>}
     </div>
   )
 }

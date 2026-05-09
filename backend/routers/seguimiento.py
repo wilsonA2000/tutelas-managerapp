@@ -41,6 +41,46 @@ def _calcular_semaforo(record: ComplianceTracking) -> str:
         return "SIN_PLAZO"
 
 
+def _pipeline_stage(case: Case) -> dict:
+    """v8.3: identifica en qué etapa del funnel está el case + estados booleanos.
+
+    Returns:
+        {"current": "FALLO_1ST" | "IMPUGNACION" | "FALLO_2ND" | "INCIDENTE" | "CUMPLIDO",
+         "has_fallo_1st": bool, "has_impugnacion": bool, "has_fallo_2nd": bool,
+         "has_incidente": bool, "is_cumplido": bool}
+    """
+    if not case:
+        return {"current": "TUTELA", "has_fallo_1st": False, "has_impugnacion": False,
+                "has_fallo_2nd": False, "has_incidente": False, "is_cumplido": False}
+    norm = lambda s: (s or "").strip().upper()
+    has_fallo_1st = bool(norm(case.sentido_fallo_1st)) and norm(case.sentido_fallo_1st) not in ("N/A", "PENDIENTE")
+    has_impugnacion = norm(case.impugnacion).startswith("S")
+    has_fallo_2nd = bool(norm(case.sentido_fallo_2nd)) and norm(case.sentido_fallo_2nd) not in ("N/A", "PENDIENTE")
+    has_incidente = norm(case.incidente).startswith("S")
+    is_cumplido = (case.estado_incidente or "").upper() == "CUMPLIDO"
+
+    if is_cumplido:
+        current = "CUMPLIDO"
+    elif has_incidente:
+        current = "INCIDENTE"
+    elif has_fallo_2nd:
+        current = "FALLO_2ND"
+    elif has_impugnacion:
+        current = "IMPUGNACION"
+    elif has_fallo_1st:
+        current = "FALLO_1ST"
+    else:
+        current = "TUTELA"
+    return {
+        "current": current,
+        "has_fallo_1st": has_fallo_1st,
+        "has_impugnacion": has_impugnacion,
+        "has_fallo_2nd": has_fallo_2nd,
+        "has_incidente": has_incidente,
+        "is_cumplido": is_cumplido,
+    }
+
+
 def _record_to_dict(r: ComplianceTracking, case: Case = None) -> dict:
     """Convertir registro a dict para API."""
     semaforo = _calcular_semaforo(r)
@@ -79,6 +119,7 @@ def _record_to_dict(r: ComplianceTracking, case: Case = None) -> dict:
         "efecto_impugnacion": r.efecto_impugnacion,
         "requiere_cumplimiento": r.requiere_cumplimiento,
         "extraido_por_ia": r.extraido_por_ia,
+        "pipeline": _pipeline_stage(case),
     }
 
 
@@ -281,10 +322,10 @@ def api_extract_order(record_id: int, db: Session = Depends(get_db)):
     if not texts:
         return {"error": "No se pudo extraer texto de las sentencias"}
 
-    # Llamar a la IA para extraer orden y plazo
-    from backend.extraction.ai_extractor import _call_with_retry, get_active_provider
-
-    provider, model = get_active_provider()
+    # Llamar a la IA local para extraer orden y plazo (versión minimalista LOCAL_ONLY)
+    from backend.extraction.ai_extractor import _call_local, _LOCAL_MODEL
+    provider = "local"
+    model = _LOCAL_MODEL
 
     prompt_system = """Eres un asistente jurídico experto en acciones de tutela colombianas.
 Analiza la sentencia y extrae:
@@ -300,7 +341,8 @@ Responde SOLO con JSON:
     if len(all_text) > 30000:
         all_text = all_text[:25000] + "\n[...]\n" + all_text[-5000:]
 
-    user_msg = f"""CASO: {case.folder_name}
+    user_msg = f"""/no_think
+CASO: {case.folder_name}
 
 SENTENCIA:
 {all_text}
@@ -312,9 +354,11 @@ Extrae la orden judicial, plazo y responsable."""
             {"role": "system", "content": prompt_system},
             {"role": "user", "content": user_msg},
         ]
-        import json
-        raw, inp, out = _call_with_retry(provider, messages, model, 1024)
-        data = json.loads(raw)
+        import json, re
+        raw, inp, out = _call_local(messages, model, max_tokens=512)
+        # Tolerar texto extra alrededor del JSON
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group(0) if m else raw)
 
         record.orden_judicial = data.get("orden_judicial", "")
         record.plazo_dias = int(data.get("plazo_dias", 0)) if data.get("plazo_dias") else None
@@ -337,17 +381,13 @@ Extrae la orden judicial, plazo y responsable."""
         record.updated_at = datetime.utcnow()
         db.commit()
 
-        # Registrar token usage
+        # Registrar token usage (LLM local = costo 0)
         from backend.database.models import TokenUsage
-        from backend.extraction.ai_extractor import PROVIDERS
-        model_info = PROVIDERS.get(provider, {}).get("models", {}).get(model, {})
-        cost_in = inp * model_info.get("input_price", 0) / 1_000_000
-        cost_out = out * model_info.get("output_price", 0) / 1_000_000
         db.add(TokenUsage(
             provider=provider, model=model,
             tokens_input=inp, tokens_output=out,
-            cost_input=f"{cost_in:.6f}", cost_output=f"{cost_out:.6f}",
-            cost_total=f"{cost_in + cost_out:.6f}",
+            cost_input="0.000000", cost_output="0.000000",
+            cost_total="0.000000",
             case_id=case.id, fields_extracted=3,
         ))
         db.commit()

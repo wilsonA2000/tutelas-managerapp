@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend.database.database import init_db, get_db, SessionLocal
 from backend.database.seed import run_seed
 from backend.routers import cases, documents, extraction, dashboard, reports, emails, seguimiento, import_control, auditoria_fallos, auxiliares
-from backend.email.gmail_monitor import check_inbox, get_gmail_total, sync_inbox
+from backend.email.gmail_monitor import check_inbox, get_gmail_total
 from backend.extraction.unified_cognitive import unified_extract_dispatch
 from backend.database.models import Case, Email
 
@@ -474,41 +474,6 @@ def api_gmail_stats():
         db.close()
 
 
-@app.post("/api/emails/sync")
-def api_sync_emails():
-    """Sincronizar correos faltantes (leidos + no leidos) desde Gmail."""
-    global gmail_check_in_progress, gmail_check_result
-    import threading
-
-    if gmail_check_in_progress:
-        return {"status": "running", "message": "Ya hay una sincronizacion en progreso."}
-
-    def _run_sync():
-        global gmail_check_in_progress, gmail_check_result
-        try:
-            db = SessionLocal()
-            gmail_check_result = {"step": "Sincronizando correos (solo registro, sin crear carpetas)...", "emails_found": 0}
-            results = sync_inbox(db)
-            imported = results[0].get("imported", 0) if results else 0
-            gmail_check_result["emails_found"] = imported
-            gmail_check_result["step"] = f"Sync completado: {imported} correos importados"
-            add_monitor_log(f"Sync completo: {imported} emails importados")
-        except Exception as e:
-            gmail_check_result["step"] = f"Error: {e}"
-            gmail_check_result["error"] = str(e)
-        finally:
-            gmail_check_in_progress = False
-            try:
-                db.close()
-            except Exception:
-                pass
-
-    gmail_check_in_progress = True
-    gmail_check_result = {"step": "Iniciando sync...", "emails_found": 0}
-    threading.Thread(target=_run_sync, daemon=True).start()
-    return {"status": "started", "message": "Sincronizacion iniciada (todos los correos)"}
-
-
 @app.post("/api/emails/check")
 def api_check_emails_manual():
     """Lanzar revision de Gmail en background. Solo permite UNA revision a la vez."""
@@ -617,6 +582,118 @@ def api_cancel_gmail_check():
         add_monitor_log("Revision de Gmail cancelada por usuario")
         return {"message": "Cancelado"}
     return {"message": "No hay revision en curso"}
+
+
+@app.post("/api/emails/{email_id}/reprocess")
+def api_reprocess_email(email_id: int):
+    """Re-descargar body + adjuntos de un email YA EXISTENTE en DB.
+
+    Útil cuando `sync_inbox` registró metadata pero no descargó body/adjuntos
+    (porque por diseño solo guarda metadata). También intenta re-asignar a un
+    case si el email quedó PENDIENTE sin case_id.
+    """
+    from backend.email.gmail_monitor import (
+        _get_gmail_service, _extract_body_complete, download_attachments,
+        save_email_md, extract_radicado, extract_accionante, match_to_case,
+    )
+    db = SessionLocal()
+    try:
+        email = db.query(Email).filter(Email.id == email_id).first()
+        if not email:
+            return {"status": "error", "message": f"Email {email_id} no existe"}
+        if not email.message_id:
+            return {"status": "error", "message": "Email sin message_id (no se puede buscar en Gmail)"}
+
+        service = _get_gmail_service()
+
+        # Buscar el Gmail msg ID a partir del Message-ID header guardado en DB
+        mid_clean = email.message_id.strip().lstrip("<").rstrip(">")
+        query = f'rfc822msgid:{mid_clean}'
+        try:
+            response = service.users().messages().list(userId="me", q=query).execute()
+        except Exception as e:
+            return {"status": "error", "message": f"Gmail API error: {e}"}
+
+        msgs = response.get("messages", [])
+        if not msgs:
+            return {"status": "not_found", "message": f"Email no encontrado en Gmail (rfc822msgid={mid_clean[:60]})"}
+
+        gmail_msg_id = msgs[0]["id"]
+        msg = service.users().messages().get(
+            userId="me", id=gmail_msg_id, format="full"
+        ).execute()
+
+        payload = msg.get("payload", {})
+        body = _extract_body_complete(payload)
+
+        # Intentar match si email no tiene case asignado
+        matched_case_info = None
+        case = None
+        if email.case_id:
+            case = db.query(Case).filter(Case.id == email.case_id).first()
+        else:
+            full_text = f"{email.subject or ''} {body}"
+            try:
+                rad_data = extract_radicado(full_text)
+                accionante = extract_accionante(email.subject or "", body) or ""
+                matched = match_to_case(db, rad_data, accionante)
+                if matched:
+                    case = matched
+                    email.case_id = case.id
+                    email.status = "ASIGNADO"
+                    matched_case_info = {"id": case.id, "folder": case.folder_name}
+            except Exception as e:
+                logger.warning("Match falló al reprocesar email %d: %s", email_id, e)
+
+        # Update body
+        email.body_preview = (body or "")[:5000]
+
+        # Descargar adjuntos
+        guardados, ignorados = ([], [])
+        try:
+            guardados, ignorados = download_attachments(
+                service, gmail_msg_id, case, db,
+                email_id=email.id, email_message_id=email.message_id,
+            )
+        except Exception as e:
+            logger.error("download_attachments falló email=%d: %s", email_id, e)
+
+        # Actualizar email.attachments JSON
+        if guardados:
+            import json as _json
+            email.attachments = guardados
+
+        # Guardar Email_*.md en folder del case (si tiene)
+        md_filename = None
+        if case and case.folder_path:
+            from pathlib import Path as _Path
+            try:
+                md_filename = save_email_md(
+                    _Path(case.folder_path),
+                    {"subject": email.subject or "", "sender": email.sender or "",
+                     "date": email.date_received.isoformat() if email.date_received else "",
+                     "folder_name": case.folder_name or ""},
+                    body or "", guardados, db, case.id,
+                    email_id=email.id, email_message_id=email.message_id,
+                )
+            except Exception as e:
+                logger.warning("save_email_md falló email=%d: %s", email_id, e)
+
+        db.commit()
+
+        return {
+            "status": "ok",
+            "email_id": email.id,
+            "body_chars": len(body or ""),
+            "attachments_saved": len(guardados),
+            "attachments_ignored": len(ignorados),
+            "ignored_filenames": ignorados,
+            "matched_case": matched_case_info,
+            "case_id": email.case_id,
+            "md_created": md_filename,
+        }
+    finally:
+        db.close()
 
 
 @app.post("/api/emails/register-md")

@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { Search, Download, ChevronDown, ChevronUp, Check, X, Columns3, Table2 } from 'lucide-react'
+import { Search, Download, ChevronDown, ChevronUp, Check, X, Columns3, Table2, AlertTriangle } from 'lucide-react'
 import { getCasesTable, updateCase, generateExcel } from '../services/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -61,7 +61,8 @@ const ALL_COLUMNS = [
   { key: 'OBSERVACIONES', label: 'Observaciones', width: 220 },
 ]
 
-type CaseRow = Record<string, string | number>
+type ConfBand = 'OK' | 'REVISAR' | 'BAJO'
+type CaseRow = Record<string, string | number | Record<string, ConfBand>>
 
 export default function Cuadro() {
   const qc = useQueryClient()
@@ -74,9 +75,17 @@ export default function Cuadro() {
 
   const COLUMNS = ALL_COLUMNS.filter(c => !hiddenCols.has(c.key))
   const [colFilters, setColFilters] = useState<Record<string, string>>({})
+  const [onlyFindings, setOnlyFindings] = useState(false)
 
   const dataQ = useQuery({ queryKey: ['cases-table'], queryFn: getCasesTable })
   const allRows: CaseRow[] = dataQ.data ?? []
+
+  // v8.3: extrae # findings (bandas REVISAR + BAJO) por fila
+  const findingsCount = useCallback((row: CaseRow): number => {
+    const conf = row._confidences as Record<string, ConfBand> | undefined
+    if (!conf) return 0
+    return Object.values(conf).filter(b => b === 'REVISAR' || b === 'BAJO').length
+  }, [])
 
   const updateMut = useMutation({
     mutationFn: ({ id, fields }: { id: number; fields: Record<string, string> }) => updateCase(id, fields),
@@ -108,8 +117,11 @@ export default function Cuadro() {
         rows = rows.filter(r => String(r[col] || '').toLowerCase().includes(v))
       }
     }
+    if (onlyFindings) {
+      rows = rows.filter(r => findingsCount(r) > 0)
+    }
     return rows
-  }, [allRows, search, colFilters])
+  }, [allRows, search, colFilters, onlyFindings, findingsCount])
 
   // Ordenar
   const sorted = useMemo(() => {
@@ -163,6 +175,16 @@ export default function Cuadro() {
           </div>
 
           <div className="flex items-center gap-2">
+            <Button
+              variant={onlyFindings ? 'default' : 'outline'}
+              size="sm"
+              className="gap-1.5 text-xs h-8"
+              onClick={() => setOnlyFindings(v => !v)}
+              title="Solo casos con celdas en banda REVISAR o BAJO"
+            >
+              <AlertTriangle size={13} className={onlyFindings ? '' : 'text-amber-500'} />
+              Solo findings
+            </Button>
             {/* Column picker via shadcn DropdownMenu */}
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -310,12 +332,22 @@ export default function Cuadro() {
                     )
                   }
 
+                  // v8.3: banda de confianza por celda
+                  const conf = row._confidences as Record<string, ConfBand> | undefined
+                  const band = conf?.[col.key]
+                  const bandClass =
+                    band === 'REVISAR' ? 'bg-amber-50 border-l-2 border-l-amber-400' :
+                    band === 'BAJO'    ? 'bg-red-50 border-l-2 border-l-red-400' : ''
+                  const bandTitle =
+                    band === 'REVISAR' ? '⚠ Revisar — confianza media' :
+                    band === 'BAJO'    ? '⚠ Confianza baja — verificar manualmente' : ''
+
                   return (
                     <td key={col.key}
                       onClick={() => col.editable !== false && startEdit(row.id as number, col.key, val)}
-                      className={`px-1 py-1 truncate cursor-pointer border-r border-gray-100 ${isEmpty ? 'bg-gray-50/50' : ''}`}
+                      className={`px-1 py-1 truncate cursor-pointer border-r border-gray-100 ${isEmpty ? 'bg-gray-50/50' : ''} ${bandClass}`}
                       style={{ width: col.width, maxWidth: col.width }}
-                      title={val || 'Vacío — click para editar'}>
+                      title={bandTitle ? `${bandTitle}\n${val || 'Vacío'}` : (val || 'Vacío — click para editar')}>
                       {val || <span className="text-gray-300 text-[10px]">---</span>}
                     </td>
                   )

@@ -1,8 +1,12 @@
 """Router de casos de tutela."""
 
+import tempfile
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from backend.database.database import get_db
@@ -36,7 +40,12 @@ def api_filter_options(db: Session = Depends(get_db)):
 
 @router.get("/table")
 def api_cases_table(db: Session = Depends(get_db)):
-    """Todos los casos con 28 campos para vista de cuadro interactivo (sin paginar)."""
+    """Todos los casos con 28 campos para vista de cuadro interactivo (sin paginar).
+
+    v8.3: incluye `_confidences` por caso. Mapea `attr → {band: OK|REVISAR|BAJO}`
+    desde `field_confidences_json`. El frontend usa esto para colorear celdas.
+    """
+    import json as _json
     cases = db.query(Case).filter(
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
         Case.processing_status != "DUPLICATE_MERGED",
@@ -51,8 +60,44 @@ def api_cases_table(db: Session = Depends(get_db)):
             if val.strip():
                 filled += 1
         data["completitud"] = round(filled / len(Case.CSV_FIELD_MAP) * 100)
+
+        # v8.3: bandas de confianza por campo (subset)
+        if c.field_confidences_json:
+            try:
+                raw = _json.loads(c.field_confidences_json)
+                # Persistimos solo {csv_col: band} para minimizar payload
+                conf_by_col: dict[str, str] = {}
+                for csv_col, attr in Case.CSV_FIELD_MAP.items():
+                    meta = raw.get(attr)
+                    if meta and meta.get("band"):
+                        conf_by_col[csv_col] = meta["band"]
+                if conf_by_col:
+                    data["_confidences"] = conf_by_col
+            except (_json.JSONDecodeError, AttributeError):
+                pass
         items.append(data)
     return items
+
+
+@router.get("/export-audit")
+def api_export_audit(db: Session = Depends(get_db)):
+    """v8.3: XLSX de auditoria con 4 hojas (Resumen, Cuadro, Confianza, Findings).
+
+    Reusa el auditor de scripts/audit_cases.py + executive_kpis para generar
+    un reporte unificado descargable.
+    """
+    from backend.reports.export_audit import generate_audit_xlsx
+
+    out_dir = Path(tempfile.gettempdir())
+    fname = f"auditoria_tutelas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    out_path = out_dir / fname
+    meta = generate_audit_xlsx(db, str(out_path))
+    return FileResponse(
+        str(out_path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=fname,
+        headers={"X-Audit-Cases": str(meta["cases"]), "X-Audit-Sheets": ",".join(meta["sheets"])},
+    )
 
 
 @router.get("/{case_id}")
