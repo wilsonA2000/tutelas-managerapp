@@ -8,7 +8,6 @@ import {
 } from 'lucide-react'
 import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, setPiiMode, getPiiHints, validateCase } from '../services/api'
 import StatusBadge from '../components/StatusBadge'
-import SimilarCasesPanel from '../components/SimilarCasesPanel'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -476,13 +475,11 @@ function RightPanelWithTabs({ caseId, docs, onDeleteDoc }: {
               <Badge variant="secondary" className="text-[10px] px-1.5">{packagesQ.data.packages_count}</Badge>
             ) : undefined
           } />
-          <TabButton id="similar" icon={<Sparkles size={14} />} label="Casos parecidos" />
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
         {tab === 'docs' && <DocumentPanel docs={docs} onDeleteDoc={onDeleteDoc} />}
         {tab === 'emails' && <EmailPackagesTimeline query={packagesQ} />}
-        {tab === 'similar' && <SimilarCasesPanel caseId={caseId} />}
       </div>
     </>
   )

@@ -94,15 +94,6 @@ def api_get_email_package(email_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/generate-md")
-def api_generate_email_md(db: Session = Depends(get_db)):
-    """Generar archivos .md de todos los emails existentes en sus carpetas de caso.
-    Esto permite que la IA lea los correos completos durante la extraccion."""
-    from backend.email.gmail_monitor import save_existing_emails_as_md
-    saved = save_existing_emails_as_md(db)
-    return {"message": f"{saved} emails guardados como .md en carpetas de casos", "saved": saved}
-
-
 @router.put("/{email_id}/ignore")
 def api_ignore_email(email_id: int, db: Session = Depends(get_db)):
     email = db.query(Email).filter(Email.id == email_id).first()

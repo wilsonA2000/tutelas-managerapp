@@ -102,3 +102,12 @@ screenshots/
 
 data/case_cache.stamp
 screenshots-v6016/
+
+# Archive de la limpieza 2026-05-09 (no versionar)
+_archive_2026-05-09_cleanup/
+
+# Claude Code local
+.claude_settings.json
+
+# DB local fuera de data/
+backend/data/*.db

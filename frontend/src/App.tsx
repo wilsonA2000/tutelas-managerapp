@@ -3,7 +3,6 @@ import { Routes, Route, NavLink, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard,
   Scale,
-  Cpu,
   Mail,
   FileSpreadsheet,
   Settings,
@@ -11,61 +10,33 @@ import {
   ChevronRight,
   Menu,
   Building2,
-  ShieldAlert,
   ArrowUp,
   Table2,
   LogOut,
-  Brain,
-  Wrench,
-  Sparkles,
-  AlertTriangle,
-  TrendingUp,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 
 import Dashboard from './pages/Dashboard'
 import CasesList from './pages/CasesList'
 import CaseDetail from './pages/CaseDetail'
-import Extraction from './pages/Extraction'
 import Emails from './pages/Emails'
 import Reports from './pages/Reports'
 import SettingsPage from './pages/Settings'
-import Seguimiento from './pages/Seguimiento'
 import Cuadro from './pages/Cuadro'
-import Intelligence from './pages/Intelligence'
-import AgentTools from './pages/AgentTools'
-import CleanupPanel from './pages/CleanupPanel'
-import EarlyWarning from './pages/EarlyWarning'
-import ExecutiveDashboard from './pages/ExecutiveDashboard'
-import AuditoriaFallos from './pages/AuditoriaFallos'
 import Login from './pages/Login'
 import ProgressModal from './components/ProgressModal'
 import NotificationCenter from './components/NotificationCenter'
-import CognitiveChat from './components/CognitiveChat'
 import { useAuth } from './contexts/AuthContext'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 
-// Navegación principal — orientada a abogado
 const navItems = [
   { to: '/', label: 'Panel principal', icon: LayoutDashboard, exact: true },
   { to: '/cases', label: 'Tutelas', icon: Scale },
   { to: '/cuadro', label: 'Cuadro', icon: Table2 },
-  { to: '/seguimiento', label: 'Seguimiento', icon: ShieldAlert },
-  { to: '/auditoria', label: 'Auditoría fallos', icon: Scale },
   { to: '/emails', label: 'Correos', icon: Mail },
-  { to: '/intelligence', label: 'Inteligencia', icon: Brain },
   { to: '/reports', label: 'Reportes', icon: FileSpreadsheet },
-]
-
-// Sección "Administración" — colapsada por defecto. Tareas técnicas / dev.
-const adminItems = [
-  { to: '/ejecutivo', label: 'Tablero ejecutivo', icon: TrendingUp },
-  { to: '/alertas', label: 'Alertas tempranas', icon: AlertTriangle },
-  { to: '/extraction', label: 'Procesamiento', icon: Cpu },
-  { to: '/cleanup', label: 'Mantenimiento', icon: Sparkles },
-  { to: '/agent', label: 'Herramientas IA', icon: Wrench },
   { to: '/settings', label: 'Configuración', icon: Settings },
 ]
 
@@ -126,7 +97,6 @@ export default function App() {
   const { isAuthenticated, fullName, logout } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [adminOpen, setAdminOpen] = useState(false)
   const location = useLocation()
 
   if (!isAuthenticated) {
@@ -137,7 +107,6 @@ export default function App() {
 
   return (
     <TooltipProvider>
-      {/* Skip link para navegación por teclado (WCAG 2.4.1) */}
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:px-3 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-md focus:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -146,9 +115,7 @@ export default function App() {
       </a>
       <div className="flex h-screen bg-background overflow-hidden">
         <ProgressModal />
-        <CognitiveChat />
 
-        {/* Mobile overlay */}
         <AnimatePresence>
           {mobileOpen && (
             <motion.div
@@ -162,7 +129,6 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {/* Sidebar */}
         <aside
           className={`
             fixed lg:relative z-30 h-full flex flex-col
@@ -171,7 +137,6 @@ export default function App() {
             ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
           `}
         >
-          {/* Logo */}
           <div className="flex items-center gap-3 px-4 py-4 border-b border-white/10 min-h-[60px]">
             <div className="flex-shrink-0 w-8 h-8 bg-white/15 rounded-lg flex items-center justify-center">
               <Building2 size={16} className="text-white" />
@@ -189,41 +154,12 @@ export default function App() {
             {!collapsed && <NotificationCenter />}
           </div>
 
-          {/* Navigation */}
           <ScrollArea className="flex-1">
             <nav className="px-2 py-3 space-y-0.5">
               {navItems.map((item) => renderNavItem(item, location, collapsed, setMobileOpen))}
-
-              {/* Sección Administración — colapsable, oculta detalles técnicos */}
-              {!collapsed && (
-                <div className="mt-4 pt-3 border-t border-white/10">
-                  <button
-                    type="button"
-                    onClick={() => setAdminOpen(!adminOpen)}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[10px] uppercase tracking-wider font-semibold text-white/40 hover:text-white/70 transition-colors"
-                  >
-                    {adminOpen ? <ChevronLeft size={11} className="rotate-90" /> : <ChevronRight size={11} />}
-                    Administración
-                  </button>
-                  <AnimatePresence initial={false}>
-                    {adminOpen && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.15 }}
-                        className="overflow-hidden space-y-0.5"
-                      >
-                        {adminItems.map((item) => renderNavItem(item, location, false, setMobileOpen))}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              )}
             </nav>
           </ScrollArea>
 
-          {/* Footer */}
           <div className="hidden lg:block px-2 py-2 border-t border-white/10 space-y-0.5">
             {!collapsed && (
               <div className="px-2.5 py-1.5 text-white/40 text-[11px] truncate">
@@ -267,9 +203,7 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Main content */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {/* Top bar (mobile) */}
           <header className="lg:hidden flex items-center gap-3 px-4 py-3 bg-card border-b border-border">
             <Button
               variant="ghost"
@@ -289,7 +223,6 @@ export default function App() {
             </div>
           </header>
 
-          {/* Page content */}
           <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none">
             <AnimatePresence mode="wait">
               <motion.div
@@ -303,24 +236,15 @@ export default function App() {
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/cases" element={<CasesList />} />
                   <Route path="/cases/:id" element={<CaseDetail />} />
-                  <Route path="/extraction" element={<Extraction />} />
                   <Route path="/emails" element={<Emails />} />
                   <Route path="/reports" element={<Reports />} />
                   <Route path="/cuadro" element={<Cuadro />} />
-                  <Route path="/intelligence" element={<Intelligence />} />
-                  <Route path="/agent" element={<AgentTools />} />
                   <Route path="/settings" element={<SettingsPage />} />
-                  <Route path="/seguimiento" element={<Seguimiento />} />
-                  <Route path="/cleanup" element={<CleanupPanel />} />
-                  <Route path="/alertas" element={<EarlyWarning />} />
-                  <Route path="/ejecutivo" element={<ExecutiveDashboard />} />
-                  <Route path="/auditoria" element={<AuditoriaFallos />} />
                 </Routes>
               </motion.div>
             </AnimatePresence>
           </main>
 
-          {/* Scroll to top */}
           <button
             onClick={() => document.getElementById('main-content')?.scrollTo({ top: 0, behavior: 'smooth' })}
             className="fixed bottom-6 right-6 z-40 w-9 h-9 bg-primary text-primary-foreground rounded-lg shadow-md hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 transition-all flex items-center justify-center opacity-70 hover:opacity-100"

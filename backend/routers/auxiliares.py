@@ -111,7 +111,6 @@ def export_control_format(db: Session = Depends(get_db)):
     ws.append(headers)
 
     cases = db.query(Case).filter(Case.processing_status == "COMPLETO").all()
-    from backend.alerts.early_warning import score_case
     now = datetime.utcnow()
 
     def short(name):
@@ -119,7 +118,6 @@ def export_control_format(db: Session = Depends(get_db)):
         return name.split()[0]
 
     for case in cases:
-        risk = score_case(case, now)
         ws.append([
             case.fecha_ingreso or "",
             "TUTELA" if (case.origen == "TUTELA") else (case.origen or ""),
@@ -136,7 +134,7 @@ def export_control_format(db: Session = Depends(get_db)):
             case.sentido_fallo_1st or "",
             case.sentido_fallo_2nd or "",
             case.estado_incidente or "N/A",
-            risk.level,
+            "",
         ])
 
     # Ajustar anchos

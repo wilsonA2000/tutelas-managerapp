@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from backend.database.database import get_db
 from backend.database.models import Document
-from backend.services.extraction_service import reextract_doc
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -254,6 +253,3 @@ def api_preview_document(doc_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/{doc_id}/reextract")
-def api_reextract_document(doc_id: int, db: Session = Depends(get_db)):
-    return reextract_doc(db, doc_id)

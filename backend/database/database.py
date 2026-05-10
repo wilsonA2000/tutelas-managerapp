@@ -57,14 +57,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db():
     """Crear todas las tablas si no existen."""
     import backend.auth.models  # noqa: F401 — register User model
-    import backend.knowledge.models  # noqa: F401 — register KnowledgeEntry
-    import backend.agent.reasoning  # noqa: F401 — register ReasoningLog
-    import backend.agent.memory  # noqa: F401 — register Correction
-    import backend.alerts.models  # noqa: F401 — register Alert
     Base.metadata.create_all(bind=engine)
-    # Init FTS5 virtual table for full-text search
-    from backend.knowledge.models import init_fts5
-    init_fts5(engine)
     # Create default admin user if none exists
     from backend.auth.service import create_default_user
     db = SessionLocal()

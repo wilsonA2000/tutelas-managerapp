@@ -308,10 +308,19 @@ def api_merge_case(case_id: int, target_id: int, db: Session = Depends(get_db)):
 
 @router.post("/{case_id}/sync")
 def api_sync_single_case(case_id: int, db: Session = Depends(get_db)):
-    """Sincronizar documentos de una carpeta individual con el disco."""
+    """Sincronizar documentos de una carpeta individual con el disco.
+
+    Solo agrega archivos nuevos y elimina los que ya no existen.
+    El ground truth lo construye Claude vía scripts/load_ground_truth.py.
+    """
     from pathlib import Path
     from backend.database.models import Document
-    from backend.database.seed import classify_document
+
+    EXT_TO_TYPE = {
+        ".pdf": "PDF", ".docx": "DOCX", ".doc": "DOC",
+        ".png": "IMAGE", ".jpg": "IMAGE", ".jpeg": "IMAGE",
+        ".md": "MARKDOWN",
+    }
 
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
@@ -319,137 +328,30 @@ def api_sync_single_case(case_id: int, db: Session = Depends(get_db)):
     if not case.folder_path or not Path(case.folder_path).exists():
         raise HTTPException(status_code=400, detail="Carpeta no encontrada en disco")
 
-    VALID_EXT = {".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".md"}
     folder = Path(case.folder_path)
     existing = {d.filename for d in case.documents}
 
     docs_added = 0
     docs_removed = 0
 
-    # Agregar archivos nuevos
     for f in sorted(folder.iterdir()):
-        if not f.is_file() or f.suffix.lower() not in VALID_EXT or f.name in existing:
+        ext = f.suffix.lower()
+        if not f.is_file() or ext not in EXT_TO_TYPE or f.name in existing:
             continue
         db.add(Document(
             case_id=case.id, filename=f.name, file_path=str(f),
-            doc_type=classify_document(f.name), file_size=f.stat().st_size,
+            doc_type=EXT_TO_TYPE[ext], file_size=f.stat().st_size,
         ))
         docs_added += 1
 
-    # Eliminar documentos que ya no existen en disco
     for doc in case.documents:
         if doc.file_path and not Path(doc.file_path).exists():
             db.delete(doc)
             docs_removed += 1
 
     db.commit()
-
-    # Verificacion inteligente de pertenencia (0 llamadas IA, todo local)
-    from backend.extraction.pipeline import verify_document_belongs, extract_document_text
-
-    docs_moved = 0
-    docs_suspicious = 0
-    reassign_stats = {}
-
-    db.refresh(case)
-    for doc in list(case.documents):
-        if doc.verificacion in ("OK", "REASIGNADO"):
-            continue
-        if not doc.extracted_text and doc.file_path and Path(doc.file_path).exists():
-            try:
-                text, method = extract_document_text(doc)
-                if text and len(text.strip()) >= 50:
-                    doc.extracted_text = text
-                    doc.extraction_method = method
-            except Exception:
-                pass
-        if not doc.extracted_text or len(doc.extracted_text or "") < 100:
-            continue
-
-        status, detalle = verify_document_belongs(case, doc)
-        doc.verificacion = status
-        doc.verificacion_detalle = detalle
-
-        if status == "NO_PERTENECE":
-            docs_moved += 1
-            from backend.database.models import AuditLog
-            db.add(AuditLog(
-                case_id=case.id,
-                field_name="DOC_NO_PERTENECE",
-                old_value=doc.filename,
-                new_value=detalle[:200],
-                action="SYNC_VERIFY",
-                source="sync_individual",
-            ))
-        elif status == "SOSPECHOSO":
-            docs_suspicious += 1
-
-    db.commit()
     return {
-        "message": f"+{docs_added} docs, -{docs_removed} eliminados, {docs_moved} reasignados, {docs_suspicious} sospechosos",
+        "message": f"+{docs_added} docs, -{docs_removed} eliminados",
         "docs_added": docs_added,
         "docs_removed": docs_removed,
-        "docs_moved": docs_moved,
-        "docs_suspicious": docs_suspicious,
-    }
-
-
-# ============================================================
-# v8.1: Endpoint validador heurístico + LLM opcional
-# ============================================================
-
-@router.post("/{case_id}/validate")
-def validate_case(
-    case_id: int,
-    use_llm: bool = False,
-    timeout_s: int = 30,
-    db: Session = Depends(get_db),
-):
-    """v8.1: valida los campos extraídos del case contra el texto de los docs.
-
-    - Siempre devuelve heurística determinista (firmante↔accionante, mezcla rad).
-    - Si `use_llm=true` y `LLM_LOCAL_PRIMARY=true`, también invoca LoRA con
-      timeout duro. Si LoRA falla/timeout, solo retorna heurística (no bloquea).
-
-    Returns:
-        {
-            "case_id": int,
-            "heuristic": {field: {verdict, razon}, ...},
-            "llm": {... raw response ...} | None,
-            "elapsed_s": float
-        }
-    """
-    import time
-    case = db.query(Case).filter(Case.id == case_id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Case no encontrado")
-
-    from backend.cognition.cognitive_complementary_ai import (
-        validate_case_extraction, _heuristic_validation,
-        _build_authority_weighted_text,
-    )
-
-    text = _build_authority_weighted_text(db, case, max_chars=4000) or ""
-    if not text:
-        # Fallback: concatenar texto de docs OK
-        from backend.database.models import Document
-        docs = db.query(Document).filter(
-            Document.case_id == case_id,
-            Document.verificacion == "OK",
-        ).limit(5).all()
-        text = "\n\n".join((d.extracted_text or "")[:1500] for d in docs)
-
-    t0 = time.time()
-    if use_llm:
-        result = validate_case_extraction(case, text, timeout_s=float(timeout_s))
-        result["case_id"] = case_id
-        result["elapsed_s"] = round(time.time() - t0, 2)
-        return result
-    # Solo heurística: <1ms, no falla nunca
-    h = _heuristic_validation(case, text)
-    return {
-        "case_id": case_id,
-        "heuristic": h,
-        "llm": None,
-        "elapsed_s": round(time.time() - t0, 3),
     }

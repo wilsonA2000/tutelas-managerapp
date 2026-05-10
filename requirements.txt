@@ -1,4 +1,4 @@
-# Backend
+# Backend FastAPI
 fastapi>=0.115.0
 uvicorn[standard]>=0.24.0
 sqlalchemy>=2.0.23
@@ -7,29 +7,17 @@ python-multipart>=0.0.6
 aiofiles>=23.0
 sse-starlette>=1.6
 
-# Document extraction
+# Document preview (PDF + DOCX)
 pdfplumber>=0.11.0
 PyMuPDF>=1.24.0
 python-docx>=1.1.0
-pdf2image>=1.16
-pytesseract>=0.3.10
 Pillow>=10.0
-
-# Advanced document normalization (PDF/DOCX → Markdown)
-marker-pdf>=1.10.0
-paddlepaddle>=3.3.0
-paddleocr>=2.10,<3.0
-
-# AI extraction (v5.4: solo DeepSeek + Anthropic)
-# openai SDK se reutiliza para DeepSeek (compatible vía base_url)
-anthropic>=0.40.0
-openai>=1.50.0
 
 # Excel & data
 openpyxl>=3.1.2
 pandas>=2.1.0
 
-# Gmail API REST
+# Gmail API REST (descarga raw vía scripts/gmail_download_only.py)
 google-auth>=2.0
 google-auth-oauthlib>=1.0
 google-api-python-client>=2.0
@@ -40,23 +28,10 @@ alembic>=1.13
 # Authentication
 python-jose[cryptography]>=3.3
 passlib[bcrypt]>=1.7
-bcrypt>=4.0,<4.1   # passlib 1.7 incompatible con bcrypt 4.1+ (rechaza >72 bytes en detect_wrap_bug)
+bcrypt>=4.0,<4.1
 
 # Utilities
 python-dotenv>=1.0
-
-# PII detection & redaction (v5.3)
-presidio-analyzer>=2.2.355
-presidio-anonymizer>=2.2.355
-spacy>=3.7
-rapidfuzz>=3.5
-
-# Cognitive agent — SQL parsing for tool execution (backend/cognition/agent/tools.py)
-sqlglot>=30
-
-# Embeddings — similitud semántica BGE-M3 (intelligence/similar, /extraction/benchmark)
-faiss-cpu>=1.13
-sentence-transformers>=3.0
 
 # Testing
 pytest>=8.0

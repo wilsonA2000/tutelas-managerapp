@@ -116,12 +116,6 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
                 action="EDICION_MANUAL",
                 source="usuario",
             ))
-            # Record correction for agent learning
-            try:
-                from backend.agent.memory import record_correction
-                record_correction(db, case.id, csv_col, old_value, new_value, case.folder_name or "")
-            except Exception:
-                pass
 
     case.updated_at = datetime.utcnow()
     db.commit()
