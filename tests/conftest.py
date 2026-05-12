@@ -380,3 +380,6 @@ def doc_ids(seed_data):
 @pytest.fixture(scope="session")
 def email_ids(seed_data):
     return seed_data["email_ids"]
+
+# (Modernización Fase 8) tests/_legacy/ = pruebas de código v8 jubilado, no se recogen.
+collect_ignore_glob = ['_legacy']

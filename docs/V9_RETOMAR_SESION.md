@@ -11,7 +11,27 @@ Es una plataforma para gestionar acciones de tutela de la Secretaría de Educaci
 
 **v9** es una reescritura desde cero que reemplazó el "mutante v8" (3 pipelines paralelos, 13 sitios LLM, contradicciones). Filosofía: pipeline plano, 1 autoridad por campo, regex determinístico primero, LLM solo donde aporta. Ver `CLAUDE.md` sección v9.
 
-## ESTADO ACTUAL (al cierre de la sesión anterior)
+---
+
+## ✅ MODERNIZACIÓN COMPLETA (2026-05-11) — Fases 0-8
+
+Se cerró el programa de modernización (plan en `~/.claude/plans/bueno-ahora-lo-mas-kind-steele.md`). Resumen de lo que cambió y del estado resultante:
+
+- **Toda la extracción es v9.** Los endpoints `/api/extraction/{single,batch,run-all,agent}/...`, la re-extracción tras `POST /api/emails/check` y el monitor de Gmail llaman a `backend.v9.pipeline.extract_case` (que ahora corre `field_extractor_pass` → los 22 `extract_<campo>_for_case`). `persist.py` **solo rellena campos vacíos** — nunca pisa lo ya extraído ni lo editado a mano → "Extraer/Re-extraer/batch" son seguros. **El motor v8 ya no se invoca.**
+- **`/api/dashboard/kpis`** ya no da 500 (join `Document↔Case` calificado en `case_service._get_quality_metrics`).
+- **Asistente jurídico (botón flotante):** apunta a `POST /api/chat/` (Tier-1 determinístico, instantáneo; Tier-2 LLM local gateado por `LLM_LOCAL_PRIMARY=true` Y no `V9_DISABLE_LLM`). `chat.py` tiene intents nuevos sobre el cuadro (`cuadro_columnas`, `cuadro_completitud`, `_overview` enriquecido) y corregido el desfase v8/v9 en `count_by_abogado/dependencia/sentido_fallo/temas_top/...` → contesta con números reales. `/api/cognitive/*` y `/api/dashboard/chat` retirados; `routers/cognitive.py` borrado.
+- **Endpoint v8.1 "validar" retirado** (`/api/cases/{id}/validate`, `/api/cleanup/validate-all`) + su botón en la ficha.
+- **Utilidades de documentos** (`extract_document_text`, `classify_doc_type`, `verify_document_belongs`, `verify_all_documents`, `reextract_document`, `compute_file_hash`, `detect_duplicate_documents`, `_verify_bayesian`, `_verify_legacy`) viven ahora en **`backend/extraction/doc_ops.py`** (módulo limpio). El código vivo importa de ahí.
+- **Borrado:** `backend/_legacy/{extraction/{pipeline,unified,unified_cognitive}.py, router_cognitive.py}`, `backend/cognition/{cognitive_complementary_ai,focused_field_extractors,document_authority,cognitive_persist,live_consolidator,entropy,procedural_timeline,case_classifier,flag_normalizer}.py`, `backend/cognition/agent/*`, `backend/extraction/remote_client.py`, `scripts/_legacy/*`, y sus tests (movidos a `tests/_legacy/`, que `tests/conftest.py` ignora). Scripts one-off que dependían de eso → `scripts/archive/`.
+- **Sigue VIVO en `backend/cognition/`:** `legal_schema.py` (lo usa v9), `bayesian_assignment.py` + `canonical_identifiers.py` (los usa `doc_ops._verify_bayesian`), `confidence.py`, `folder_renamer.py`, y el "fill cognitivo determinista" (`cognitive_fill` → `zone_classifier`/`entity_extractor`/`decision_extractor`/`narrative_builder`/`cie10_to_derecho`/`semantic_matcher`/`timeline_builder`/`ner_spacy`) — lo usan `services/active_learning_scheduler.py` (cron) y `ner_spacy._get_nlp` (main.py / routers/extraction.py). **Pendiente futuro:** si se retira ese scheduler, esa sub-rama queda muerta.
+- **Frontend:** "Procesamiento" y "Herramientas IA" marcadas "(v8 · legacy)" en el menú; `AgentChat.tsx` (huérfano) → `frontend/src/_legacy/`; `npm run build` arreglado.
+- **Red de seguridad:** `scripts/run_safety_net.sh` (= `v9_test_standalone.py` 61/61 + `scripts/smoke_backend.py` 92 endpoints + `scripts/smoke_frontend.mjs` Playwright — éste necesita `cd frontend && npx playwright install chromium`). Correr tras cada cambio.
+- **Servidores:** backend `V9_DISABLE_LLM=true ./venv/bin/python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000`; frontend `./node_modules/.bin/vite --host 0.0.0.0` en `frontend/`; llama-server :8765 (Qwen3-4B). Rama de respaldo: `backup/pre-modernizacion`.
+- **Pendiente menor:** linter de imports muertos (`ruff`/`pyflakes` no instalados); migrar `sync_service`/doctype-nuevos a `v9.doc_librarian` en vez de `classify_doc_type` (filename); el cuadro Excel de 39 columnas (`/api/reports/excel` ya existe; falta `scripts/build_cuadro_excel.py` si se quiere CLI).
+
+---
+
+## ESTADO ACTUAL (al cierre de la sesión anterior — Fase 2 de extracción)
 
 ### FASE 1 — INGESTA: ✅ COMPLETADA
 - DB limpia reconstruida desde Gmail (1440 emails, orden cronológico más-antiguo→reciente)

@@ -6,8 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Versión actual
 
-**v9.1 — Pipeline plano simplificado (mayo 2026)** + v8.3 legacy en coexistencia.
-Branch principal de trabajo: `experiment-v5.5` (contiene v8.x y v9 en paralelo).
+**v9.1 — Pipeline plano (mayo 2026), modernizado.** Branch de trabajo: `experiment-v5.5`. Rama de respaldo: `backup/pre-modernizacion`.
+
+> **⚠️ MODERNIZACIÓN 2026-05-11 (Fases 0-8 — ver `docs/V9_RETOMAR_SESION.md` y `~/.claude/plans/bueno-ahora-lo-mas-kind-steele.md`):**
+> El "v8 legacy en coexistencia" se retiró. **Toda la extracción es v9** — `/api/extraction/*` y el monitor de Gmail llaman a `backend.v9.pipeline.extract_case` (que ahora corre `field_extractor_pass` → los 22 `extract_<campo>_for_case`); `persist.py` solo rellena campos vacíos, no pisa el cuadro. El motor v8 (`extraction/{pipeline,unified,unified_cognitive}.py`, varios `cognition/*`, `extraction/remote_client.py`) está **borrado**. Las utilidades de documentos viven en **`backend/extraction/doc_ops.py`**. `routers/cognitive.py` y `routers/dashboard.py::/chat` y `cases.py::/validate` retirados; el botón flotante "Asistente jurídico" usa `POST /api/chat/` (`routers/chat.py`). Sigue vivo en `cognition/`: `legal_schema.py`, `bayesian_assignment.py`, `canonical_identifiers.py`, `confidence.py`, `folder_renamer.py`, y el "fill cognitivo determinista" (`cognitive_fill`+chain) — lo usa `services/active_learning_scheduler.py` y `ner_spacy._get_nlp`. Red de seguridad: `bash scripts/run_safety_net.sh`. Arrancar backend con `V9_DISABLE_LLM=true`. **Las secciones de abajo sobre "coexistencia v8↔v9" y "cuándo borrar v5.5/v8" son históricas.**
 
 ### v9 — Por qué existe y qué reemplaza
 

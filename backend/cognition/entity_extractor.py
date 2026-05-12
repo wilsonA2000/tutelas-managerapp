@@ -1,4 +1,3 @@
-# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Entity extractor con roles: accionante/accionado/vinculado/juez/abogado.
 
 No se limita a encontrar nombres — infiere el rol legal de cada uno

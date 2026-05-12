@@ -1,26 +1,24 @@
 """Paquete `cognition`.
 
-⚠️ ESTADO (Modernización Fase 7): de este paquete, lo que sigue VIVO es
-`legal_schema.py` (mapa judicial Santander + `SED_TEMA_MAPPING` +
-`categoria_tematica_de_asunto`, lo usa v9), `bayesian_assignment.py` (lo usa
-`extraction/doc_ops._verify_bayesian`), `confidence.py` y `folder_renamer.py`.
+Estado tras la modernización (Fase 7-8). Lo que sigue VIVO:
+- `legal_schema.py` — mapa judicial Santander + `SED_TEMA_MAPPING` +
+  `categoria_tematica_de_asunto`. Lo usa el pipeline v9 (`backend/v9/field_extractor.py`,
+  `backend/routers/chat.py`).
+- `bayesian_assignment.py` + `canonical_identifiers.py` — los usa
+  `extraction/doc_ops._verify_bayesian` (verificación de pertenencia doc↔caso).
+- `confidence.py`, `folder_renamer.py` — utilidades vivas.
+- El "fill cognitivo determinista" (`cognitive_fill` → `zone_classifier`,
+  `entity_extractor`, `decision_extractor`, `narrative_builder`, `cie10_to_derecho`,
+  `semantic_matcher`, `timeline_builder`, `ner_spacy`) — lo usa el scheduler de active
+  learning (`services/active_learning_scheduler.py`, cron 3 AM) y `ner_spacy._get_nlp`
+  lo cargan `main.py` y `routers/extraction.py`. (Pendiente de futura revisión: si se
+  retira ese scheduler, esta sub-rama queda muerta.)
 
-Todo lo demás es el **pipeline cognitivo v8 (LEGACY)** — sin uso desde v9; su único
-importador es el ya-en-cuarentena `backend/_legacy/extraction/unified_cognitive.py`.
-Cada archivo legacy está marcado `# LEGACY v8` en la primera línea. Se borra en bloque
-en la Fase 8 (junto con `backend/_legacy/extraction/unified_cognitive.py`):
-    cognitive_complementary_ai, cognitive_fill, focused_field_extractors, entropy,
-    case_classifier, canonical_identifiers, procedural_timeline, ner_spacy,
-    cie10_to_derecho, decision_extractor, document_authority, entity_extractor,
-    flag_normalizer, narrative_builder, semantic_matcher, timeline_builder,
-    zone_classifier, cognitive_persist, live_consolidator,
-    agent/{lifecycle, orchestrator, semantic_enricher, tools}.
-
-Por ahora se conservan los re-exports de abajo para no romper a ese consumidor legacy.
-
-Pipeline cognitivo v8 (histórico):
-    zone_classifier → entity_extractor → cie10_to_derecho → timeline_builder
-    → decision_extractor → narrative_builder → cognitive_fill
+Borrado en la Fase 8 (era solo del motor v8 / RunPod): `cognitive_complementary_ai`,
+`focused_field_extractors`, `document_authority`, `cognitive_persist`, `live_consolidator`,
+`entropy`, `procedural_timeline`, `case_classifier`, `flag_normalizer`,
+`agent/{lifecycle,orchestrator,semantic_enricher,tools}` — junto con
+`backend/_legacy/extraction/{pipeline,unified,unified_cognitive}.py`.
 """
 
 from backend.cognition.zone_classifier import classify_zones, DocZones
