@@ -17,7 +17,7 @@ from backend.database.models import Case, Email
 from backend.extraction.ir_models import (
     TextSpan, DocumentZone, DocumentIR, CaseIR,
 )
-from backend.extraction.pipeline import classify_doc_type
+from backend.extraction.doc_ops import classify_doc_type
 from backend.extraction.pdf_visual_analyzer import (
     analyze_pdf_visual, report_to_zone_metadata, VisualSignature,
 )
