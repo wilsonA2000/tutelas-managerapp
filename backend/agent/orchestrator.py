@@ -137,7 +137,7 @@ def classify_and_clean_folder(db: Session, case, base_dir: str) -> dict:
     Returns dict con stats de clasificación.
     """
     from backend.database.models import Document
-    from backend.extraction.pipeline import extract_document_text
+    from backend.extraction.doc_ops import extract_document_text
     from backend.config import BASE_DIR
 
     pendiente_dir = Path(base_dir) / "PENDIENTE DE UBICACION"

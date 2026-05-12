@@ -3,7 +3,7 @@
 from sqlalchemy.orm import Session
 
 from backend.database.models import Case, Document, Extraction
-from backend.extraction.pipeline import reextract_document
+from backend.extraction.doc_ops import reextract_document
 
 
 def get_review_queue(db: Session) -> list[dict]:

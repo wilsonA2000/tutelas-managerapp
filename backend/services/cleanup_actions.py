@@ -23,7 +23,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from backend.database.models import AuditLog, Case, Document, Email
-from backend.extraction.pipeline import compute_file_hash
+from backend.extraction.doc_ops import compute_file_hash
 from backend.services.sibling_mover import move_document_or_package
 
 logger = logging.getLogger("tutelas.cleanup_actions")
@@ -406,7 +406,7 @@ def batch_move_cognitive_v6016(
       4. Si verdict sigue ambiguo → marcar SOSPECHOSO con razón explícita
     """
     from backend.email.case_lookup_cache import get_cache
-    from backend.extraction.pipeline import _verify_bayesian
+    from backend.extraction.doc_ops import _verify_bayesian
     from backend.cognition.bayesian_assignment import infer_assignment
 
     start = datetime.utcnow()
@@ -1291,7 +1291,7 @@ def reverify_sospechosos(
     Returns:
         dict con transitions {(old,new): count} + details
     """
-    from backend.extraction.pipeline import verify_document_belongs
+    from backend.extraction.doc_ops import verify_document_belongs
 
     start = datetime.utcnow()
     statuses = ["SOSPECHOSO"]

@@ -483,7 +483,7 @@ def re_ocr_pending(db: Session, limit: int = 10) -> dict:
     },
 )
 def resolver_sospechosos(db: Session, limit: int = 50, include_revisar: bool = True) -> dict:
-    from backend.extraction.pipeline import verify_document_belongs as _verify
+    from backend.extraction.doc_ops import verify_document_belongs as _verify
     statuses = ["SOSPECHOSO"] + (["REVISAR"] if include_revisar else [])
     q = db.query(Document).filter(Document.verificacion.in_(statuses))
     if limit:

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from backend.database.models import (
     Case, Document, Email, Extraction, AuditLog, TokenUsage, ComplianceTracking,
 )
-from backend.extraction.pipeline import verify_document_belongs, classify_doc_type
+from backend.extraction.doc_ops import verify_document_belongs, classify_doc_type
 from backend.database.seed import classify_document, is_case_folder
 
 logger = logging.getLogger("tutelas.sync")

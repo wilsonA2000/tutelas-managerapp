@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.database.database import SessionLocal, wal_checkpoint
 from backend.database.models import Document, Case, AuditLog
-from backend.extraction.pipeline import verify_document_belongs
+from backend.extraction.doc_ops import verify_document_belongs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("reverify")

@@ -519,7 +519,7 @@ def api_dismiss_all_mismatched(db: Session = Depends(get_db)):
 @router.post("/verify-all")
 def api_verify_all_documents(db: Session = Depends(get_db)):
     """Auditoría retroactiva: verificar pertenencia de TODOS los documentos."""
-    from backend.extraction.pipeline import verify_all_documents
+    from backend.extraction.doc_ops import verify_all_documents
     stats = verify_all_documents(db)
     return stats
 
@@ -530,7 +530,7 @@ def api_full_audit(db: Session = Depends(get_db)):
     from pathlib import Path
     from backend.config import BASE_DIR
     from backend.database.models import Document, Email
-    from backend.extraction.pipeline import verify_all_documents
+    from backend.extraction.doc_ops import verify_all_documents
     import re, os
 
     VALID_EXT = {".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".md"}
@@ -615,7 +615,7 @@ def api_benchmark(limit: int = 20, db: Session = Depends(get_db)):
     from backend.agent.extractors.base import ExtractionResult
     from backend.agent.forest_extractor import extract_forest_from_sources
     from backend.database.models import Email, AuditLog, TokenUsage
-    from backend.extraction.pipeline import classify_doc_type
+    from backend.extraction.doc_ops import classify_doc_type
 
     # Tomar N casos COMPLETO con mas campos
     cases = db.query(Case).filter(
@@ -738,7 +738,7 @@ def api_benchmark(limit: int = 20, db: Session = Depends(get_db)):
 @router.get("/duplicate-docs")
 def api_duplicate_docs(db: Session = Depends(get_db)):
     """Detectar documentos duplicados entre carpetas (mismo archivo en 2+ casos)."""
-    from backend.extraction.pipeline import detect_duplicate_documents
+    from backend.extraction.doc_ops import detect_duplicate_documents
     return detect_duplicate_documents(db)
 
 

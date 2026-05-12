@@ -345,7 +345,7 @@ def api_sync_single_case(case_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     # Verificacion inteligente de pertenencia (0 llamadas IA, todo local)
-    from backend.extraction.pipeline import verify_document_belongs, extract_document_text
+    from backend.extraction.doc_ops import verify_document_belongs, extract_document_text
 
     docs_moved = 0
     docs_suspicious = 0

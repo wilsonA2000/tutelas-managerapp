@@ -872,7 +872,7 @@ def _run_sync_background_LEGACY():
 
         # Fase 2/7: Verificacion inteligente y reasignacion de documentos
         sync_result["step"] = "Paso 2/7: Verificando pertenencia de documentos..."
-        from backend.extraction.pipeline import verify_document_belongs, extract_document_text
+        from backend.extraction.doc_ops import verify_document_belongs, extract_document_text
         reassign_stats = {}
 
         all_cases = db.query(Case).filter(Case.folder_path.isnot(None)).all()

@@ -312,7 +312,7 @@ def api_extract_order(record_id: int, db: Session = Depends(get_db)):
         if doc.extracted_text:
             texts.append(doc.extracted_text)
         else:
-            from backend.extraction.pipeline import extract_document_text
+            from backend.extraction.doc_ops import extract_document_text
             text, method = extract_document_text(doc)
             if text:
                 doc.extracted_text = text

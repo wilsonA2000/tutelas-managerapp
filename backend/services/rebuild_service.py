@@ -18,7 +18,7 @@ from sqlalchemy.orm import sessionmaker
 from backend.core.settings import settings
 from backend.database.models import Base, Case, Document, Email, AuditLog
 from backend.database.seed import is_case_folder, scan_folder_documents, classify_document
-from backend.extraction.pipeline import extract_document_text
+from backend.extraction.doc_ops import extract_document_text
 
 logger = logging.getLogger("rebuild")
 
