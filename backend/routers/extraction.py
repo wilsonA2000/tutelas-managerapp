@@ -294,9 +294,15 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
 
 @router.post("/single/{case_id}")
 def api_extract_single(case_id: int, db: Session = Depends(get_db)):
-    """Extraer un caso individual (síncrono — retorna resultados completos)."""
-    from backend.extraction.pipeline import process_folder
+    """Extraer un caso individual con el pipeline v9 (síncrono).
+
+    (Modernización Fase 7.3) Usa `backend.v9.pipeline.extract_case` en vez del motor v8.
+    `persist.py` solo RELLENA campos vacíos — nunca sobrescribe valores ya extraídos ni
+    los editados a mano —, así que pulsar "Extraer" es seguro: puede añadir datos, jamás
+    pisar el cuadro v9. El motor v8 (`unified_cognitive` / `cognition/*`) ya no se usa aquí.
+    """
     import time
+    from backend.v9.pipeline import extract_case
 
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
@@ -307,18 +313,15 @@ def api_extract_single(case_id: int, db: Session = Depends(get_db)):
         return {"status": "running", "message": "Ya hay una extraccion en progreso"}
 
     start = time.time()
-    case.processing_status = "PENDIENTE"
-    db.commit()
-
     try:
-        if settings.UNIFIED_EXTRACTOR_ENABLED:
-            from backend.extraction.unified_cognitive import unified_extract_dispatch
-            stats = unified_extract_dispatch(db, case, settings.BASE_DIR)
-        else:
-            stats = process_folder(db, case)
-        elapsed = int(time.time() - start)
+        result = extract_case(db, case_id, dry_run=False, use_llm=True)
+        # Marca el caso como procesado (semántica de la UI; v9 no gestiona processing_status).
+        try:
+            case.processing_status = "COMPLETO"
+            db.commit()
+        except Exception:
+            db.rollback()
         db.refresh(case)
-
         fields_data = _get_fields_data(case)
 
         return {
@@ -328,17 +331,17 @@ def api_extract_single(case_id: int, db: Session = Depends(get_db)):
             "processing_status": case.processing_status,
             "fields_extracted": len(fields_data),
             "fields": fields_data,
-            "documents_processed": stats.get("documents_extracted", 0),
-            "documents_excluded": stats.get("documents_failed", 0),
-            "suspicious_docs": stats.get("suspicious_docs", []),
-            "reassigned_docs": stats.get("reassigned_docs", []),
-            "cases_created": stats.get("cases_created", []),
-            "corrections_injected": stats.get("corrections_injected", 0),
-            "elapsed_seconds": elapsed,
+            "completitud_v9": result.fields.completitud(),
+            "documents_processed": result.docs_processed,
+            "documents_excluded": result.docs_failed,
+            "llm_calls": result.llm_calls,
+            "warnings": result.warnings,
+            "elapsed_seconds": int(time.time() - start),
             "tokens": _get_token_usage(db, case_id),
-            "method": stats.get("method", "pipeline"),
+            "method": "v9.pipeline",
         }
     except Exception as e:
+        db.rollback()
         return {
             "status": "error",
             "case_id": case_id,
