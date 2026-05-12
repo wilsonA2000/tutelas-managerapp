@@ -289,8 +289,8 @@ from backend.routers.agent import router as agent_router
 app.include_router(agent_router)
 from backend.routers.cleanup import router as cleanup_router
 app.include_router(cleanup_router)
-from backend.routers.cognitive import router as cognitive_router
-app.include_router(cognitive_router)
+# (Modernización Fase 6) router `cognitive` retirado: el botón flotante usa /api/chat/.
+# El archivo se movió a backend/_legacy/router_cognitive.py.
 from backend.routers.chat import router as chat_router
 app.include_router(chat_router)
 from backend.routers.v9 import router as v9_router
