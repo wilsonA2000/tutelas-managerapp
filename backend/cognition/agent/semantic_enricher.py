@@ -1,3 +1,4 @@
+# LEGACY v8 — orquestador/chat Qwen-7B sin uso desde v9; candidato a borrado en Fase 8.
 """Capa 4.6 v9.0 — Enriquecimiento semántico con Qwen 7B local.
 
 Cuando la cadena regex → kNN consensus deja un campo vacío, este módulo

@@ -1,18 +1,26 @@
-"""Módulo cognitivo (v5.3.1) — emula razonamiento jurídico sin IA externa.
+"""Paquete `cognition`.
 
-Codifica el "mapa mental" que un LLM aplica implícitamente al leer una
-tutela, pero con lógica determinística y auditable. Objetivo: reducir la
-dependencia de IA externa del ~20% (v5.2) a <5% (v5.3.1), dejando el LLM
-solo para casos verdaderamente ambiguos.
+⚠️ ESTADO (Modernización Fase 7): de este paquete, lo que sigue VIVO es
+`legal_schema.py` (mapa judicial Santander + `SED_TEMA_MAPPING` +
+`categoria_tematica_de_asunto`, lo usa v9), `bayesian_assignment.py` (lo usa
+`extraction/doc_ops._verify_bayesian`), `confidence.py` y `folder_renamer.py`.
 
-Pipeline cognitivo:
-    1. zone_classifier   — secciones del documento (encabezado, hechos, resuelve...)
-    2. entity_extractor  — actores con roles (accionante/accionado/vinculado/juez)
-    3. coreference       — resuelve "la accionante" → nombre real
-    4. cie10_to_derecho  — diagnóstico → derechos fundamentales implícitos
-    5. timeline_builder  — cronología de hechos desde múltiples documentos
-    6. decision_extractor— sentido_fallo + fecha + razón
-    7. narrative_builder — OBSERVACIONES / ASUNTO / PRETENSIONES por plantilla
+Todo lo demás es el **pipeline cognitivo v8 (LEGACY)** — sin uso desde v9; su único
+importador es el ya-en-cuarentena `backend/_legacy/extraction/unified_cognitive.py`.
+Cada archivo legacy está marcado `# LEGACY v8` en la primera línea. Se borra en bloque
+en la Fase 8 (junto con `backend/_legacy/extraction/unified_cognitive.py`):
+    cognitive_complementary_ai, cognitive_fill, focused_field_extractors, entropy,
+    case_classifier, canonical_identifiers, procedural_timeline, ner_spacy,
+    cie10_to_derecho, decision_extractor, document_authority, entity_extractor,
+    flag_normalizer, narrative_builder, semantic_matcher, timeline_builder,
+    zone_classifier, cognitive_persist, live_consolidator,
+    agent/{lifecycle, orchestrator, semantic_enricher, tools}.
+
+Por ahora se conservan los re-exports de abajo para no romper a ese consumidor legacy.
+
+Pipeline cognitivo v8 (histórico):
+    zone_classifier → entity_extractor → cie10_to_derecho → timeline_builder
+    → decision_extractor → narrative_builder → cognitive_fill
 """
 
 from backend.cognition.zone_classifier import classify_zones, DocZones

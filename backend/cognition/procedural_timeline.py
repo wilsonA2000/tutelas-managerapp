@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Procedural Timeline — Capa 4 del pipeline cognitivo v6.0.
 
 Construye la línea temporal del proceso jurídico ordenando los documentos del

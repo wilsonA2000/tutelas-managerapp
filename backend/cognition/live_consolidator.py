@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Live Consolidator — Capa 6 del pipeline cognitivo v6.0.
 
 Consolidación que ocurre DENTRO del pipeline (no después como reconcile_db.py).

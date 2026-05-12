@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Extractor de decisión del juez: CONCEDE / NIEGA / IMPROCEDENTE / PARCIAL.
 
 Opera sobre la zona 'resuelve' o 'concede_niega' del documento. Emula cómo

@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Mapeo CIE-10 → derechos fundamentales implícitos y keywords → taxonomía.
 
 Codifica lo que un abogado sabe por experiencia: si el accionante menciona

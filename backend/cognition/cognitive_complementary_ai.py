@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Fase 6.5: IA local complementaria — llena campos vacíos aplicables.
 
 Después de la cognición determinista (capas 0-6), evalúa qué campos del

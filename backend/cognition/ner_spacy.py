@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Wrapper de spaCy NER para backend/cognition/.
 
 Usa `es_core_news_lg` (550 MB, CPU-friendly) para:

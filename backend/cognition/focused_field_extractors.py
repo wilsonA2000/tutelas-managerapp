@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Extractores LLM focalizados por campo (Fase 2.2 — v8.3).
 
 Cada campo critico tiene su propio prompt ultra-especifico + validator

@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Canonical Identifiers — Capa 2 del pipeline cognitivo v6.0.
 
 Cosecha identificadores de un documento (rad23, rad_corto, FOREST, CC,

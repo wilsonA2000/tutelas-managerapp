@@ -31,7 +31,7 @@ def test_is_case_folder_valid():
 
 def test_classify_doc_type():
     """Clasificacion de documentos por nombre."""
-    from backend.extraction.pipeline import classify_doc_type
+    from backend.extraction.doc_ops import classify_doc_type
     assert "GMAIL" in classify_doc_type("Gmail - RV_ Tutela.pdf")
 
 

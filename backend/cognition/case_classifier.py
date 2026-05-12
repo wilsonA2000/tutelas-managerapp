@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Case Classifier — Capa 4 del pipeline cognitivo v6.0.
 
 Determina el `origen` del caso a partir del timeline procesal:

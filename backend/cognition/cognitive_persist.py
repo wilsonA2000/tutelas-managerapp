@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Cognitive Persist — Capa 7 del pipeline cognitivo v6.0.
 
 Persistencia atómica negentrópica. En lugar de escribir campos durante el

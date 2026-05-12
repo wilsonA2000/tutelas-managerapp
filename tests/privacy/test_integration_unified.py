@@ -42,7 +42,7 @@ def test_redacted_payload_has_no_numeric_pii():
 
 def test_collect_known_entities_builds_blacklist():
     """_collect_known_entities debe sacar nombres de regex_results y del case."""
-    from backend.extraction.unified import _collect_known_entities
+    from backend._legacy.extraction.unified import _collect_known_entities
     from backend.agent.extractors.base import ExtractionResult
 
     class FakeCase:

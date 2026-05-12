@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Fase 6.6: Auto-normalización de flags impugnacion/incidente.
 
 Si el pipeline determinista o la IA llenó datos de 2da instancia o de desacato,

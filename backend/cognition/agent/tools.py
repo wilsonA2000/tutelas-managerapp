@@ -1,3 +1,4 @@
+# LEGACY v8 — orquestador/chat Qwen-7B sin uso desde v9; candidato a borrado en Fase 8.
 """Tools del agente cognitivo — funciones que Qwen puede invocar vía tool calling.
 
 Cada tool tiene:

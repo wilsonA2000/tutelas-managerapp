@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Cognitive fill: intenta rellenar los ~8 campos semánticos SIN IA externa.
 
 Ejecuta el pipeline cognitivo (zones → actors → cie10 → decision → narrative)

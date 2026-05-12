@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Semantic matcher con spaCy word vectors (es_core_news_lg).
 
 Reemplaza sentence-transformers (que requiere PyTorch, ~2GB).

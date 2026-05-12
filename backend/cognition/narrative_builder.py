@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Narrative builder: genera ASUNTO, PRETENSIONES, OBSERVACIONES,
 DERECHO_VULNERADO por plantillas determinísticas a partir de datos extraídos.
 

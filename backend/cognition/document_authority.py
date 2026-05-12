@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Document Authority — jerarquía de fuerza probatoria de documentos en tutelas.
 
 v8.1 — Codifica el conocimiento jurídico de Wilson sobre qué documentos tienen

@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Zone classifier: identifica secciones de un documento jurídico colombiano.
 
 Emula lo que un abogado (o un LLM) hace al leer un auto/sentencia: localiza

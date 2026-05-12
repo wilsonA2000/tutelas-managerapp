@@ -1,3 +1,4 @@
+# LEGACY v8 — pipeline cognitivo sin uso desde v9; candidato a borrado en Fase 8 (ver backend/cognition/__init__.py).
 """Entropía de Shannon aplicada a casos jurídicos.
 
 Cuantifica el desorden de un caso en términos de completitud y consistencia

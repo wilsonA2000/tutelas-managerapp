@@ -1,3 +1,4 @@
+# LEGACY v8 — orquestador/chat Qwen-7B sin uso desde v9; candidato a borrado en Fase 8.
 """Lifecycle manager Qwen ↔ PaddleOCR — swap dinámico de modelos en GPU.
 
 Diseño para usuario único en fase desarrollo + escalable hasta 10 concurrentes:

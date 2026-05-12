@@ -1,3 +1,4 @@
+# LEGACY v8 — orquestador/chat Qwen-7B sin uso desde v9; candidato a borrado en Fase 8.
 """Orchestrator del chat agente: Qwen + tools + loop de razonamiento.
 
 Flujo:
