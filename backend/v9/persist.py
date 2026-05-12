@@ -31,7 +31,7 @@ logger = logging.getLogger("tutelas.v9.persist")
 # Solo los campos que v9 escribe. El resto se deja como esté.
 _CASE_FIELD_MAP = {
     # Excel field → Case attribute
-    "radicado_23_digitos": None,         # NO existe en Case (es virtual / vía Extraction)
+    "radicado_23_digitos": "radicado_23_digitos",  # SÍ existe en Case (lo lee el cuadro Excel)
     "radicado_forest": "radicado_forest",
     "tipo_actuacion": "tipo_actuacion",
     "accionante": "accionante",
