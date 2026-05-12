@@ -20,13 +20,34 @@ from backend.database.database import init_db, get_db, SessionLocal
 from backend.database.seed import run_seed
 from backend.routers import cases, documents, extraction, dashboard, reports, emails, seguimiento, import_control, auditoria_fallos, auxiliares
 from backend.email.gmail_monitor import check_inbox, get_gmail_total
-from backend.extraction.unified_cognitive import unified_extract_dispatch
 from backend.database.models import Case, Email
 
 # Logging estructurado
 from backend.core.logging import setup_logging, get_logger
 setup_logging(log_dir=str(Path(__file__).resolve().parent.parent / "logs"))
 logger = get_logger("main")
+
+
+def _v9_extract(db, case) -> dict:
+    """(Modernización Fase 7.3) Extrae un caso con el pipeline v9 — reemplaza el motor v8
+    `unified_extract_dispatch` en el monitor de Gmail y la extracción masiva. Devuelve un
+    dict tipo-stats por compatibilidad con los llamadores. `persist.py` solo rellena campos
+    vacíos: jamás pisa el cuadro v9 ni lo editado a mano."""
+    from backend.v9.pipeline import extract_case
+    r = extract_case(db, case.id, dry_run=False, use_llm=False)
+    try:
+        case.processing_status = "COMPLETO"
+        db.commit()
+    except Exception:
+        db.rollback()
+    return {
+        "ai_fields_extracted": sum(1 for v in r.fields.values.values() if v),
+        "documents_extracted": r.docs_processed,
+        "documents_failed": r.docs_failed,
+        "ai_error": (r.warnings[0] if r.warnings else None),
+        "renamed": False,
+        "method": "v9.pipeline",
+    }
 
 # ============================================================
 # Estado global del monitor de Gmail y extraccion
@@ -112,7 +133,7 @@ async def gmail_background_check():
 
                             cases_processed.add(case.id)
                             try:
-                                stats = unified_extract_dispatch(db, case, settings.BASE_DIR)
+                                stats = _v9_extract(db, case)
                                 fields = stats.get("ai_fields_extracted", 0)
                                 total_fields += fields
                                 add_monitor_log(
@@ -408,9 +429,9 @@ def _run_gmail_check_background():
         # Expandir total: 2 pasos base + N casos
         gmail_check_result["total"] = 2 + len(cases_to_process)
 
-        # Pausar llama-server antes de re-extracción cognitiva (riesgo OOM en WSL 8 GB).
-        # Why: cada unified_extract_dispatch puede gatillar LLM y, sumado al server :8765
-        # cargado, causa swap thrashing 2.6 GB observado en sesión previa.
+        # Pausar llama-server antes de la re-extracción (precaución de RAM en equipos justos).
+        # Fase 7.3: la re-extracción ahora es v9 (`_v9_extract` → extract_case con use_llm=False),
+        # así que normalmente no toca el LLM; se conserva la pausa como salvaguarda.
         if cases_to_process:
             try:
                 from backend.services.llm_mutex import pause_llm_for_extraction
@@ -424,7 +445,7 @@ def _run_gmail_check_background():
             _update_pct()
 
             try:
-                stats = unified_extract_dispatch(db, case, settings.BASE_DIR)
+                stats = _v9_extract(db, case)
                 fields = stats.get("ai_fields_extracted", 0)
                 total_fields += fields
                 cases_processed += 1
@@ -1137,11 +1158,11 @@ def _extraction_worker_init():
 
 
 def _process_one_case_extraction(case_id: int) -> dict:
-    """Worker top-level (picklable para ProcessPool) — procesa 1 caso con sesión DB propia."""
+    """Worker top-level (picklable para ProcessPool) — procesa 1 caso con el pipeline v9
+    (sesión DB propia). `persist.py` solo rellena campos vacíos: no pisa el cuadro."""
     from backend.database.database import SessionLocal as _SessionLocal
     from backend.database.models import Case as _Case
-    from backend.extraction.unified_cognitive import unified_extract_dispatch as _dispatch
-    from backend.core.settings import settings as _settings
+    from backend.v9.pipeline import extract_case as _extract_case
 
     thread_db = _SessionLocal()
     case_folder = f"ID {case_id}"
@@ -1150,8 +1171,16 @@ def _process_one_case_extraction(case_id: int) -> dict:
         if not case:
             return {"case_id": case_id, "folder": case_folder, "error": "case no encontrado"}
         case_folder = case.folder_name or case_folder
-        stats = _dispatch(thread_db, case, _settings.BASE_DIR)
-        return {"case_id": case_id, "folder": case_folder, "stats": stats}
+        r = _extract_case(thread_db, case_id, dry_run=False, use_llm=False)
+        try:
+            case.processing_status = "COMPLETO"
+            thread_db.commit()
+        except Exception:
+            thread_db.rollback()
+        return {"case_id": case_id, "folder": case_folder, "stats": {
+            "ai_fields_extracted": sum(1 for v in r.fields.values.values() if v),
+            "documents_extracted": r.docs_processed, "method": "v9.pipeline",
+        }}
     except Exception as e:
         try:
             thread_db.rollback()

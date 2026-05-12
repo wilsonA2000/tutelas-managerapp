@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from backend.database.database import get_db, SessionLocal
 from backend.database.models import Case
 from backend.services.extraction_service import get_review_queue
-from backend.extraction.pipeline import process_folder
 from backend.core.settings import settings
 
 router = APIRouter(prefix="/api/extraction", tags=["extraction"])
@@ -91,22 +90,20 @@ def _extraction_worker_init():
 
 
 def _process_one_case_router(args: tuple) -> tuple:
-    """Worker top-level (picklable) para ProcessPool. args=(cid, classify_docs).
+    """Worker top-level (picklable) para ProcessPool. args=(cid, _classify_docs).
 
-    Sin acceso a state global del proceso main: el progress se actualiza en main al recibir
-    el future. Retorna (ok, folder_name, error_reason, cid).
-
-    Reintenta hasta 3 veces ante OperationalError transitorios de SQLite
-    (DrvFs en /mnt/c puede arrojar "disk I/O error" o "database is locked"
-    bajo contención con varios workers escribiendo simultáneamente).
+    (Modernización Fase 7.3) Corre el pipeline v9 (`extract_case`) por caso. `persist.py`
+    solo rellena campos vacíos → el batch no puede pisar el cuadro v9, solo añadir. El
+    flag `_classify_docs` ya no aplica (v9 clasifica los docs vía `doc_librarian` en la
+    ingesta). Retorna (ok, folder_name, error_reason, cid). Reintenta 3× ante
+    OperationalError transitorios de SQLite.
     """
     import time as _time
     from sqlalchemy.exc import OperationalError as _OpErr
-    cid, classify_docs = args
+    cid, _classify_docs = args
     from backend.database.database import SessionLocal as _SessionLocal
     from backend.database.models import Case as _Case
-    from backend.core.settings import settings as _settings
-    from backend.extraction.pipeline import process_folder as _process_folder
+    from backend.v9.pipeline import extract_case as _extract_case
 
     last_err = None
     for attempt in range(3):
@@ -120,28 +117,12 @@ def _process_one_case_router(args: tuple) -> tuple:
                 return False, folder_name, "case no encontrado", cid
 
             folder_name = (case.folder_name or folder_name)[:60]
-
-            if classify_docs:
-                try:
-                    from backend.agent.orchestrator import classify_and_clean_folder
-                    classify_and_clean_folder(db, case, _settings.BASE_DIR)
-                except Exception:
-                    pass
-
-            if _settings.UNIFIED_EXTRACTOR_ENABLED:
-                from backend.extraction.unified_cognitive import unified_extract_dispatch
-                stats = unified_extract_dispatch(db, case, _settings.BASE_DIR)
-            else:
-                stats = _process_folder(db, case)
-
-            if stats.get("renamed"):
-                db.refresh(case)
-
-            if stats.get("ai_error") and case.processing_status != "COMPLETO":
-                case.processing_status = "REVISION"
+            _extract_case(db, cid, dry_run=False, use_llm=False)
+            try:
+                case.processing_status = "COMPLETO"
                 db.commit()
-                return False, folder_name, str(stats.get("ai_error"))[:120], cid
-
+            except Exception:
+                db.rollback()
             return True, folder_name, None, cid
         except _OpErr as e:
             # OperationalError: lock o disk I/O. Reintentar.
@@ -378,16 +359,16 @@ def api_extract_batch(req: BatchRequest):
 
 @router.post("/agent/{case_id}")
 def api_agent_extract(case_id: int, classify: bool = False, db: Session = Depends(get_db)):
-    """Extracción con Agente IA v3: Context Engine + Multi-criterio + Razonamiento.
+    """(Modernización Fase 7.3) Alias de "Extraer un caso" sobre el pipeline v9.
 
-    Query params:
-        classify: Si true, ejecuta clasificación de documentos antes de extraer
-                  (mueve docs que no pertenecen a PENDIENTE DE UBICACION).
+    El antiguo "Agente IA v3" (multi-modelo, multi-paso) ya no se usa — generaba ruido.
+    Este endpoint ahora corre `backend.v9.pipeline.extract_case`, igual que `/single/{id}`;
+    `persist.py` solo rellena campos vacíos (no pisa el cuadro). El query param `classify`
+    se ignora (v9 clasifica los docs en la ingesta vía `doc_librarian`).
     """
     from fastapi import HTTPException
-    from backend.agent.orchestrator import smart_extract_case as agent_extract
-    from backend.core.settings import settings
     from backend.database.models import AuditLog
+    from backend.v9.pipeline import extract_case
     import time
 
     case = db.query(Case).filter(Case.id == case_id).first()
@@ -395,34 +376,25 @@ def api_agent_extract(case_id: int, classify: bool = False, db: Session = Depend
         raise HTTPException(status_code=404, detail="Caso no encontrado")
 
     start = time.time()
-    case.processing_status = "EXTRAYENDO"
-    db.commit()
-
     try:
-        result = agent_extract(db, case_id, settings.BASE_DIR, classify_docs=classify)
+        result = extract_case(db, case_id, dry_run=False, use_llm=True)
         elapsed = int(time.time() - start)
-
-        # Guardar campos extraídos en el caso
-        fields = result.get("fields", {})
-        field_map = {k.lower(): k for k in Case.CSV_FIELD_MAP.values()}
-        for field_name, value in fields.items():
-            attr = field_map.get(field_name.lower(), field_name.lower())
-            if hasattr(case, attr) and value:
-                setattr(case, attr, value)
-
-        case.processing_status = "COMPLETO"
-        db.commit()
+        try:
+            case.processing_status = "COMPLETO"
+            db.commit()
+        except Exception:
+            db.rollback()
         db.refresh(case)
-
         fields_data = _get_fields_data(case)
 
-        # Registrar en AuditLog
-        db.add(AuditLog(
-            case_id=case_id,
-            action="EXTRACTION_AGENT",
-            new_value=f"{len(fields_data)} campos extraidos | {elapsed}s | confianza {result.get('confidence_avg', 0)}%",
-        ))
-        db.commit()
+        try:
+            db.add(AuditLog(
+                case_id=case_id, action="EXTRACTION_V9",
+                new_value=f"{len(fields_data)} campos | {elapsed}s | completitud {result.fields.completitud()}%",
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
 
         return {
             "status": "completed",
@@ -431,16 +403,15 @@ def api_agent_extract(case_id: int, classify: bool = False, db: Session = Depend
             "processing_status": case.processing_status,
             "fields_extracted": len(fields_data),
             "fields": fields_data,
-            "reasoning": result.get("reasoning", []),
-            "warnings": result.get("warnings", []),
-            "confidence_avg": result.get("confidence_avg", 0),
-            "classification": result.get("classification"),
+            "completitud_v9": result.fields.completitud(),
+            "documents_processed": result.docs_processed,
+            "warnings": result.warnings,
             "elapsed_seconds": elapsed,
             "tokens": _get_token_usage(db, case_id),
+            "method": "v9.pipeline",
         }
     except Exception as e:
-        case.processing_status = "REVISION"
-        db.commit()
+        db.rollback()
         return {
             "status": "error",
             "case_id": case_id,
