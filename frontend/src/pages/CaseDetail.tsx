@@ -4,9 +4,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import {
   ArrowLeft, Save, FileText, ExternalLink, Loader2,
-  AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package, Sparkles, ShieldCheck,
+  AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package, Sparkles,
 } from 'lucide-react'
-import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, setPiiMode, getPiiHints, validateCase } from '../services/api'
+import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, setPiiMode, getPiiHints } from '../services/api'
 import StatusBadge from '../components/StatusBadge'
 import SimilarCasesPanel from '../components/SimilarCasesPanel'
 import { Card, CardContent } from '@/components/ui/card'
@@ -602,22 +602,6 @@ export default function CaseDetail() {
     staleTime: 60_000,
   })
 
-  // v8.1: validador heurístico
-  const validateMut = useMutation({
-    mutationFn: () => validateCase(caseId, false),
-    onSuccess: (data: any) => {
-      const h = data?.heuristic || {}
-      const findings = Object.entries(h).filter(([_, info]: any) => info?.verdict !== 'OK')
-      if (findings.length === 0) {
-        toast.success(`✅ Validación: todos los campos OK (${data.elapsed_s}s)`)
-      } else {
-        const msg = findings.map(([f, info]: any) => `${f}: ${info.razon.slice(0,60)}`).join('\n')
-        toast(`⚠️ ${findings.length} hallazgo(s):\n${msg}`, { icon: '🔍', duration: 8000 })
-      }
-    },
-    onError: () => toast.error('Error al validar caso'),
-  })
-
   const piiMut = useMutation({
     mutationFn: (mode: 'selective' | 'aggressive' | null) => setPiiMode(caseId, mode),
     onSuccess: (data) => {
@@ -701,9 +685,6 @@ export default function CaseDetail() {
             🔒 {(caseData as any).pii_mode === 'aggressive' ? 'Aggressive' : 'Selective'}
           </Button>
           {dirty && <Badge variant="outline" className="text-amber-700 border-amber-200 bg-amber-50">Cambios sin guardar</Badge>}
-          <Button variant="ghost" size="icon-sm" onClick={() => validateMut.mutate()} disabled={validateMut.isPending} title="Validar caso (firmante↔accionante, mezcla rad)">
-            {validateMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-          </Button>
           <Button variant="ghost" size="icon-sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} title="Sincronizar carpeta">
             <RefreshCw size={14} className={syncMutation.isPending || caseQ.isFetching ? 'animate-spin' : ''} />
           </Button>

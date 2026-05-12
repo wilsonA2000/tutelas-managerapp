@@ -190,7 +190,7 @@ def main() -> int:
         ("DELETE", "/api/cases/{id}/docs/{docId}"), ("DELETE", "/api/cases/{id}"),
         ("DELETE", "/api/extraction/mismatched-docs"), ("DELETE", "/api/extraction/mismatched-docs/{logId}"),
         ("POST", "/api/agent/run"), ("POST", "/api/alerts/{id}/dismiss"), ("POST", "/api/alerts/mark-seen"),
-        ("POST", "/api/alerts/scan"), ("POST", "/api/cases/{id}/sync"), ("POST", "/api/cases/{id}/validate"),
+        ("POST", "/api/alerts/scan"), ("POST", "/api/cases/{id}/sync"),
         ("POST", "/api/cleanup/backfill-radicados"), ("POST", "/api/cleanup/emails-md-backfill"),
         ("POST", "/api/cleanup/hash-backfill"), ("POST", "/api/cleanup/merge-forest-fragments"),
         ("POST", "/api/cleanup/merge-identity"), ("POST", "/api/cleanup/move-no-pertenece"),

@@ -394,62 +394,9 @@ def api_sync_single_case(case_id: int, db: Session = Depends(get_db)):
     }
 
 
-# ============================================================
-# v8.1: Endpoint validador heurístico + LLM opcional
-# ============================================================
-
-@router.post("/{case_id}/validate")
-def validate_case(
-    case_id: int,
-    use_llm: bool = False,
-    timeout_s: int = 30,
-    db: Session = Depends(get_db),
-):
-    """v8.1: valida los campos extraídos del case contra el texto de los docs.
-
-    - Siempre devuelve heurística determinista (firmante↔accionante, mezcla rad).
-    - Si `use_llm=true` y `LLM_LOCAL_PRIMARY=true`, también invoca LoRA con
-      timeout duro. Si LoRA falla/timeout, solo retorna heurística (no bloquea).
-
-    Returns:
-        {
-            "case_id": int,
-            "heuristic": {field: {verdict, razon}, ...},
-            "llm": {... raw response ...} | None,
-            "elapsed_s": float
-        }
-    """
-    import time
-    case = db.query(Case).filter(Case.id == case_id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Case no encontrado")
-
-    from backend.cognition.cognitive_complementary_ai import (
-        validate_case_extraction, _heuristic_validation,
-        _build_authority_weighted_text,
-    )
-
-    text = _build_authority_weighted_text(db, case, max_chars=4000) or ""
-    if not text:
-        # Fallback: concatenar texto de docs OK
-        from backend.database.models import Document
-        docs = db.query(Document).filter(
-            Document.case_id == case_id,
-            Document.verificacion == "OK",
-        ).limit(5).all()
-        text = "\n\n".join((d.extracted_text or "")[:1500] for d in docs)
-
-    t0 = time.time()
-    if use_llm:
-        result = validate_case_extraction(case, text, timeout_s=float(timeout_s))
-        result["case_id"] = case_id
-        result["elapsed_s"] = round(time.time() - t0, 2)
-        return result
-    # Solo heurística: <1ms, no falla nunca
-    h = _heuristic_validation(case, text)
-    return {
-        "case_id": case_id,
-        "heuristic": h,
-        "llm": None,
-        "elapsed_s": round(time.time() - t0, 3),
-    }
+# (Modernización Fase 7.4) El endpoint POST /api/cases/{id}/validate (validador heurístico
+# + LLM v8.1) se retiró: dependía de `cognition.cognitive_complementary_ai` (motor v8).
+# v9 extrae de forma determinista (1 autoridad por campo) y registra la confianza en
+# `Case.field_confidences_json`; la verificación de pertenencia doc↔caso vive en el
+# bibliotecario v9 (`doc_librarian` / `verify_document_belongs`) y en la página de
+# Mantenimiento ("docs sospechosos").
