@@ -27,11 +27,11 @@ from sqlalchemy.orm import Session
 
 from backend.database.models import Case, Document, Email, AuditLog
 from backend.extraction.ir_builder import build_case_ir
-from backend.extraction.pipeline import extract_document_text, classify_doc_type
+from backend._legacy.extraction.pipeline import extract_document_text, classify_doc_type
 
 # v6.1.1: regex extractors mecánicos restaurados (Fase 3 que se omitió en v6.0)
 from backend.agent.extractors.base import ExtractionResult
-from backend.extraction.unified import _EXTRACTORS
+from backend._legacy.extraction.unified import _EXTRACTORS
 from backend.agent.forest_extractor import extract_forest_from_sources
 
 from backend.cognition.canonical_identifiers import harvest_from_case_ir
@@ -750,5 +750,5 @@ def unified_extract_dispatch(db: Session, case, base_dir: str = "",
         return unified_cognitive_extract(db, case, base_dir, classify_docs)
 
     # Fallback: pipeline v5.5 existente
-    from backend.extraction.unified import unified_extract as legacy_unified
+    from backend._legacy.extraction.unified import unified_extract as legacy_unified
     return legacy_unified(db, case, base_dir, classify_docs)

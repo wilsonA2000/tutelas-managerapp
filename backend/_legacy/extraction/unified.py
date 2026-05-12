@@ -28,7 +28,7 @@ from backend.extraction.ir_models import CaseIR, DocumentIR
 from backend.extraction.ir_builder import build_case_ir
 from backend.privacy import redact_payload, rehydrate_fields, RedactionContext, assert_clean
 from backend.privacy.redactor import persist_mapping
-from backend.extraction.pipeline import (
+from backend._legacy.extraction.pipeline import (
     extract_document_text, classify_doc_type, verify_document_belongs,
     _rename_folder_if_needed, _check_and_link_to_base_case,
     _cross_validate_radicado, _validate_extracted_fields,

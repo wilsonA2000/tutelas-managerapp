@@ -14,7 +14,7 @@ from backend.database.database import SessionLocal, init_db
 
 
 # Clasificacion de documentos: fuente unica en pipeline.py
-from backend.extraction.pipeline import classify_doc_type
+from backend.extraction.doc_ops import classify_doc_type
 
 
 def classify_document(filename: str) -> str:
