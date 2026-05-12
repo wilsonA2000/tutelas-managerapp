@@ -60,12 +60,14 @@ const navItems = [
 ]
 
 // Sección "Administración" — colapsada por defecto. Tareas técnicas / dev.
+// "Procesamiento" y "Herramientas IA" usan el motor de extracción v8 (legacy); el
+// cuadro se construye con el pipeline v9 (botón "v9 Preview" del Cuadro / scripts v9_*).
 const adminItems = [
   { to: '/ejecutivo', label: 'Tablero ejecutivo', icon: TrendingUp },
   { to: '/alertas', label: 'Alertas tempranas', icon: AlertTriangle },
-  { to: '/extraction', label: 'Procesamiento', icon: Cpu },
+  { to: '/extraction', label: 'Procesamiento (v8 · legacy)', icon: Cpu },
   { to: '/cleanup', label: 'Mantenimiento', icon: Sparkles },
-  { to: '/agent', label: 'Herramientas IA', icon: Wrench },
+  { to: '/agent', label: 'Herramientas IA (v8 · legacy)', icon: Wrench },
   { to: '/settings', label: 'Configuración', icon: Settings },
 ]
 
