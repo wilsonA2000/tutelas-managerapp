@@ -310,11 +310,14 @@ def _get_quality_metrics(db: Session, valid_ids: set | None = None) -> dict:
 
     gf = _real_cases_filter(valid_ids)
 
-    # Documentos verificados
-    total_docs = db.query(func.count(Document.id)).join(Case).filter(*gf).scalar()
-    docs_ok = db.query(func.count(Document.id)).join(Case).filter(*gf, Document.verificacion == "OK").scalar()
-    docs_sospechosos = db.query(func.count(Document.id)).join(Case).filter(*gf, Document.verificacion == "SOSPECHOSO").scalar()
-    docs_no_verificados = db.query(func.count(Document.id)).join(Case).filter(
+    # Documentos verificados.
+    # NOTA: Document tiene dos FK hacia cases (case_id y suggested_target_case_id), así que
+    # el join hay que calificarlo explícitamente o SQLAlchemy lanza AmbiguousForeignKeysError.
+    _on = Document.case_id == Case.id
+    total_docs = db.query(func.count(Document.id)).join(Case, _on).filter(*gf).scalar()
+    docs_ok = db.query(func.count(Document.id)).join(Case, _on).filter(*gf, Document.verificacion == "OK").scalar()
+    docs_sospechosos = db.query(func.count(Document.id)).join(Case, _on).filter(*gf, Document.verificacion == "SOSPECHOSO").scalar()
+    docs_no_verificados = db.query(func.count(Document.id)).join(Case, _on).filter(
         *gf, or_(Document.verificacion.is_(None), Document.verificacion == "")
     ).scalar()
 

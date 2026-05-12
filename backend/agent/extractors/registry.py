@@ -19,9 +19,12 @@ _EXTRACTORS: dict[str, FieldExtractor] = {
     "juzgado": JuzgadoExtractor(),
     "juzgado_2nd": JuzgadoSegundaExtractor(),  # v9.4.3
     "ciudad": CiudadExtractor(),
+    # v8.3 (2026-05-08) — fix R6: fecha_ingreso solo del auto admisorio judicial.
+    # Antes incluía GMAIL/EMAIL_MD/INCIDENTE → 125 cases tenían fecha_ingreso de
+    # fechas de emails recientes (dia de envio del email = mayo 2026), causando
+    # fecha_ingreso > fecha_fallo_1st (imposible).
     "fecha_ingreso": FechaExtractor("fecha_ingreso", [
-        "PDF_AUTO_ADMISORIO", "AUTO_ADMISORIO", "OTRO", "PDF_OTRO",
-        "GMAIL", "EMAIL_MD", "INCIDENTE",
+        "PDF_AUTO_ADMISORIO", "AUTO_ADMISORIO",
     ]),
     "fecha_fallo_1st": FechaExtractor("fecha_fallo_1st", ["PDF_SENTENCIA", "SENTENCIA"]),
     "fecha_fallo_2nd": FechaExtractor("fecha_fallo_2nd", ["PDF_IMPUGNACION", "IMPUGNACION"]),

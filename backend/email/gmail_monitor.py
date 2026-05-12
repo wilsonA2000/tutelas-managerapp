@@ -773,9 +773,12 @@ def get_gmail_total() -> dict:
         return {"total": 0, "unread": 0, "error": str(e)}
 
 
-def sync_inbox(db: Session) -> list[dict]:
+def sync_inbox(db: Session, progress_cb=None) -> list[dict]:
     """Sincronizar TODOS los correos de Gmail a DB (solo registro, NO crea carpetas ni casos).
     Importa correos faltantes como registros en la tabla Email sin efectos secundarios.
+
+    progress_cb: callable(processed:int, total:int, last_subject:str, imported:int, skipped:int) | None
+                 — invocado al inicio (con total) y por cada email procesado.
     Returns: lista de dicts con resultado por cada email importado."""
     results = []
 
@@ -803,12 +806,20 @@ def sync_inbox(db: Session) -> list[dict]:
                 break
 
         if not messages:
+            if progress_cb:
+                try: progress_cb(0, 0, "", 0, 0)
+                except Exception: pass
             return results
 
         imported = 0
         skipped = 0
+        total_msgs = len(messages)
+        if progress_cb:
+            try: progress_cb(0, total_msgs, "", 0, 0)
+            except Exception: pass
 
-        for msg_ref in messages:
+        for idx, msg_ref in enumerate(messages, start=1):
+            last_subject_for_progress = ""
             try:
                 msg = service.users().messages().get(userId="me", id=msg_ref["id"], format="metadata",
                     metadataHeaders=["Subject", "From", "Date", "Message-ID", "Message-Id"]).execute()
@@ -817,58 +828,54 @@ def sync_inbox(db: Session) -> list[dict]:
 
                 if message_id in existing_ids:
                     skipped += 1
-                    continue
+                else:
+                    subject = _normalize_typos(headers.get("Subject", ""))
+                    sender = headers.get("From", "")
+                    date_str = headers.get("Date", "")
+                    last_subject_for_progress = subject[:80]
 
-                subject = _normalize_typos(headers.get("Subject", ""))
-                sender = headers.get("From", "")
-                date_str = headers.get("Date", "")
+                    if _should_ignore(subject, sender):
+                        skipped += 1
+                    else:
+                        subj_key = (subject.strip()[:100], sender.strip()[:50])
+                        if subj_key in existing_subjects:
+                            skipped += 1
+                            existing_ids.add(message_id)
+                        else:
+                            try:
+                                from email.utils import parsedate_to_datetime
+                                from datetime import timezone
+                                dt = parsedate_to_datetime(date_str)
+                                date_received = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                            except Exception:
+                                date_received = datetime.utcnow()
 
-                if _should_ignore(subject, sender):
-                    skipped += 1
-                    continue
+                            tipo = classify_email_type(subject, sender)
+                            radicado_data = extract_radicado(f"{subject}")
+                            case = match_to_case(db, radicado_data, "")
 
-                # Doble check: evitar duplicados por subject+sender (message_id truncados del backup)
-                subj_key = (subject.strip()[:100], sender.strip()[:50])
-                if subj_key in existing_subjects:
-                    skipped += 1
-                    existing_ids.add(message_id)
-                    continue
+                            email_record = Email(
+                                message_id=message_id, subject=subject, sender=sender,
+                                date_received=date_received, body_preview="",
+                                case_id=case.id if case else None,
+                                attachments=[], status="ASIGNADO" if case else "PENDIENTE",
+                                processed_at=datetime.utcnow(),
+                            )
+                            db.add(email_record)
+                            existing_ids.add(message_id)
+                            existing_subjects.add(subj_key)
+                            imported += 1
 
-                date_received = None
-                try:
-                    from email.utils import parsedate_to_datetime
-                    from datetime import timezone
-                    dt = parsedate_to_datetime(date_str)
-                    date_received = dt.astimezone(timezone.utc).replace(tzinfo=None)
-                except Exception:
-                    date_received = datetime.utcnow()
-
-                # Solo clasificar y buscar caso — NO crear carpetas ni casos nuevos
-                tipo = classify_email_type(subject, sender)
-                radicado_data = extract_radicado(f"{subject}")
-
-                # Match a caso existente (sin crear nuevo)
-                case = match_to_case(db, radicado_data, "")
-
-                email_record = Email(
-                    message_id=message_id, subject=subject, sender=sender,
-                    date_received=date_received, body_preview="",
-                    case_id=case.id if case else None,
-                    attachments=[], status="ASIGNADO" if case else "PENDIENTE",
-                    processed_at=datetime.utcnow(),
-                )
-                db.add(email_record)
-                existing_ids.add(message_id)
-                existing_subjects.add(subj_key)
-                imported += 1
-
-                if imported % 50 == 0:
-                    db.commit()
-                    logger.info(f"Sync: {imported} importados, {skipped} omitidos...")
+                            if imported % 50 == 0:
+                                db.commit()
+                                logger.info(f"Sync: {imported} importados, {skipped} omitidos...")
 
             except Exception as e:
                 logger.error(f"Error sync email: {e}")
-                continue
+            finally:
+                if progress_cb:
+                    try: progress_cb(idx, total_msgs, last_subject_for_progress, imported, skipped)
+                    except Exception: pass
 
         db.commit()
         results.append({"imported": imported, "skipped": skipped, "total_gmail": len(messages)})

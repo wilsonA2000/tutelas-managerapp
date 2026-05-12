@@ -321,24 +321,38 @@ def unified_cognitive_extract(db: Session, case, base_dir: str = "",
                 case.oficina_responsable = "Oficina Jurídica"
 
         # juzgado_2nd v8.1.1: patrones más amplios + sala única + corte suprema
+        # v8.3 GUARD: solo asignar si existe doc de fallo 2nd o impugnación.
+        # En caso contrario, "Corte Suprema/Constitucional" en el texto suele ser
+        # jurisprudencia citada por el juez de 1ra (no juzgado real del expediente).
         if not case.juzgado_2nd:
-            patterns_juz2 = [
-                # Tribunal Superior con/sin "Distrito Judicial" + ciudad + sala
-                r"(tribunal\s+superior(?:\s+(?:del\s+distrito\s+judicial\s+)?de\s+[A-Za-záéíóúñÁÉÍÓÚÑ\s]{4,40}?)?(?:\s*[-,]\s*sala\s+(?:civil|penal|laboral|de\s+familia|de\s+decisi[oó]n[^.\n]{0,60})?)?)\b",
-                # Tribunal Administrativo
-                r"(tribunal\s+administrativo\s+(?:de\s+[A-Za-záéíóúñ\s]{4,40})?)",
-                # Sala única / Sala de decisión + ciudad
-                r"(sala\s+(?:civil|penal|laboral|familia|única|unica|de\s+decisi[oó]n[a-z\s]{0,40})\s+del\s+tribunal[^.\n]{0,60})",
-                # Corte Suprema
-                r"(corte\s+suprema\s+de\s+justicia(?:\s*[-,]\s*sala\s+[a-z\s]{0,40})?)",
-                # Juzgado X de circuito (segunda instancia para ciertas materias)
-                r"(juzgado\s+\w+\s+civil\s+del\s+circuito\s+de\s+[A-Za-záéíóúñ\s]{4,40})",
+            from backend.cognition.cognitive_fill import _detect_stage_flags as _detect_stage
+            _doc_dicts_for_stage = [
+                {"filename": d.filename, "doc_type": getattr(d, "doc_type", "")}
+                for d in case_ir.documents
             ]
-            for pat in patterns_juz2:
-                m = _re.search(pat, full_text_all, _re.IGNORECASE)
-                if m and len(m.group(1)) >= 12:
-                    case.juzgado_2nd = _re.sub(r"\s+", " ", m.group(1).strip())[:200]
-                    break
+            _stage = _detect_stage(_doc_dicts_for_stage)
+            allow_juz2 = _stage["has_fallo_2nd"] or _stage["has_impugnacion"]
+
+            if allow_juz2:
+                patterns_juz2 = [
+                    # Tribunal Superior con/sin "Distrito Judicial" + ciudad + sala
+                    r"(tribunal\s+superior(?:\s+(?:del\s+distrito\s+judicial\s+)?de\s+[A-Za-záéíóúñÁÉÍÓÚÑ\s]{4,40}?)?(?:\s*[-,]\s*sala\s+(?:civil|penal|laboral|de\s+familia|de\s+decisi[oó]n[^.\n]{0,60})?)?)\b",
+                    # Tribunal Administrativo
+                    r"(tribunal\s+administrativo\s+(?:de\s+[A-Za-záéíóúñ\s]{4,40})?)",
+                    # Sala única / Sala de decisión + ciudad
+                    r"(sala\s+(?:civil|penal|laboral|familia|única|unica|de\s+decisi[oó]n[a-z\s]{0,40})\s+del\s+tribunal[^.\n]{0,60})",
+                    # Corte Suprema (raro como 2da en tutelas; solo en casación)
+                    r"(corte\s+suprema\s+de\s+justicia(?:\s*[-,]\s*sala\s+[a-z\s]{0,40})?)",
+                    # Juzgado X de circuito (segunda instancia para ciertas materias)
+                    r"(juzgado\s+\w+\s+civil\s+del\s+circuito\s+de\s+[A-Za-záéíóúñ\s]{4,40})",
+                ]
+                for pat in patterns_juz2:
+                    m = _re.search(pat, full_text_all, _re.IGNORECASE)
+                    if m and len(m.group(1)) >= 12:
+                        case.juzgado_2nd = _re.sub(r"\s+", " ", m.group(1).strip())[:200]
+                        break
+            else:
+                logger.info("V6 case=%d STAGE_GUARD juzgado_2nd: skip (etapa sin fallo 2nd ni impugnación)", case_id)
 
         # quien_impugno v8.1.1: enum simplificado ACCIONANTE/ACCIONADO/MINISTERIO_PUBLICO
         if not case.quien_impugno and case.impugnacion in ("SI", "Sí"):
@@ -541,6 +555,9 @@ def unified_cognitive_extract(db: Session, case, base_dir: str = "",
             "radicado_forest": case.radicado_forest or "",
             "abogado_responsable": case.abogado_responsable or "",
             "incidente": case.incidente or "",
+            "derecho_vulnerado": case.derecho_vulnerado or "",
+            "accionados": case.accionados or "",
+            "accionante": case.accionante or "",
         }
         try:
             cog_results = cognitive_fill(case_meta, full_text, existing=None,

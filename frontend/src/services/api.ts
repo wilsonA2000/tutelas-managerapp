@@ -132,9 +132,6 @@ export const getCaseEmailPackages = (caseId: number) =>
 export const checkInbox = () =>
   api.post('/emails/check', {}, { timeout: 10000 }).then(r => r.data);
 
-export const syncAllEmails = () =>
-  api.post('/emails/sync', {}, { timeout: 10000 }).then(r => r.data);
-
 export const getGmailStats = () =>
   api.get('/emails/gmail-stats').then(r => r.data);
 
@@ -313,5 +310,62 @@ export const runMergeForestFragments = (dryRun = true, minConfidence = 'ALTA') =
 
 export const runBackfillRadicados = (dryRun = true) =>
   api.post('/cleanup/backfill-radicados', { dry_run: dryRun }).then(r => r.data);
+
+// ============================================================
+// v9 — pipeline simplificado (39 campos del cuadro Excel)
+// ============================================================
+
+export interface V9CanonicalInfo {
+  abogado: string | null;
+  abogado_confidence: number;
+  dependencia: string | null;
+  dependencia_confidence: number;
+  direccion_l1: string | null;
+  grupo_l2: string | null;
+  equipo_l3: string | null;
+}
+
+export interface V9ExtractionResult {
+  case_id: number;
+  folder_name: string;
+  completitud: number;
+  docs: { processed: number; failed: number };
+  llm_calls: number;
+  timing_ms: Record<string, number>;
+  warnings: string[];
+  values: Record<string, string>;
+  sources: Record<string, string>;
+  missing_fields: string[];
+  canonical: V9CanonicalInfo;
+  dry_run: boolean;
+  applied?: boolean;
+}
+
+export interface V9BatchResponse {
+  dry_run: boolean;
+  applied: boolean;
+  count: number;
+  errors_count: number;
+  summary: {
+    avg_completitud: number;
+    total_llm_calls: number;
+    total_ms: number;
+    ms_per_case: number;
+  };
+  results: V9ExtractionResult[];
+  errors: Array<{ case_id: number; error: string }>;
+}
+
+export const v9Health = () =>
+  api.get<{ status: string; version: string; fields_count: number; fields: string[] }>('/v9/health').then(r => r.data);
+
+export const v9Preview = (caseId: number) =>
+  api.get<V9ExtractionResult>(`/v9/preview/${caseId}`).then(r => r.data);
+
+export const v9Extract = (caseId: number, apply = false) =>
+  api.post<V9ExtractionResult>(`/v9/extract/${caseId}`, null, { params: { apply } }).then(r => r.data);
+
+export const v9ExtractBatch = (params: { case_ids?: number[]; limit?: number; apply?: boolean }) =>
+  api.post<V9BatchResponse>('/v9/extract-batch', params).then(r => r.data);
 
 export default api;

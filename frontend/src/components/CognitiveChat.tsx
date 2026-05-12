@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import {
   Send, X, Sparkles, User, Loader2, Maximize2, Minimize2,
-  Search, Scale, FileText, ChevronDown, ChevronRight, MessageCircle,
+  Scale, ChevronDown, ChevronRight, MessageCircle,
 } from 'lucide-react'
 import api from '../services/api'
-import { motion, AnimatePresence } from 'motion/react'
+import { motion } from 'motion/react'
 import { cn } from '@/lib/utils'
 
 // ─── Tipos ─────────────────────────────────────────────────────
@@ -26,10 +26,7 @@ interface ChatMessage {
 }
 
 interface ChatStatus {
-  state: string
-  qwen_up: boolean
-  paddleocr_up: boolean
-  transitioning: boolean
+  ready: boolean       // el chat (Tier-1 determinístico) siempre está disponible
 }
 
 // Sugerencias contextuales por vista ─────────────────────────
@@ -134,7 +131,6 @@ function MessageBubble({ m }: { m: ChatMessage }) {
 // ─── Chat principal ─────────────────────────────────────────
 
 export default function CognitiveChat() {
-  const navigate = useNavigate()
   const params = useParams<{ id?: string }>()
   const currentCaseId = params.id ? parseInt(params.id, 10) : undefined
   const currentView = window.location.pathname
@@ -151,19 +147,14 @@ export default function CognitiveChat() {
   // Auto-scroll
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading])
 
-  // Status polling cuando está abierto
+  // Health check al abrir (el chat Tier-1 está siempre disponible; no hace falta polling)
   useEffect(() => {
     if (!open) return
     let cancel = false
-    const tick = async () => {
-      try {
-        const r = await api.get('/cognitive/status')
-        if (!cancel) setStatus(r.data)
-      } catch { /* silent */ }
-    }
-    tick()
-    const id = setInterval(tick, 8000)
-    return () => { cancel = true; clearInterval(id) }
+    api.get('/chat/health')
+      .then(() => { if (!cancel) setStatus({ ready: true }) })
+      .catch(() => { if (!cancel) setStatus({ ready: false }) })
+    return () => { cancel = true }
   }, [open])
 
   useEffect(() => {
@@ -178,52 +169,31 @@ export default function CognitiveChat() {
     setMessages(prev => [...prev, userMsg])
     setLoading(true)
 
-    // Heads-up si Qwen aún no está caliente
-    if (status && !status.qwen_up) {
-      setMessages(prev => [...prev, {
-        role: 'thinking',
-        text: 'Despertando el asistente IA local… (esto tarda ~75s la primera vez del día)',
-        timestamp: Date.now(),
-      }])
-    }
-
     try {
-      const history = messages
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .slice(-6)
-        .map(m => ({ role: m.role, content: m.text }))
-
-      const r = await api.post('/cognitive/chat', {
+      const r = await api.post('/chat/', {
         message: q,
-        history,
         context: currentCaseId
           ? { current_case_id: currentCaseId, current_view: currentView }
           : { current_view: currentView },
-      }, { timeout: 240000 })
+      }, { timeout: 30000 })
 
       setMessages(prev => [
         ...prev.filter(m => m.role !== 'thinking'),
-        {
-          role: 'assistant',
-          text: r.data.answer,
-          tools: r.data.tools_used,
-          total_ms: r.data.total_ms,
-          timestamp: Date.now(),
-        },
+        { role: 'assistant', text: r.data?.answer || 'Sin respuesta.', timestamp: Date.now() },
       ])
     } catch (e: unknown) {
       setMessages(prev => [
         ...prev.filter(m => m.role !== 'thinking'),
         {
           role: 'assistant',
-          text: 'No pude procesar la consulta. Verifica que el asistente IA esté disponible.',
+          text: 'No pude procesar la consulta. Revisa que el backend esté disponible.',
           timestamp: Date.now(),
         },
       ])
     } finally {
       setLoading(false)
     }
-  }, [input, loading, messages, status, currentCaseId, currentView])
+  }, [input, loading, messages, currentCaseId, currentView])
 
   const suggestions = currentCaseId ? SUGGESTIONS_CASE : SUGGESTIONS_GLOBAL
 
@@ -260,10 +230,8 @@ export default function CognitiveChat() {
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold">Asistente jurídico</div>
           <div className="text-[10px] text-muted-foreground flex items-center gap-1.5">
-            {status?.qwen_up ? (
+            {status?.ready ? (
               <><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Listo</>
-            ) : status?.transitioning ? (
-              <><Loader2 size={9} className="animate-spin" /> Despertando…</>
             ) : (
               <><span className="w-1.5 h-1.5 rounded-full bg-zinc-400" /> En espera</>
             )}

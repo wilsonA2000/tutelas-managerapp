@@ -104,15 +104,24 @@ def _spawn_llm() -> int:
     log_dir.mkdir(exist_ok=True)
     log_path = log_dir / f"llama_server_{int(time.time())}.log"
 
+    # v8.3: LoRA opcional via env. A/B test 2026-05-08 mostró que el LoRA actual
+    # (iuris-lora-qwen3-4b) baja la tasa de extraccion del 50% al 25% en CPU.
+    # Default OFF; activar con LLM_LORA_ENABLED=true si se reentrena con dataset depurado.
+    use_lora = os.getenv("LLM_LORA_ENABLED", "false").lower() == "true"
     cmd = [
         str(LLAMA_BIN),
         "-m", str(GGUF_BASE),
-        "--lora", str(GGUF_LORA),
         "--port", str(LLM_PORT),
         "--ctx-size", "4096",
         "-t", "6",
         "--host", "127.0.0.1",
     ]
+    if use_lora and GGUF_LORA.exists():
+        cmd.insert(3, "--lora")
+        cmd.insert(4, str(GGUF_LORA))
+        logger.info("llama-server lanzado con LoRA: %s", GGUF_LORA.name)
+    else:
+        logger.info("llama-server lanzado SIN LoRA (base puro Qwen3-4B)")
     log_fp = open(log_path, "wb")
     proc = subprocess.Popen(cmd, stdout=log_fp, stderr=subprocess.STDOUT,
                             start_new_session=True)

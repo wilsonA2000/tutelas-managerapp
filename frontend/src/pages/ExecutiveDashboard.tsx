@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip,
-  ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, CartesianGrid,
+  ResponsiveContainer, PieChart, Pie, Cell, CartesianGrid,
 } from 'recharts'
 import {
   AlertTriangle, Scale, Clock, CheckCircle2,
@@ -50,6 +50,14 @@ interface Executive {
   }
   impugnacion: Record<string, number>
   fallos_distribution: Array<{ sentido: string; count: number; pct: number }>
+  fallos_2nd_distribution?: Array<{ sentido: string; count: number; pct: number }>
+  pipeline_funnel?: Array<{ stage: string; label: string; count: number; pct_total: number }>
+  compliance_plazos?: {
+    concedidas_pendientes_cumplimiento: number
+    concedidas_cumplidas_a_tiempo: number
+    en_sancion: number
+    top_pendientes: Array<{ case_id: number; folder_name: string; dias_desde_fallo: number; fecha_fallo: string; abogado: string }>
+  }
   by_month: Array<{ month: string; count: number }>
   by_origen: Record<string, number>
   by_estado_incidente: Record<string, number>
@@ -207,6 +215,89 @@ export default function ExecutiveDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* v8.3: Pipeline ejecutivo + Fallos 2nd + Plazos cumplimiento */}
+      {data.pipeline_funnel && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Scale size={16} /> Pipeline ejecutivo
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1.5">
+              {data.pipeline_funnel.map((s) => (
+                <div key={s.stage} className="text-xs">
+                  <div className="flex justify-between mb-0.5">
+                    <span className="text-muted-foreground">{s.label}</span>
+                    <span className="font-semibold">{s.count} <span className="text-muted-foreground">({s.pct_total}%)</span></span>
+                  </div>
+                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div className="h-full bg-primary" style={{ width: `${s.pct_total}%` }} />
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {data.fallos_2nd_distribution && data.fallos_2nd_distribution.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Scale size={16} /> Fallos 2da instancia
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm space-y-1">
+                {data.fallos_2nd_distribution.map((f) => (
+                  <div key={f.sentido} className="flex justify-between">
+                    <span className="text-muted-foreground">{f.sentido}:</span>
+                    <span className="font-semibold">{f.count} <span className="text-xs text-muted-foreground">({f.pct}%)</span></span>
+                  </div>
+                ))}
+                <p className="text-xs text-muted-foreground mt-2 border-t pt-1">
+                  CONFIRMA = mantienen fallo de 1ra. REVOCA = lo tumban.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {data.compliance_plazos && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Clock size={16} /> Cumplimiento de fallos
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Cumplidos a tiempo:</span>
+                  <span className="font-semibold text-green-600">{data.compliance_plazos.concedidas_cumplidas_a_tiempo}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Pendientes (&gt;10d):</span>
+                  <span className="font-semibold text-amber-600">{data.compliance_plazos.concedidas_pendientes_cumplimiento}</span>
+                </div>
+                <div className="flex justify-between border-t pt-1 mt-2">
+                  <span className="text-muted-foreground">En sanción:</span>
+                  <span className="font-semibold text-red-600">{data.compliance_plazos.en_sancion}</span>
+                </div>
+                {data.compliance_plazos.top_pendientes.length > 0 && (
+                  <div className="border-t pt-1 mt-2 space-y-0.5">
+                    <p className="text-xs font-semibold text-muted-foreground">Más antiguos:</p>
+                    {data.compliance_plazos.top_pendientes.slice(0, 4).map((p) => (
+                      <div key={p.case_id} className="text-xs text-muted-foreground truncate" title={p.folder_name}>
+                        <Link to={`/cases/${p.case_id}`} className="hover:text-primary">
+                          #{p.case_id} · {p.dias_desde_fallo}d · {p.abogado || 'sin abogado'}
+                        </Link>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
 
       {/* Métricas operativas */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">

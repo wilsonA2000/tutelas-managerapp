@@ -9,15 +9,15 @@ import {
 import {
   FileText, CheckCircle, XCircle, BarChart2,
   Clock, User, MapPin, AlertCircle,
-  Play, Loader2, Mail,
-  Cpu, Download,
+  Loader2, Mail,
+  Download,
   Scale, Shield, Gavel, TrendingUp, Info,
 } from 'lucide-react'
 import { useExtractionProgress, useGmailProgress } from '../hooks/useProgressPolling'
 import {
   getKPIs, getCharts, getActivity,
   checkInbox, getMonitorStatus,
-  runExtractionAll, stopExtraction, generateExcel,
+  runExtractionAll, generateExcel,
 } from '../services/api'
 import PageHeader from '../components/PageHeader'
 import PageShell from '../components/PageShell'
@@ -155,15 +155,6 @@ export default function Dashboard() {
       else if (data.status === 'running') toast('Ya hay una extraccion en progreso', { icon: '\u2139\uFE0F' })
     },
     onError: () => toast.error('Error al iniciar extraccion'),
-  })
-
-  const stopExtractionMut = useMutation({
-    mutationFn: stopExtraction,
-    onSuccess: (data) => {
-      toast.success(data.message)
-      qc.invalidateQueries({ queryKey: ['kpis'] })
-      qc.invalidateQueries({ queryKey: ['token-metrics'] })
-    },
   })
 
   const excelMut = useMutation({

@@ -41,6 +41,46 @@ def _calcular_semaforo(record: ComplianceTracking) -> str:
         return "SIN_PLAZO"
 
 
+def _pipeline_stage(case: Case) -> dict:
+    """v8.3: identifica en qué etapa del funnel está el case + estados booleanos.
+
+    Returns:
+        {"current": "FALLO_1ST" | "IMPUGNACION" | "FALLO_2ND" | "INCIDENTE" | "CUMPLIDO",
+         "has_fallo_1st": bool, "has_impugnacion": bool, "has_fallo_2nd": bool,
+         "has_incidente": bool, "is_cumplido": bool}
+    """
+    if not case:
+        return {"current": "TUTELA", "has_fallo_1st": False, "has_impugnacion": False,
+                "has_fallo_2nd": False, "has_incidente": False, "is_cumplido": False}
+    norm = lambda s: (s or "").strip().upper()
+    has_fallo_1st = bool(norm(case.sentido_fallo_1st)) and norm(case.sentido_fallo_1st) not in ("N/A", "PENDIENTE")
+    has_impugnacion = norm(case.impugnacion).startswith("S")
+    has_fallo_2nd = bool(norm(case.sentido_fallo_2nd)) and norm(case.sentido_fallo_2nd) not in ("N/A", "PENDIENTE")
+    has_incidente = norm(case.incidente).startswith("S")
+    is_cumplido = (case.estado_incidente or "").upper() == "CUMPLIDO"
+
+    if is_cumplido:
+        current = "CUMPLIDO"
+    elif has_incidente:
+        current = "INCIDENTE"
+    elif has_fallo_2nd:
+        current = "FALLO_2ND"
+    elif has_impugnacion:
+        current = "IMPUGNACION"
+    elif has_fallo_1st:
+        current = "FALLO_1ST"
+    else:
+        current = "TUTELA"
+    return {
+        "current": current,
+        "has_fallo_1st": has_fallo_1st,
+        "has_impugnacion": has_impugnacion,
+        "has_fallo_2nd": has_fallo_2nd,
+        "has_incidente": has_incidente,
+        "is_cumplido": is_cumplido,
+    }
+
+
 def _record_to_dict(r: ComplianceTracking, case: Case = None) -> dict:
     """Convertir registro a dict para API."""
     semaforo = _calcular_semaforo(r)
@@ -79,6 +119,7 @@ def _record_to_dict(r: ComplianceTracking, case: Case = None) -> dict:
         "efecto_impugnacion": r.efecto_impugnacion,
         "requiere_cumplimiento": r.requiere_cumplimiento,
         "extraido_por_ia": r.extraido_por_ia,
+        "pipeline": _pipeline_stage(case),
     }
 
 

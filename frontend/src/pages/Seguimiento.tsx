@@ -31,6 +31,56 @@ const SEMAFORO_CONFIG: Record<string, {
   SIN_PLAZO:  { color: 'text-gray-600',   bg: 'bg-gray-100',   border: 'border-gray-300',   icon: Clock,         label: 'Pendiente' },
 }
 
+// v8.3: mini-timeline visual del estado del caso en el funnel
+const PIPELINE_STAGES = [
+  { key: 'FALLO_1ST', label: '1ra', flag: 'has_fallo_1st' as const },
+  { key: 'IMPUGNACION', label: 'Imp', flag: 'has_impugnacion' as const },
+  { key: 'FALLO_2ND', label: '2da', flag: 'has_fallo_2nd' as const },
+  { key: 'INCIDENTE', label: 'Inc', flag: 'has_incidente' as const },
+  { key: 'CUMPLIDO', label: 'OK', flag: 'is_cumplido' as const },
+]
+
+type Pipeline = {
+  current: string
+  has_fallo_1st: boolean; has_impugnacion: boolean
+  has_fallo_2nd: boolean; has_incidente: boolean; is_cumplido: boolean
+}
+
+function MiniTimeline({ pipeline }: { pipeline: Pipeline | undefined }) {
+  if (!pipeline) return null
+  return (
+    <div className="flex items-center gap-0.5 mt-1">
+      {PIPELINE_STAGES.map((s, idx) => {
+        const reached = pipeline[s.flag]
+        const isCurrent = pipeline.current === s.key
+        return (
+          <div key={s.key} className="flex items-center">
+            <span
+              className={cn(
+                'inline-block px-1.5 py-0.5 rounded text-[9px] font-bold border',
+                reached
+                  ? isCurrent
+                    ? 'bg-primary text-white border-primary'
+                    : 'bg-emerald-100 text-emerald-700 border-emerald-300'
+                  : 'bg-gray-50 text-gray-400 border-gray-200',
+              )}
+              title={`${s.key}${reached ? ' ✓' : ''}${isCurrent ? ' (etapa actual)' : ''}`}
+            >
+              {s.label}
+            </span>
+            {idx < PIPELINE_STAGES.length - 1 && (
+              <span className={cn(
+                'inline-block w-1.5 h-px mx-0.5',
+                reached ? 'bg-emerald-400' : 'bg-gray-200',
+              )} />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function SemaforoBadge({ semaforo }: { semaforo: string }) {
   const cfg = SEMAFORO_CONFIG[semaforo] ?? SEMAFORO_CONFIG.SIN_PLAZO
   const Icon = cfg.icon
@@ -192,6 +242,7 @@ export default function Seguimiento() {
                   responsable: string; instancia: string; sentido_fallo: string;
                   impugnado: string; requiere_cumplimiento: string;
                   estado: string; notas: string; extraido_por_ia: string;
+                  pipeline?: Pipeline;
                 }) => (
                   <TableRow key={item.id} className="hover:bg-muted/30 transition-colors">
                     {/* Semaforo */}
@@ -218,6 +269,7 @@ export default function Seguimiento() {
                           </Badge>
                         )}
                       </div>
+                      <MiniTimeline pipeline={item.pipeline} />
                     </TableCell>
 
                     {/* Orden */}

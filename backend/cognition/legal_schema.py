@@ -632,6 +632,46 @@ def clasificar_sed_tematica(texto: str | None) -> tuple[str | None, str | None, 
     return (None, None, None, None)
 
 
+# ─── Categoría temática (campo 18 del cuadro) ───────────────────────
+# `categoria_tematica` = agrupación temática del caso = grupo L2 de la SED.
+# Es la capa intermedia entre `asunto` (acción concreta: TRASLADO, NOMBRAMIENTO)
+# y `oficina_responsable` (Dirección L1). Se DERIVA del `asunto` ya extraído via
+# SED_TEMA_MAPPING (1 autoridad por campo). Para las entradas cuyo L2 es None
+# (transporte/PAE → DIRECCION_PERMANENCIA sin grupo; tutela genérica) se asigna
+# una etiqueta temática equivalente.
+_CATEGORIA_TEMATICA_FALLBACK: dict[str, str] = {
+    "TRANSPORTE_ESCOLAR": "PERMANENCIA_ESCOLAR",
+    "ALIMENTACION_PAE": "PERMANENCIA_ESCOLAR",
+    "TUTELA_GENERICA": "DERECHOS_FUNDAMENTALES",
+}
+
+
+def _categoria_tematica_de_cat(cat: str | None, l2: str | None) -> str | None:
+    if not cat:
+        return None
+    return l2 or _CATEGORIA_TEMATICA_FALLBACK.get(cat.strip().upper())
+
+
+def categoria_tematica_de_asunto(asunto: str | None) -> str | None:
+    """Devuelve la categoría temática (grupo L2 SED) del `asunto` (vocabulario
+    controlado: TRASLADO, NOMBRAMIENTO, PENSION, ...). Si el asunto no está en el
+    mapeo (p.ej. OTRO, SIN_DETERMINAR, o un tag no catalogado), devuelve None para
+    que el extractor decida el default."""
+    if not asunto:
+        return None
+    a = asunto.strip().upper()
+    for _kws, _l1, l2, _l3, cat in SED_TEMA_MAPPING:
+        if cat and cat.upper() == a:
+            return _categoria_tematica_de_cat(cat, l2)
+    return _CATEGORIA_TEMATICA_FALLBACK.get(a)
+
+
+# Vocabulario controlado de `categoria_tematica` (orden = aparición en SED_TEMA_MAPPING)
+CATEGORIA_TEMATICA_VOCAB: tuple[str, ...] = tuple(dict.fromkeys(
+    v for v in (_categoria_tematica_de_cat(cat, l2) for _kws, _l1, l2, _l3, cat in SED_TEMA_MAPPING) if v
+))
+
+
 # ─── Derivación automática de MUNICIPIO_DISTRITO y MUNICIPIOS_SANTANDER ────
 # Una única fuente de verdad: MUNICIPIO_CIRCUITO. El distrito se deriva.
 MUNICIPIO_DISTRITO.update({

@@ -9,6 +9,12 @@ echo "  TUTELAS MANAGER - Gobernacion de Santander"
 echo "=========================================="
 echo ""
 
+# Activar venv si existe (necesario en Linux después de migrar de Windows)
+if [ -f "$DIR/venv/bin/activate" ]; then
+    source "$DIR/venv/bin/activate"
+    echo "venv activado: $(which python3)"
+fi
+
 # Matar procesos previos en los puertos
 fuser -k 8000/tcp 2>/dev/null
 fuser -k 5173/tcp 2>/dev/null

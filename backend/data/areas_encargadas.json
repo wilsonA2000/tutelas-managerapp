@@ -1,0 +1,128 @@
+[
+  {
+    "area": "FINANCIERA",
+    "tema": "Infraestructura/Desacatos",
+    "correo": "financierased@santander.gov.co",
+    "l1": "DIRECCION_ADMIN_FINANCIERA"
+  },
+  {
+    "area": "FINANCIERA",
+    "tema": "Infraestructura/Desacatos",
+    "correo": "abogados.financiera@santander.edu.co",
+    "l1": "DIRECCION_ADMIN_FINANCIERA"
+  },
+  {
+    "area": "FINANCIERA",
+    "tema": "Infraestructura/Desacatos",
+    "correo": "ln.jngomez@santander.gov.co",
+    "l1": "DIRECCION_ADMIN_FINANCIERA"
+  },
+  {
+    "area": "FINANCIERA",
+    "tema": "Sedes/Reparaciones",
+    "correo": "ln.kcastro@santander.gov.co",
+    "l1": "DIRECCION_ADMIN_FINANCIERA"
+  },
+  {
+    "area": "ESTRATEGICA",
+    "tema": "SIMAT/Cobertura",
+    "correo": "ln.lygomez@santander.gov.co",
+    "l1": "DIRECCION_ESTRATEGICA"
+  },
+  {
+    "area": "ESTRATEGICA",
+    "tema": "SIMAT/Cobertura",
+    "correo": "ca.ypoveda@santander.edu.co",
+    "l1": "DIRECCION_ESTRATEGICA"
+  },
+  {
+    "area": "ESTRATEGICA",
+    "tema": "Calidad/Inclusión",
+    "correo": "ca.banaya@santander.edu.co",
+    "l1": "DIRECCION_ESTRATEGICA"
+  },
+  {
+    "area": "ESTRATEGICA",
+    "tema": "Calidad/Inclusión",
+    "correo": "ca.dmejia@santander.edu.co",
+    "l1": "DIRECCION_ESTRATEGICA"
+  },
+  {
+    "area": "TALENTO HUMANO",
+    "tema": "Nombramientos/Traslados",
+    "correo": "juridicatheducacion@santander.gov.co",
+    "l1": "DIRECCION_TALENTO_DOCENTE"
+  },
+  {
+    "area": "TALENTO HUMANO",
+    "tema": "Nombramientos/Traslados",
+    "correo": "admplanta@santander.gov.co",
+    "l1": "DIRECCION_TALENTO_DOCENTE"
+  },
+  {
+    "area": "TALENTO HUMANO",
+    "tema": "Nombramientos/Traslados",
+    "correo": "ln.amarin@santander.gov.co",
+    "l1": "DIRECCION_TALENTO_DOCENTE"
+  },
+  {
+    "area": "HISTORIAS LABORALES",
+    "tema": "Edgar Almeida",
+    "correo": "ca.ealmeida@santander.gov.co",
+    "l1": "DIRECCION_TALENTO_DOCENTE"
+  },
+  {
+    "area": "HISTORIAS LABORALES",
+    "tema": "Libia Contreras",
+    "correo": "ca.lcontreras@santander.edu.co",
+    "l1": "DIRECCION_TALENTO_DOCENTE"
+  },
+  {
+    "area": "HISTORIAS LABORALES",
+    "tema": "General",
+    "correo": "historiaslaborales@santander.edu.co",
+    "l1": "DIRECCION_TALENTO_DOCENTE"
+  },
+  {
+    "area": "TESORERIA",
+    "tema": "Pagos/Descuentos",
+    "correo": "ln.jaguilar@santander.gov.co",
+    "l1": "DIRECCION_ADMIN_FINANCIERA"
+  },
+  {
+    "area": "TESORERIA",
+    "tema": "Pagos/Descuentos",
+    "correo": "tesoreriaeducacionsantander@santander.gov.co",
+    "l1": "DIRECCION_ADMIN_FINANCIERA"
+  },
+  {
+    "area": "PAE/TRANSPORTE",
+    "tema": "PAE/Transporte",
+    "correo": "juridicotransporte@santander.edu.co",
+    "l1": "DIRECCION_PERMANENCIA"
+  },
+  {
+    "area": "PAE/TRANSPORTE",
+    "tema": "PAE/Transporte",
+    "correo": "pae@santander.gov.co",
+    "l1": "DIRECCION_PERMANENCIA"
+  },
+  {
+    "area": "PAE/TRANSPORTE",
+    "tema": "PAE/Transporte",
+    "correo": "ln.yuribe@santander.gov.co",
+    "l1": "DIRECCION_PERMANENCIA"
+  },
+  {
+    "area": "INSPECCIÓN",
+    "tema": "Licencias/Apertura-Cierre",
+    "correo": "ca.mmrodriguez@santander.edu.co",
+    "l1": "APOYO_DIRECTO"
+  },
+  {
+    "area": "SECRETARIA",
+    "tema": "General",
+    "correo": "educacion@santander.gov.co",
+    "l1": null
+  }
+]

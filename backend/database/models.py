@@ -92,7 +92,8 @@ class Case(Base):
     pii_mode = Column(String, nullable=True)
 
     # Relaciones
-    documents = relationship("Document", back_populates="case", cascade="all, delete-orphan")
+    documents = relationship("Document", back_populates="case", cascade="all, delete-orphan",
+                              foreign_keys="Document.case_id")
     extractions = relationship("Extraction", back_populates="case", cascade="all, delete-orphan")
     emails = relationship("Email", back_populates="case")
     audit_logs = relationship("AuditLog", back_populates="case", cascade="all, delete-orphan")
@@ -193,7 +194,25 @@ class Document(Base):
     institutional_score = Column(Float, nullable=True)         # 0-1, confiabilidad institucional
     visual_signature_json = Column(Text, nullable=True)         # JSON serializado del VisualSignature
 
-    case = relationship("Case", back_populates="documents")
+    # v9: si el doc pertenece a un incidente de desacato, guardamos el rad corto
+    # del incidente. El doc vive físicamente en la sub-carpeta `incidente_<rad>`
+    # dentro del folder de la tutela origen. NULL si es doc directo de la tutela.
+    incidente_radicado = Column(String, nullable=True, index=True)
+
+    # v9.2: Verificación graduada (0.0 - 1.0). NULL para docs viejos.
+    # Reemplaza la binaria `verificacion` por un score con desglose.
+    # 1.0 = altamente confiable, 0.0 = altamente sospechoso.
+    verificacion_score = Column(Float, nullable=True)
+    # JSON con desglose de señales que componen el score (debug + UI)
+    verificacion_breakdown = Column(Text, nullable=True)
+
+    # v9.2: Cruce de referencias post-ingesta — si el doc tiene rad21 que apunta
+    # a OTRO case existente en la DB, sugerimos el case destino para que el
+    # operador decida en la UI ("¿mover este doc a case#X?").
+    suggested_target_case_id = Column(Integer, ForeignKey("cases.id"), nullable=True, index=True)
+    suggested_reason = Column(String, nullable=True)
+
+    case = relationship("Case", back_populates="documents", foreign_keys=[case_id])
     email = relationship("Email", back_populates="documents")
     extractions = relationship("Extraction", back_populates="document", cascade="all, delete-orphan")
 
