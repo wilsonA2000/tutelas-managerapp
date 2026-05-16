@@ -133,8 +133,15 @@ def extract_forest_for_case(db: Session, case: Case) -> tuple[Optional[str], Opt
 
 import unicodedata as _ud
 
-# Doctypes donde el accionante aparece con más fiabilidad (orden de prioridad)
-_ACCIONANTE_DOC_PRIORITY = ["AUTO_ADMISORIO", "DEMANDA_TUTELA", "SENTENCIA_1RA", "SENTENCIA_2DA"]
+# Doctypes donde el accionante aparece con más fiabilidad (orden de prioridad).
+# El escrito de tutela y el auto lo nombran limpio; la RESPUESTA de la SED trae una tabla
+# REF/ACCIONANTE muy fiable; las sentencias/autos/incidentes lo recapitulan ("promovida por …").
+_ACCIONANTE_DOC_PRIORITY = [
+    "AUTO_ADMISORIO", "DEMANDA_TUTELA", "ANEXO_DEMANDA", "SENTENCIA_1RA", "RESPUESTA",
+    "SENTENCIA_2DA", "AUTO_2DA", "AUTO_CONCEDE_IMPUGNACION", "IMPUGNACION",
+    "INCIDENTE_DESACATO", "AUTO_INCIDENTE", "NOTIFICACION", "NOTIFICACION_FALLO",
+    "OFICIO_CUMPLIMIENTO", "DESCONOCIDO",
+]
 
 # Personería/Personero Municipal de X — el municipio puede venir partido por \n.
 # Capturamos cualquier variante (Personero/Personería) → normalizamos siempre a
@@ -149,22 +156,60 @@ _PAT_ROL_AGENCIA = re.compile(
     r"(?i)(agente\s+oficios[oa]|representante\s+legal|en\s+representaci[óo]n)\s+"
     r"(?:de\s+)?(?:l[aoes]+\s+)?([^\n,\.]{2,90}?)(?=\s*[,\.\n]|\s+(?:y\s+en\s+contra|en\s+contra|contra|identificad|C\.?C\.?)|$)"
 )
-# ACCIONANTE: NOMBRE  (inicio de línea, label)
-_PAT_ACC_LABEL = re.compile(r"(?im)^\s*Accionant[ea]s?\s*[:\.]\s*(.{4,120})")
-# instaurada/presentada/promovida por NOMBRE
+# ACCIONANTE: NOMBRE  (etiqueta a inicio de línea). El nombre puede venir partido en varias
+# líneas por el extractor de PDF — se captura hasta una línea en blanco, el siguiente rótulo
+# en MAYÚSCULAS terminado en ":"/".", o un "C.C. #…".
+# El separador tras "ACCIONANTE" puede ser ":", "." o "|" (celda de tabla del DOCX de respuesta).
+_PAT_ACC_LABEL = re.compile(
+    r"(?ims)^[ \t]*(?:Accionant[ea]s?|ATE)[ \t]*[:\.|][ \t]*"
+    r"(.{0,180}?)"
+    r"(?=\n[ \t]*\n|\n[ \t]*[A-ZÁÉÍÓÚÑ][^\n:|]{1,45}[:\.|][ \t]*(?:\n|$)|\n[ \t]*C\.?\s?C\.?\s*[#N°.\d]|$)"
+)
+# instaurada/presentada/promovida/interpuesta/formulada por NOMBRE — se consumen tratamientos
+# sueltos antes del nombre; el nombre puede cruzar saltos de línea (no comas ni pipes).
 _PAT_ACC_INSTAURADA = re.compile(
-    r"(?i)(?:instaurad[oa]|presentad[oa]|promovid[oa])\s+por\s+"
-    r"(?:el\s+se[ñn]or\s+|la\s+se[ñn]ora\s+|el\s+se[ñn]ora\s+|el\s+|la\s+|l[oa]s\s+)?"
-    r"([A-ZÁÉÍÓÚÑ][^\n,]{4,90}?)(?=\s+(?:en\s+contra|contra|actuando|como|quien|,|\.|$))"
+    r"(?i)(?:instaurad[oa]|presentad[oa]|promovid[oa]|interpuest[oa]|formulad[oa]|incoad[oa])\s+por\s+"
+    r"(?:(?:el|la|l[oa]s)\s+|se[ñn]ora?\s+|ciudadan[oa]\s+|doctora?\s+|abogad[oa]\s+|dra?\.?\s+)*"
+    r"([A-ZÁÉÍÓÚÑ][^,|]{4,90}?)"
+    r"(?=\s+(?:en\s+contra|contra|actuando|como|quien|mayor\b|identificad[oa]|en\s+calidad|"
+    r"en\s+representaci[óo]n|en\s+nombre|en\s+su\s+propio|C\.?\s?C\.?\b|c[ée]dula|y\s+otros?)|[,\.]|$)"
+)
+# "NOMBRE, actuando en nombre propio, instauró/interpuso/presentó acción de tutela" — el sujeto
+# va ANTES del verbo (típico del encabezado del auto admisorio: "RADICADO …\nNOMBRE … instauró…").
+_PAT_ACC_INSTAURO = re.compile(
+    r"(?im)^[ \t]*([A-ZÁÉÍÓÚÑ][^,|\n\d]{4,80}?)\s*,?\s*"
+    r"(?:actuando[^,\n]{0,60})?\s*,?\s*"
+    r"(?:instaur[oó]|interp(?:uso|usie?ron)|present[oó]|formul[oó]|incoo|incoó|promovi[oó])\s+"
+    r"(?:la\s+|una\s+)?acci[oó]n\s+(?:constitucional\s+)?de\s+tutela"
+)
+# Apertura en primera persona del escrito de tutela: "yo, NOMBRE, identificado/mayor de edad…"
+_PAT_ACC_YO = re.compile(
+    r"(?i)\byo[,\s]+([A-ZÁÉÍÓÚÑ][A-Za-záéíóúñ\s]{5,60}?)[,\s]+"
+    r"(?:mayor\s+de\s+edad|identificad[oa]|en\s+(?:mi|uso\s+de\s+mi)\s+calidad|colombian[oa]|vecin[oa]\s+de|portador[a]?\s+de)"
 )
 
-# Stopwords que NO pueden ser parte de un nombre de accionante
+# Stopwords que NO pueden ser parte de un nombre de accionante (palabras-rol, conectores, basura)
 _ACC_STOPWORDS = {
     "ACCIONADOS", "ACCIONADO", "ACCIONADAS", "ACCIONADA", "DEMANDADO", "DEMANDADA",
     "ALLEGO", "REMITO", "ENVIO", "ADJUNTO", "SE", "EL", "LA", "LOS", "LAS",
     "AUTO", "TUTELA", "ACCION", "ACCIÓN", "JUZGADO", "GOBERNACION", "GOBERNACIÓN",
     "SECRETARIA", "SECRETARÍA", "MINISTERIO", "EPS", "ESE", "DOCTOR", "DOCTORA",
     "DR", "DRA", "PARTE", "POR", "PARA", "CONTRA", "FALLO", "SENTENCIA",
+    # rol / conectores / falsos positivos vistos en el corpus
+    "CIUDADANO", "CIUDADANA", "SEÑOR", "SEÑORA", "TITULAR", "AGENTE", "OFICIOSO", "OFICIOSA",
+    "REPRESENTANTE", "DESPACHO", "MENOR", "MENORES", "NNA", "PERSONERO", "PERSONERA",
+    "SI", "SÍ", "NO", "CUMPLE", "CUMPLIO", "CUMPLIÓ", "QUIEN", "ABOGADO", "ABOGADA",
+    "ACCIONANTE", "ACCIONANTES", "DEMANDANTE", "PETICIONARIO", "PETICIONARIA",
+    # palabras de la fórmula "yo, … mayor de edad / identificado / en mi calidad"
+    "EN", "MI", "USO", "CALIDAD", "MAYOR", "EDAD", "PROPIO", "PROPIA", "COLOMBIANO",
+    "COLOMBIANA", "VECINO", "VECINA", "RESIDENTE", "IDENTIFICADO", "IDENTIFICADA",
+    "DOMICILIADO", "DOMICILIADA", "PORTADOR", "PORTADORA", "OBRANDO", "ACTUANDO", "NOMBRE",
+    # entidades / cargos que NO son una persona accionante
+    "RECTOR", "RECTORA", "INSTITUTO", "INSTITUCION", "INSTITUCIÓN", "COLEGIO", "ESCUELA",
+    "MUNICIPIO", "DEPARTAMENTO", "PROMOTOR", "PROMOTORA", "SINDICATO", "ASOCIACION",
+    "ASOCIACIÓN", "SOCIEDAD", "EMPRESA", "ENTIDAD", "COMUNIDAD", "FUNDACION", "FUNDACIÓN",
+    "CORDIAL", "SALUDO", "SALUDOS", "CORDIALMENTE", "ATENTAMENTE", "FAVOR", "REMITIR",
+    "INFORMARLO", "DEPENDENCIA", "PETICION", "PETICIÓN", "RESPUESTA", "OFICIO", "MEDIDA",
 }
 
 
@@ -196,13 +241,23 @@ def _clean_acc_value(raw: str) -> Optional[str]:
         return None
     v = re.sub(r"[\n\r]+", " ", raw)
     v = re.sub(r"\s+", " ", v).strip()
+    # Quitar basura de borde de celda de tabla / etiquetas al inicio ("| ", ": ", "- ", "– ", "• ")
+    v = re.sub(r"^[\s|:.\-–·•>]+", "", v).strip()
+    # Quitar tratamientos sueltos al inicio ("Sr. ", "Sra. ", "Dr. ", "el señor ", "ciudadano ", …)
+    v = re.sub(
+        r"(?i)^(?:(?:el|la|l[oa]s)\s+)?(?:se[ñn]ora?\.?\s+|sr[a]?\.?\s+|dra?\.?\s+|doctora?\s+|"
+        r"ciudadan[oa]\s+|abogad[oa]\s+)+", "", v
+    ).strip()
     # Cortar antes de palabras-frontera (incluye abreviaturas de rol legal)
     v = re.split(
-        r"(?i)\b(?:identificad[oa]|C\.?C\.?|c[ée]dula|actuando|como|en\s+contra|contra|"
-        r"quien|en\s+representaci[óo]n|en\s+su\s+condici[óo]n|R\.?\s?L\.?|representante\s+legal|"
-        r"agente\s+oficios|menor(?:es)?\b|hij[oa]s?\b)\b", v
+        r"(?i)\b(?:identificad[oa]|C\.?C\.?|c[ée]dula|N\.?U\.?I\.?P\.?|actuando|como|en\s+contra|contra|"
+        r"quien|en\s+representaci[óo]n|en\s+(?:su\s+)?(?:propio\s+)?nombre\b|en\s+su\s+(?:condici[óo]n|calidad)|"
+        r"R\.?\s?L\.?|representante\s+legal|A\.?\s?O\.?\b|"
+        r"agente\s+oficios|menor(?:es)?\b|hij[oa]s?\b|mayor\s+de\s+edad|"
+        r"vecin[oa]\s+de|residente|domiciliad[oa]|"
+        r"y\s+(?:otros?\b|dem[áa]s\b|padres\s+de\b|los\s+(?:padres|dem[áa]s)\b|en\s+representaci|en\s+nombre\b))\b", v
     )[0].strip()
-    v = v.rstrip(",.;").strip()
+    v = v.strip(" |:;,.·•").strip()
     if 5 <= len(v) <= 70 and _looks_like_name(v):
         return v.upper()
     return None
@@ -236,13 +291,20 @@ def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str],
 
     Returns: (accionante, nota_observaciones). Nota puede ser None.
     """
-    # Reunir texto de los docs prioritarios
-    texts_by_priority: list[tuple[str, str]] = []  # (doctype, text)
+    # Reunir texto de los docs prioritarios. Para cada doc se mira el head (donde va el
+    # encabezado de partes) y, si el doc trae una sección "[TABLAS]" más abajo (los DOCX
+    # de respuesta de la SED tienen ahí la tabla REF/ACCIONANTE), también ese tramo.
+    texts_by_priority: list[tuple[str, str]] = []  # (doctype, search_text)
     for dt in _ACCIONANTE_DOC_PRIORITY:
         for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt).all():
             text = _read_doc_text(d)
-            if text and len(text) > 150:
-                texts_by_priority.append((dt, text[:5000]))
+            if not text or len(text) <= 150:
+                continue
+            search_text = text[:10000]  # encabezado de partes + (en sentencias largas) el RESUELVE recap
+            ti = text.find("[TABLAS]")
+            if ti >= 9000:  # la sección de tablas quedó fuera del head → anexarla
+                search_text += "\n" + text[ti:ti + 4000]
+            texts_by_priority.append((dt, search_text))
 
     accionante: Optional[str] = None
     nota: Optional[str] = None
@@ -259,50 +321,40 @@ def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str],
         rol = "Representante legal de" if "representante legal" in rol_raw else "Agente oficioso de"
         return f"{rol} {agenciado}"
 
-    for _dt, text in texts_by_priority:
-        head = text
+    # En docs de la SED (RESPUESTA, NOTIFICACION, OFICIO) el cuerpo lo escribe la Secretaría
+    # en primera persona ("Yo, YANETH KARINA ARAUJO MAESTRE…") y firma su funcionario → ahí
+    # SOLO es fiable la celda "ACCIONANTE:" de la tabla, no los patrones de recap/primera persona.
+    _SED_SIDE_DOCS = {"RESPUESTA", "NOTIFICACION", "NOTIFICACION_FALLO", "OFICIO_CUMPLIMIENTO"}
 
+    def _cand_from(head_text: str, doctype: str) -> Optional[str]:
+        """Primer nombre de persona razonable: tabla/etiqueta → 'instaurada por' → 'yo, NOMBRE'."""
+        patterns = (_PAT_ACC_LABEL,) if doctype in _SED_SIDE_DOCS else (_PAT_ACC_LABEL, _PAT_ACC_INSTAURADA, _PAT_ACC_INSTAURO, _PAT_ACC_YO)
+        for rx in patterns:
+            m = rx.search(head_text)
+            if m:
+                c = _clean_acc_value(m.group(1))
+                if c:
+                    return c
+        return None
+
+    for _dt, head in texts_by_priority:
         # --- Caso 1: Personería (siempre normalizar a institución) ---
         m_pers = _PAT_PERSONERIA.search(head)
         if m_pers:
             muni = _norm_municipio(m_pers.group(1))
-            # Quitar sufijo " SANTANDER" si quedó pegado
             muni = re.sub(r"\s+SANTANDER\.?$", "", muni).strip()
             if muni and muni not in _ACC_STOPWORDS and len(muni) >= 3:
                 accionante = f"PERSONERÍA MUNICIPAL DE {muni}"
                 nota = _build_nota(head)
                 break  # personería tiene prioridad máxima
 
-        # --- Caso 2: agente oficioso / representante legal (persona natural) ---
+        # --- Caso 2: agente oficioso / representante legal → accionante = quien firma; nota = agenciado ---
         nota_cand = _build_nota(head)
-        if nota_cand and not accionante:
-            # Quien firma/instaura → el accionante
-            m_inst = _PAT_ACC_INSTAURADA.search(head)
-            m_lbl = _PAT_ACC_LABEL.search(head)
-            cand = None
-            if m_inst:
-                cand = _clean_acc_value(m_inst.group(1))
-            if not cand and m_lbl:
-                cand = _clean_acc_value(m_lbl.group(1))
-            if cand:
-                accionante = cand
-                nota = nota_cand
-                break
-
-        # --- Caso 3: persona natural simple ---
-        if not accionante:
-            m_lbl = _PAT_ACC_LABEL.search(head)
-            if m_lbl:
-                cand = _clean_acc_value(m_lbl.group(1))
-                if cand:
-                    accionante = cand
-                    break
-            m_inst = _PAT_ACC_INSTAURADA.search(head)
-            if m_inst:
-                cand = _clean_acc_value(m_inst.group(1))
-                if cand:
-                    accionante = cand
-                    break
+        cand = _cand_from(head, _dt)
+        if cand:
+            accionante = cand
+            nota = nota_cand  # puede ser None (persona natural simple)
+            break
 
     # --- Fallback: folder_name (formato "<rad_corto> <ACCIONANTE>") ---
     if not accionante and case.folder_name:
@@ -332,14 +384,37 @@ def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str],
 _CANON_GOBERNACION = "GOBERNACIÓN DE SANTANDER"
 _CANON_SECRETARIA = "SECRETARÍA DE EDUCACIÓN DEL DEPARTAMENTO DE SANTANDER"
 
-# Label ACCIONADO: ENTIDAD (inicio de línea)
-_PAT_ACCIONADO_LABEL = re.compile(r"(?im)^\s*Accionad[oa]s?\s*[:\.]\s*(.{4,250})")
+# Label "Accionado(s): ENTIDAD [- ENTIDAD ...]" — captura el valor de la línea de la
+# etiqueta + líneas de continuación INDENTADAS (algunos autos listan una entidad por
+# línea). Se detiene al ver una nueva etiqueta "Palabra:".
+_PAT_ACCIONADO_LABEL = re.compile(
+    r"(?im)^[ \t]*Accionad[oa]s?(?:\s*\(s\))?[ \t]*[:\.]+[ \t]*"
+    r"("
+    r"[^\r\n]{0,400}"
+    r"(?:\n[ \t]+(?![A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\s*[:\.])[^\r\n]{1,250}){0,8}"
+    r")"
+)
+# Palabras que identifican una entidad (pública / privada / educativa). Sirve como
+# guarda para aceptar el valor de la etiqueta "Accionado:" y para validar fragmentos.
+_ENTITY_WORD_RE = re.compile(
+    r"(?i)\b(?:GOBERNACI[ÓO]N|GOBIERNO|DEPARTAMENTO|MUNICIPIO|ALCALD[ÍI]A|"
+    r"SECRETAR[ÍI]A|MINISTERIO|DIRECCI[ÓO]N\s+(?:DE|GENERAL|TERRITORIAL)|"
+    r"SUBDIRECCI[ÓO]N|UNIDAD\s+(?:ADMINISTRATIVA|DE)|AGENCIA|INSTITUTO|INSTITUCI[ÓO]N|"
+    r"COLEGIO|ESCUELA|LICEO|UNIVERSIDAD|CENTRO\s+EDUCATIVO|JARD[ÍI]N\s+INFANTIL|"
+    r"FUNDACI[ÓO]N|CORPORACI[ÓO]N|ASOCIACI[ÓO]N|COOPERATIVA|CAJA\b|FONDO\b|EMPRESA|"
+    r"HOSPITAL|CL[ÍI]NICA|E\.?S\.?E\.?\b|ESE\b|E\.?P\.?S\.?\b|EPS\b|A\.?R\.?L\.?\b|"
+    r"ARL\b|A\.?F\.?P\.?\b|AFP\b|FOMAG|FIDUPREVISORA|PORVENIR|PROTECCI[ÓO]N\s+S|"
+    r"COLFONDOS|COLPENSIONES|PERSONER[ÍI]A|FISCAL[ÍI]A|PROCURADUR[ÍI]A|DEFENSOR[ÍI]A|"
+    r"CONTRALOR[ÍI]A|REGISTRADUR[ÍI]A|CONSEJO\b|TRIBUNAL|JUZGADO|NACI[ÓO]N\b|RECTOR|"
+    r"SENA\b|ICBF|SIMAT|CNSC|COMISAR[ÍI]A|NOTAR[ÍI]A|S\.?A\.?S?\.?\b|LTDA|EICE|"
+    r"E\.?I\.?C\.?E\.?|S\.?A\.?S\.?\b|ENTIDAD|UAE\b|UAESP|ANSPE)\b"
+)
 # "en contra de [ENTIDAD]" — entidades reconocibles por keyword inicial
 _ENTITY_KW = (
     r"GOBERNACI[ÓO]N|MUNICIPIO|ALCALD[ÍI]A|SECRETAR[ÍI]A|MINISTERIO|"
-    r"INSTITUCI[ÓO]N\s+EDUCATIVA|INSTITUTO|COLEGIO|ESCUELA|UNIVERSIDAD|"
+    r"INSTITUCI[ÓO]N\s+EDUCATIVA|INSTITUTO|COLEGIO|ESCUELA|LICEO|UNIVERSIDAD|"
     r"E\.?S\.?E\.?|ESE\b|EPS|HOSPITAL|FUNDACI[ÓO]N|PERSONER[ÍI]A|FISCAL[ÍI]A|"
-    r"DEPARTAMENTO|CONSEJO|UAE|RECTOR\w*"
+    r"DEPARTAMENTO|CONSEJO|UAE|RECTOR\w*|FONDO|PORVENIR|COLPENSIONES"
 )
 _PAT_EN_CONTRA_ENTITY = re.compile(
     rf"(?i)\b(?:en\s+contra\s+de(?:l)?|contra\s+(?:el\s+|la\s+|los\s+|las\s+|del\s+)?)\s*"
@@ -356,27 +431,98 @@ _PAT_VINCULACION = re.compile(
 )
 
 
-def _normalize_entity_list(raw: str) -> str:
-    """Normaliza un valor de accionado. Si detecta Gobernación y/o Secretaría de
-    Educación → devuelve SOLO esos en forma canónica (los demás van a vinculados,
-    no a accionados). Si es otra entidad (IE, municipio) → la devuelve tal cual.
+# Separadores entre entidades dentro del campo accionados: salto de línea, " - ",
+# " | ", " · ", ";", " + ", "  y otros". (NO partimos por coma sola: rompería nombres
+# como "SECRETARÍA DE EDUCACIÓN, CULTURA Y DEPORTE".)
+_ENTITY_SPLIT_RE = re.compile(
+    r"(?:[\r\n]+|\s+[-–—|·•]\s+|\s*;\s*|\s+\+\s+|\s+y\s+otr[oa]s?\b\s*)", re.IGNORECASE
+)
+# Placeholders que NO son una entidad real.
+_ACC_NON_VALUE_RE = re.compile(
+    r"(?i)^\s*(?:ningun[oa]s?|n\.?\s*a\.?|no\s+aplica|sin\s+(?:accionad|determin)|"
+    r"-+|\.+|s/?d|x+|por\s+determinar)\s*$"
+)
 
-    Tolera typos comunes: 'EDUCACIO', 'EDUCASION' (le falta la N o tiene S)."""
-    v = re.sub(r"[\n\r]+", " ", raw)
-    v = re.sub(r"\s+", " ", v).strip().rstrip(",.;")
-    v_up = v.upper()
-    parts = []
-    if re.search(r"GOBERNACI[ÓO]N", v_up):
-        parts.append(_CANON_GOBERNACION)
-    # "EDUCAC..." cubre EDUCACIÓN, EDUCACION, EDUCACIO, EDUCASION
-    if re.search(r"SECRETAR[ÍI]A\s+DE\s+EDUCA[CS]I?[ÓO]?N?", v_up):
-        parts.append(_CANON_SECRETARIA)
-    if parts:
-        return " - ".join(parts)
-    # Sin componentes canónicos → otra entidad principal (IE, municipio, etc.)
-    # Limpiar prefijos "LA "/"EL " y normalizar
-    v_clean = re.sub(r"^(?:LA\s+|EL\s+)", "", v_up).strip()
-    return v_clean[:200]
+
+# Cláusulas que cuelgan del nombre de la entidad pero no son parte de él
+# ("DEPARTAMENTO DE SANTANDER, REPRESENTADO LEGALMENTE POR JUVENAL DÍAZ MATEUS, O QUIEN…").
+_ENTITY_TAIL_CLAUSE_RE = re.compile(
+    r"(?i)[,;]?\s*(?:representad[oa]s?\b|en\s+cabeza\s+de\b|a\s+trav[ée]s\s+de\b|"
+    r"por\s+(?:conducto|intermedio)\s+de\b|en\s+la\s+persona\s+de\b|en\s+su\s+calidad\s+de\b|"
+    r"qui[eé]n(?:es)?\s+(?:haga|hagan)\b|o\s+qui[eé]n\b|representante\s+legal\b|"
+    r"identificad[oa]\b|con\s+(?:c\.?c\.?|nit)\b).*$"
+)
+
+
+def _canon_entity(s: str) -> str:
+    """Normaliza UNA entidad. Gobernación / Secretaría de Educación departamental de
+    Santander → forma canónica; cualquier otra (IE, municipio, EPS, fondo, secretaría
+    municipal, ministerio…) se conserva tal cual, limpia y en mayúsculas."""
+    u = re.sub(r"\s+", " ", s or "").strip().strip(",.;:·-–—()[]\"'").upper()
+    u = _ENTITY_TAIL_CLAUSE_RE.sub("", u).strip().strip(",.;:·-–—").strip()
+    if not u or len(u) < 3:
+        return ""
+    # Gobernación de Santander (también "DEPARTAMENTO/DEPARTAMENTAL DE SANTANDER" — misma
+    # persona jurídica, o un fragmento de "Secretaría de Educación Departamental de Santander")
+    if re.search(r"\bGOBERNACI[ÓO]N\b", u) or re.fullmatch(r"(?:EL\s+)?DEPARTAMENT(?:O|AL)\s+DE\s+SANTANDER\.?", u):
+        return _CANON_GOBERNACION
+    # Secretaría de Educación — ¿la DEPARTAMENTAL de Santander, o una municipal/nacional/otra?
+    if re.search(r"SECRETAR[ÍI]A\s+(?:DEPARTAMENTAL\s+)?DE\s+EDUCA[CS]I?[ÓO]?N?\b", u):
+        es_municipal = bool(re.search(r"\bMUNICIPAL\b", u))
+        es_nacional = bool(re.search(r"\bNACIONAL\b", u))
+        # ¿menciona un lugar que NO es Santander? (p.ej. "DE GIRÓN", "DE BARRANCABERMEJA")
+        otro_lugar = bool(
+            re.search(r"\bDE\s+(?!SANTANDER\b|EDUCA|LA\b|EL\b|LOS\b)[A-ZÁÉÍÓÚÑ]{4,}", u)
+            and not re.search(r"\bSANTANDER\b", u)
+        )
+        if not (es_municipal or es_nacional or otro_lugar):
+            return _CANON_SECRETARIA
+        return re.sub(r"^(?:LA|EL)\s+", "", u).strip()[:180]
+    # Otra entidad: quitar artículo inicial
+    u = re.sub(r"^(?:LA|EL|LOS|LAS|UNA?)\s+", "", u).strip()
+    return u[:180]
+
+
+def _looks_like_accionado_value(raw: str) -> bool:
+    """¿El texto tras la etiqueta 'Accionado:' parece una entidad (o lista de
+    entidades) y no un placeholder / basura de OCR?"""
+    if not raw:
+        return False
+    v = re.sub(r"\s+", " ", raw).strip()
+    if len(v) < 4 or len(v) > 500 or _ACC_NON_VALUE_RE.match(v):
+        return False
+    # Debe tener alguna palabra-entidad reconocible (o ser GOB/SecEdu, ya cubiertos por
+    # _ENTITY_WORD_RE vía GOBERNACI/SECRETAR), o al menos un bloque de 4+ mayúsculas.
+    return bool(_ENTITY_WORD_RE.search(v) or re.search(r"[A-ZÁÉÍÓÚÑ]{4,}", v))
+
+
+_CANON_ENTITIES = {_CANON_GOBERNACION, _CANON_SECRETARIA}
+
+
+def _normalize_entity_list(raw: str) -> str:
+    """Normaliza la lista de accionados PRESERVANDO TODAS las entidades listadas.
+    (Antes se descartaban las que no fueran GOB/SecEdu, dejando 'accionados' incompleto
+    — DeepSeek lo señaló en ~191 casos: Porvenir SA, Ministerio de Educación, IE, etc.)"""
+    pieces = [p for p in _ENTITY_SPLIT_RE.split(raw or "") if p and p.strip()]
+    if not pieces:
+        pieces = [raw or ""]
+    out: list[str] = []
+    dropped: list[str] = []
+    for p in pieces:
+        c = _canon_entity(p)
+        if not c or c in out:
+            continue
+        # Si hay >1 fragmento, descartar los que no parecen una entidad (suelen ser el
+        # nombre del representante legal o ruido de OCR colado tras un " - ").
+        if len(pieces) > 1 and c not in _CANON_ENTITIES and not _ENTITY_WORD_RE.search(c):
+            dropped.append(c)
+            continue
+        out.append(c)
+    if not out and dropped:  # todos quedaron descartados → mejor devolver algo
+        out = [dropped[0]]
+    if out:
+        return " - ".join(out)
+    return _canon_entity(raw or "")[:200]
 
 
 def extract_accionados_for_case(db: Session, case: Case) -> Optional[str]:
@@ -397,11 +543,11 @@ def extract_accionados_for_case(db: Session, case: Case) -> Optional[str]:
         if not text or len(text) < 150:
             continue
         head = text[:4000]
-        # 1. Label ACCIONADO:
+        # 1. Label ACCIONADO: (puede listar varias entidades, en una o varias líneas)
         m = _PAT_ACCIONADO_LABEL.search(head)
         if m:
-            raw = m.group(1).split("\n")[0].strip()
-            if re.search(r"(?i)GOBERNACI[ÓO]N|SECRETAR[ÍI]A|INSTITUCI[ÓO]N|MUNICIPIO|COLEGIO|MINISTERIO|ALCALD[ÍI]A|ESCUELA|INSTITUTO", raw):
+            raw = m.group(1).strip()
+            if _looks_like_accionado_value(raw):
                 return _normalize_entity_list(raw)
         # 2. "en contra de [ENTIDAD]"
         m = _PAT_EN_CONTRA_ENTITY.search(head)
@@ -418,8 +564,8 @@ def extract_accionados_for_case(db: Session, case: Case) -> Optional[str]:
             return _normalize_entity_list(m.group(1))
         m = _PAT_ACCIONADO_LABEL.search(text[:4000])
         if m:
-            raw = m.group(1).split("\n")[0].strip()
-            if re.search(r"(?i)GOBERNACI[ÓO]N|SECRETAR[ÍI]A|INSTITUCI[ÓO]N|MUNICIPIO|COLEGIO|MINISTERIO|ALCALD[ÍI]A", raw):
+            raw = m.group(1).strip()
+            if _looks_like_accionado_value(raw):
                 return _normalize_entity_list(raw)
 
     # 3. Default — toda tutela gestionada por la SED es contra GOB+SEC
@@ -1071,6 +1217,8 @@ _CIUDAD_NOISE = {
     "EJECUCION", "EJECUCIÓN", "DESCONGESTION", "DESCONGESTIÓN", "ADOLESCENTES",
     "PEQUEÑAS CAUSAS", "MIXTO", "ORALIDAD", "SENTENCIAS", "ADMINISTRATIVO",
     "CONTROL", "PROMISCUO", "CIVIL", "PENAL", "LABORAL", "ESTE",
+    # No son ciudades: aparecen en frases como "conoce de la TUTELA / ACCIÓN de AMPARO"
+    "TUTELA", "ACCION", "ACCIÓN", "AMPARO", "DEMANDA", "PROCESO", "ASUNTO", "REFERENCIA",
 }
 
 
@@ -1340,12 +1488,18 @@ def extract_fecha_ingreso_for_case(db: Session, case: Case) -> tuple[Optional[st
             if v:
                 return v, "recap"
 
-    # 3) fecha del primer email cuyo subject indica que lleva/notifica el auto admisorio
+    # 3) fecha del primer email cuyo subject indica que lleva/notifica el auto admisorio.
+    #    OJO: la fecha de RECEPCIÓN del correo ≠ fecha del auto (el correo puede llegar
+    #    semanas después, o ser una notificación tardía). Solo se usa si es coherente:
+    #    no puede ser POSTERIOR al fallo de 1ra (no se admite una tutela ya fallada).
+    fallo1 = _parse_ddmmyyyy(getattr(case, "fecha_fallo_1st", None))
     for e in _emails_chronological(db, case.id):
         subj = e.subject or ""
         if subj and _RE_SUBJECT_AUTO_ADMIS.search(subj) and e.date_received:
             if yh is not None and abs(e.date_received.year - yh) > 1:
                 continue
+            if fallo1 is not None and e.date_received.date() > fallo1:
+                continue  # fecha del correo posterior al fallo → no es la fecha de ingreso
             try:
                 return e.date_received.strftime("%d/%m/%Y"), "email"
             except Exception:
@@ -2794,3 +2948,97 @@ def extract_observaciones_for_case(db: Session, case: Case) -> list[str]:
     if sep_labels:
         flags.append("Sujeto de especial protección: " + ", ".join(sep_labels))
     return flags
+
+
+# ── observaciones: resumen narrativo del caso vía LLM (append-only, fechado) ──
+# El campo `observaciones` se construye en capas: banderas (arriba) + una o varias
+# líneas "[DD/MM/AAAA] <resumen>". Cuando llega una actuación nueva, el caller añade
+# una línea nueva con su fecha SIN borrar las anteriores (contexto acumulado).
+
+_OBS_SUMMARY_DOCTYPES_DEMANDA = ("DEMANDA_TUTELA", "ANEXO_DEMANDA")
+_OBS_SUMMARY_DOCTYPES_FALLO = ("SENTENCIA_1RA", "SENTENCIA_2DA", "AUTO_INCIDENTE", "INCIDENTE_DESACATO")
+_RE_OBS_LINE = re.compile(r"^\s*\[\d{1,2}/\d{1,2}/\d{4}\]", re.M)  # detecta si ya hay una línea fechada
+
+
+def case_has_dated_observacion(case: Case) -> bool:
+    """True si `observaciones` ya tiene al menos una línea '[DD/MM/AAAA] ...' (resumen LLM)."""
+    return bool(_RE_OBS_LINE.search(case.observaciones or ""))
+
+
+def _doc_head(db: Session, case: Case, doctypes: tuple[str, ...], n: int) -> str:
+    for dt in doctypes:
+        for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt).all():
+            t = _read_doc_text(d)
+            if t and len(t) >= 200:
+                return t[:n]
+    return ""
+
+
+def llm_summarize_case_state(db: Session, case: Case) -> Optional[str]:
+    """Resumen factual (2-3 frases, español) del estado de la tutela vía LLM local.
+
+    Se construye SOLO con los campos ya extraídos + un fragmento de la demanda/fallo.
+    El LLM no inventa: si los datos son pobres devuelve None. Respeta V9_DISABLE_LLM.
+    """
+    if os.getenv("V9_DISABLE_LLM", "false").lower() == "true":
+        return None
+    parts: list[str] = []
+
+    def _add(label: str, val) -> None:
+        v = (str(val or "")).strip()
+        if v:
+            parts.append(f"{label}: {v}")
+
+    _add("Accionante", case.accionante)
+    _add("Accionados", case.accionados)
+    _add("Derecho(s) invocado(s)", (case.derecho_vulnerado or "").replace(" - ", ", "))
+    _add("Asunto", case.asunto)
+    _add("Pretensiones (extracto)", (case.pretensiones or "")[:400])
+    _add("Fallo 1ª instancia", case.sentido_fallo_1st)
+    _add("Fecha fallo 1ª instancia", case.fecha_fallo_1st)
+    impg = f"{case.impugnacion or ''} {('por ' + case.quien_impugno) if case.quien_impugno else ''}".strip()
+    _add("Impugnación", impg)
+    _add("Fallo 2ª instancia", case.sentido_fallo_2nd)
+    _add("Incidente de desacato", case.incidente)
+    _add("Decisión del incidente", case.decision_incidente)
+    _add("Estado", case.estado)
+    demanda = _doc_head(db, case, _OBS_SUMMARY_DOCTYPES_DEMANDA, 1400)
+    fallo = _doc_head(db, case, _OBS_SUMMARY_DOCTYPES_FALLO, 900)
+    if len(parts) < 2 and not demanda and not fallo:
+        return None  # datos demasiado pobres para un resumen útil
+
+    ctx = "\n".join(parts)
+    if demanda:
+        ctx += f"\n\n--- Extracto del escrito de tutela ---\n{demanda}"
+    if fallo:
+        ctx += f"\n\n--- Extracto del fallo/incidente ---\n{fallo}"
+
+    prompt = (
+        "/no_think\n"
+        "Eres un asistente jurídico de la Secretaría de Educación. Con base ÚNICAMENTE en los "
+        "datos de abajo, escribe en español 2 o 3 frases factuales que resuman esta acción de "
+        "tutela: (1) qué solicita el accionante, (2) qué se ha decidido (fallo de 1ª o 2ª "
+        "instancia, incidente de desacato) si lo hay, y (3) en qué va el trámite. "
+        "No inventes nada que no esté en los datos. No repitas el radicado. No uses viñetas ni "
+        "encabezados. Si no hay información suficiente, responde exactamente: SIN_RESUMEN.\n\n"
+        f"DATOS DEL EXPEDIENTE:\n{ctx[:5000]}"
+    )
+    msgs = [
+        {"role": "system", "content": "Resumes expedientes de tutela en 2-3 frases factuales. No inventas."},
+        {"role": "user", "content": prompt},
+    ]
+    try:
+        from backend.extraction.ai_extractor import _call_local
+        raw, _, _ = _call_local(msgs, "qwen3-4b-iuris", max_tokens=260)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("LLM observaciones falló para case=%d: %s", case.id, str(e)[:200])
+        return None
+    raw = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.DOTALL).strip()
+    raw = re.sub(r"\s+", " ", raw).strip().strip('"').strip()
+    if not raw or len(raw) < 25 or re.fullmatch(r"(?i)sin[_ ]resumen\.?", raw):
+        return None
+    if len(raw) > 700:
+        cut = raw[:700]
+        last = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+        raw = (cut[:last + 1] if last > 200 else cut).strip()
+    return raw

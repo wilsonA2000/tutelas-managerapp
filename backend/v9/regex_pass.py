@@ -407,17 +407,60 @@ def _extract_incidente_flag(text: str, doctype: str) -> Optional[str]:
     return None
 
 
+# El footer del DOCX de respuesta de la SED lista varios roles: el REDACTOR
+# ("Proyectó/Elaboró/Redactó: NOMBRE") y el SUPERVISOR ("Aprobó/Revisó/Vo.Bo.: NOMBRE").
+# En muchas plantillas el supervisor (la jefa del Grupo de Apoyo Jurídico) se lista PRIMERO,
+# así que un .search() simple agarraba a la supervisora. Queremos al REDACTOR.
+_FOOTER_ROLE_WORDS = r"proyect[oó]|elabor[oó]|redact[oó]|aprob[oó]|revis[oó]|vist[oa]\s+bueno|vo\.?\s*bo\.?"
+_RE_FOOTER_ROLE = re.compile(
+    rf"(?im)\b({_FOOTER_ROLE_WORDS})\s*[:.]\s*(.+?)(?=$|\b(?:{_FOOTER_ROLE_WORDS})\s*[:.]|Aport[oó]\b|Anexo)"
+)
+_DRAFTER_ROLE_PREFIXES = ("proyect", "elabor", "redact")
+# tokens que indican cargo / dependencia (todo lo que sigue se descarta del nombre)
+_RE_FOOTER_NAME_CUT = re.compile(
+    r"(?i)\s*(?:[-–/|·•]?\s*)(?:CPS\b|OPS\b|CC\.?\b|cargo\b|profes|coordinador|jefe\b|"
+    r"abogad[oa]\b|contratista\b|grupo\s+de\s+apoyo|l[ií]der\b|directora?\b|secretari[oa]\b|"
+    r"S\.?E\.?D\.?\b|gobernaci[oó]n\b|CE\b\s*-?\s*SEC\b)"
+)
+_FOOTER_NAME_BAD_WORDS = {
+    "SECRETARIA", "SECRETARÍA", "EDUCACION", "EDUCACIÓN", "GOBERNACION", "GOBERNACIÓN",
+    "GRUPO", "APOYO", "JURIDICO", "JURÍDICO", "DESPACHO", "DIRECCION", "DIRECCIÓN",
+    "INDICACIONES", "INSUMOS", "BAJO", "OFICINA", "DEPENDENCIA", "DEPARTAMENTO",
+    "ANEXO", "ANEXOS", "PANTALLAZO", "INFORMACION", "INFORMACIÓN", "SIMAT", "CONTRATISTA",
+}
+
+
+def _footer_name_from_value(raw: str) -> Optional[str]:
+    """Limpia el valor capturado tras 'rol:' y lo devuelve si parece nombre de persona."""
+    name = re.sub(r"\s+", " ", (raw or "").strip())[:90]
+    name = _RE_FOOTER_NAME_CUT.split(name)[0]
+    name = name.strip(" .,;:-–/|·•").strip()
+    if not (5 <= len(name) <= 55):
+        return None
+    words = name.split()
+    if not (2 <= len(words) <= 6) or not all(w[:1].isalpha() for w in words):
+        return None
+    if any(w.upper().strip(".,") in _FOOTER_NAME_BAD_WORDS for w in words):
+        return None
+    return name.upper()
+
+
 def _extract_abogado_footer(text: str) -> Optional[str]:
-    """De DOCX de respuesta: 'Proyectó: NOMBRE'."""
-    from backend.agent.regex_library import ABOGADO_FOOTER
-    m = ABOGADO_FOOTER.pattern.search(text)
-    if m:
-        name = m.group(1).strip()
-        name = re.sub(r"\s+", " ", name)[:60]
-        # Cortar después de salto de línea o cargo
-        name = re.split(r"(?i)\s*(?:CPS|OPS|CC\.?|cargo|profes)", name)[0].strip()
-        if len(name) >= 5:
-            return name.upper()
+    """Del footer del DOCX de respuesta: nombre del REDACTOR ('Proyectó/Elaboró: NOMBRE'),
+    prefiriéndolo sobre el SUPERVISOR ('Aprobó/Revisó: NOMBRE') cuando ambos aparecen.
+    Devuelve None si no hay ningún nombre limpio (mejor vacío que atribuir a la supervisora)."""
+    tail = text[-3500:] if len(text) > 3500 else text  # el footer está al final
+    drafters: list[str] = []
+    supervisors: list[str] = []
+    for m in _RE_FOOTER_ROLE.finditer(tail):
+        role = m.group(1).lower()
+        name = _footer_name_from_value(m.group(2))
+        if not name:
+            continue
+        (drafters if any(role.startswith(p) for p in _DRAFTER_ROLE_PREFIXES) else supervisors).append(name)
+    for bucket in (drafters, supervisors):
+        if bucket:
+            return bucket[0]
     return None
 
 
@@ -427,25 +470,48 @@ _CITY_NOISE = {
     "TRIBUNAL", "JUZGADO", "PRIMERO", "SEGUNDO", "TERCERO",
     "CUARTO", "QUINTO", "SEXTO", "SEPTIMO", "OCTAVO", "NOVENO",
     "DECIMO", "PROMISCUO", "CIVIL", "PENAL", "LABORAL", "DEL",
+    # Atributos del juzgado que NO son ciudad
+    "REPARTO", "CONOCIMIENTO", "GARANTIAS", "GARANTÍAS", "EJECUCION", "EJECUCIÓN",
+    "DESCONGESTION", "DESCONGESTIÓN", "ADOLESCENTES", "MIXTO", "ORALIDAD",
+    "SENTENCIAS", "ADMINISTRATIVO", "CONTROL", "ESTE", "DISTRITO", "CAUSAS",
+    "COMPETENCIAS", "MULTIPLES", "MÚLTIPLES", "PEQUEÑAS",
 }
+# Palabras "atributo" que pueden preceder a la ciudad real: "...DE DESCONGESTIÓN DE
+# BUCARAMANGA" → la ciudad es BUCARAMANGA.
+_CITY_PREFIX_NOISE = re.compile(
+    r"(?i)^(?:DESCONGESTI[ÓO]N|EJECUCI[ÓO]N(?:\s+DE\s+SENTENCIAS?)?|SENTENCIAS?|"
+    r"GARANT[ÍI]AS|CONOCIMIENTO|ADOLESCENTES|PEQUE[ÑN]AS\s+CAUSAS|REPARTO|"
+    r"COMPETENCIAS\s+M[ÚU]LTIPLES|CONTROL\s+DE\s+GARANT[ÍI]AS|FAMILIA)"
+    r"\s+(?:Y\s+COMPETENCIAS\s+M[ÚU]LTIPLES\s+)?DE\s+"
+)
 
 
 def _extract_ciudad(text: str) -> Optional[str]:
-    """Ciudad del JUZGADO (no del afectado). Heurística simple del header."""
-    # Header tipo "JUZGADO X PROMISCUO MUNICIPAL DE BUCARAMANGA"
-    # Captura SOLO una palabra (la ciudad). Después limpiamos por si viene con \n o ruido.
+    """Ciudad del JUZGADO (no del afectado). Heurística del header.
+    Captura nombres compuestos ("SAN VICENTE DE CHUCURÍ", "SABANA DE TORRES")."""
     m = re.search(
-        r"(?i)(?:JUZGADO|TRIBUNAL)[^\n]{0,80}?\bDE\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ]+)",
+        r"(?i)(?:JUZGADO|TRIBUNAL)[^\n]{0,80}?\bDE\s+"
+        r"((?:SAN(?:TA)?\s+)?[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ]+"
+        r"(?:\s+(?:DE|DEL|LA|LOS|LAS)\s+[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ]+){0,3})",
         text,
     )
     if not m:
         return None
-    ciudad = m.group(1).strip().upper()
-    # Cortar en newline / saltos por si acaso
-    ciudad = ciudad.split("\n")[0].split("\r")[0].strip()
-    # Quitar caracteres no alfa al final
-    ciudad = re.sub(r"[^A-ZÁÉÍÓÚÑa-záéíóúñ]+$", "", ciudad)
-    if not ciudad or ciudad.upper() in _CITY_NOISE:
+    ciudad = re.sub(r"\s+", " ", m.group(1)).strip().upper()
+    # Quitar prefijos-atributo del juzgado ("DESCONGESTIÓN DE X" → "X"), repetidamente.
+    for _ in range(3):
+        nueva = _CITY_PREFIX_NOISE.sub("", ciudad).strip()
+        if nueva == ciudad:
+            break
+        ciudad = nueva
+    # Quitar sufijo " SANTANDER" y caracteres no-alfa al final
+    ciudad = re.sub(r"\s+SANTANDER$", "", ciudad).strip()
+    ciudad = re.sub(r"[^A-ZÁÉÍÓÚÑ ]+$", "", ciudad).strip()
+    # Si quedó "ALGO DE CIUDAD" y "ALGO" es ruido, quedarse con lo último tras " DE "
+    palabras = ciudad.split()
+    if len(palabras) >= 3 and " DE " in f" {ciudad} " and palabras[0] in _CITY_NOISE:
+        ciudad = ciudad.split(" DE ", 1)[1].strip()
+    if not ciudad or ciudad in _CITY_NOISE or len(ciudad) < 3:
         return None
     return ciudad
 
