@@ -41,7 +41,6 @@ import AuditoriaFallos from './pages/AuditoriaFallos'
 import Login from './pages/Login'
 import ProgressModal from './components/ProgressModal'
 import NotificationCenter from './components/NotificationCenter'
-import CognitiveChat from './components/CognitiveChat'
 import { useAuth } from './contexts/AuthContext'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -148,7 +147,8 @@ export default function App() {
       </a>
       <div className="flex h-screen bg-background overflow-hidden">
         <ProgressModal />
-        <CognitiveChat />
+        {/* (Retirado) Botón flotante "Asistente jurídico" — tapaba la paginación del listado.
+            El endpoint POST /api/chat/ sigue vivo; el componente quedó en src/_legacy/CognitiveChat.tsx. */}
 
         {/* Mobile overlay */}
         <AnimatePresence>
