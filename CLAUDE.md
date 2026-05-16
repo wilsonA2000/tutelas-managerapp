@@ -43,7 +43,7 @@ doc_io → regex_pass → catalog_resolve → excel_reconcile → llm_gap_fill �
 | Router REST | `backend/routers/v9.py` (4 endpoints — todos con `Depends(require_auth)`) |
 | Cliente API | `frontend/src/services/api.ts` (sección "v9 — pipeline simplificado", funciones `v9Health/v9Preview/v9Extract/v9ExtractBatch`) |
 | Botón UI | `frontend/src/pages/Cuadro.tsx` toolbar — "v9 Preview" lila, abre modal con summary + tabla expandible |
-| CLI | `scripts/v9_extract.py` (productivo, requiere venv) y `scripts/v9_test_standalone.py` (sin DB, 16/16 pasa) |
+| CLI | `scripts/v9_extract.py` / `scripts/v9_extract_fields.py` (productivos, requieren venv); `scripts/build_cuadro_excel.py` (cuadro Excel 39-col desde la DB); tests: `scripts/v9_test_standalone.py` (sin DB, 61/61) + `scripts/v9_test_db.py` (sobre la DB de prod, 51/51) — ambos en `scripts/run_safety_net.sh` |
 
 ### Endpoints v9
 

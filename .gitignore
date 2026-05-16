@@ -68,6 +68,7 @@ Thumbs.db
 
 # Reports (generated)
 data/exports/
+reports/
 
 # Logs
 *.log
