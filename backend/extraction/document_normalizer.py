@@ -33,8 +33,17 @@ class NormalizationResult:
     markdown: bool = False
 
 
-def _extract_pdf_pymupdf(file_path: Path) -> NormalizationResult:
-    """Extrae texto de PDF usando pymupdf (PyMuPDF/fitz). Único motor."""
+def _extract_pdf_pymupdf(
+    file_path: Path,
+    first_pages: int | None = 5,
+    last_pages: int | None = 3,
+) -> NormalizationResult:
+    """Extrae texto de PDF usando pymupdf. Por default lee primeras 5 + últimas 3 páginas.
+
+    Justificación: experimento 2026-05-09 mostró 76% reducción de texto con
+    solo 4% pérdida de cobertura de campos. Speedup LLM ~3-4x.
+    Pasar first_pages=None y last_pages=None para leer todo (legacy).
+    """
     try:
         import pymupdf
     except ImportError as e:
@@ -42,13 +51,25 @@ def _extract_pdf_pymupdf(file_path: Path) -> NormalizationResult:
 
     try:
         doc = pymupdf.open(str(file_path))
-        text_parts = []
         n = doc.page_count
-        for i in range(n):
-            text_parts.append(doc[i].get_text())
+
+        if first_pages is None and last_pages is None:
+            indices = list(range(n))
+            method = "pymupdf"
+        else:
+            fp = first_pages or 0
+            lp = last_pages or 0
+            if n <= fp + lp:
+                indices = list(range(n))
+                method = "pymupdf"
+            else:
+                indices = list(range(fp)) + list(range(n - lp, n))
+                method = f"pymupdf_first{fp}_last{lp}"
+
+        text_parts = [doc[i].get_text() for i in indices]
         doc.close()
         text = "\n".join(text_parts)
-        return NormalizationResult(text=text, method="pymupdf", pages=n)
+        return NormalizationResult(text=text, method=method, pages=n)
     except Exception as e:
         logger.warning("pymupdf falló en %s: %s", file_path.name, str(e)[:100])
         return NormalizationResult(text="", error=str(e)[:200], method="pymupdf_error")

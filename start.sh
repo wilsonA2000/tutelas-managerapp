@@ -22,7 +22,7 @@ fuser -k 5173/tcp 2>/dev/null
 # Iniciar backend
 echo "[1/2] Iniciando backend (FastAPI) en puerto 8000..."
 cd "$DIR"
-python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload &
+"$DIR/.venv/bin/python3" -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload &
 BACKEND_PID=$!
 
 # Iniciar frontend

@@ -43,21 +43,30 @@ function ProcessTracker({ process }: { process: ProcessInfo }) {
   const step = (data.step as string) || (data.case_name as string) || ''
   const current = (data.current as number) || 0
   const total = (data.total as number) || 0
-  const success = (data.success as number) || (data.emails_found as number) || 0
+  const success = (data.success as number) || 0
+  const emailsFound = (data.emails_found as number) || 0
   const errors = (data.errors as number) || 0
+  const imported = (data.imported as number) || 0
+  const skipped = (data.skipped as number) || 0
   const docsVerified = (data.docs_verified as number) || 0
   const docsTotal = (data.docs_total as number) || 0
   const elapsed = (data.elapsed_seconds as number) || 0
   const eta = (data.eta_seconds as number) || 0
   const phase = (data.phase as string) || ''
+  const lastSubject = (data.last_email_subject as string) || ''
   const backendPct = data.progress_pct as number | undefined
   const pct = backendPct != null ? backendPct : (total > 0 ? Math.round((current / total) * 100) : 0)
-  // Inferir paso actual desde la cadena phase ("Paso 2/7: ...") cuando current no se actualiza
-  const phaseMatch = phase.match(/Paso\s+(\d+)\s*\/\s*(\d+)/i)
-  const stepNum = phaseMatch ? parseInt(phaseMatch[1], 10) : current
-  const stepTotal = phaseMatch ? parseInt(phaseMatch[2], 10) : total
-  const elapsedStr = elapsed > 0 ? `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')} min` : ''
-  const etaStr = eta > 0 ? `~${Math.floor(eta / 60)}:${String(eta % 60).padStart(2, '0')} min restante` : ''
+
+  const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+  const elapsedStr = elapsed > 0 ? `transcurrido ${fmtTime(elapsed)}` : ''
+  const etaStr = eta > 0 ? `ETA ~${fmtTime(eta)}` : ''
+
+  // "Paso" para sincronización de carpetas, "Caso" para flujos por expediente
+  const itemLabel = process.key === 'sync' ? 'Paso' : 'Caso'
+
+  // La phase suele venir como "Paso N/M: descripción". Quitamos el prefijo
+  // porque el contador real ya se muestra arriba — evita duplicación.
+  const subphase = phase.replace(/^Paso\s+\d+\s*\/\s*\d+\s*[:·-]?\s*/i, '').trim()
 
   return (
     <div className="mb-4 last:mb-0">
@@ -99,40 +108,53 @@ function ProcessTracker({ process }: { process: ProcessInfo }) {
         )}
       </div>
 
-      {total > 0 && (
-        <>
-          <div className="flex justify-between text-xs text-white/80">
-            <span>
-              {stepTotal > 0 ? `Paso ${stepNum} de ${stepTotal}` : `${current} de ${total}`}
-              {elapsedStr ? ` \u00B7 ${elapsedStr}` : ''}
-              {etaStr ? ` \u00B7 ${etaStr}` : ''}
-            </span>
-            <span className="font-bold text-white text-sm">{pct}%</span>
-          </div>
-          {phase && <p className="text-[11px] text-white/60 mt-1">{phase.replace(/^Paso\s+\d+\s*\/\s*\d+:\s*/i, '')}</p>}
-          {(success > 0 || errors > 0 || docsVerified > 0) && (
-            <div className="flex gap-3 mt-1 text-xs text-white/60">
-              {success > 0 && <span className="text-green-300">{success} exitosos</span>}
-              {errors > 0 && <span className="text-red-300">{errors} errores</span>}
-              {docsVerified > 0 && <span className="text-blue-300">{docsVerified}{docsTotal > 0 ? `/${docsTotal}` : ''} docs</span>}
-            </div>
-          )}
-          {/* Sync Gmail: chips de importados / omitidos / último asunto */}
-          {((data.imported as number) > 0 || (data.skipped as number) > 0) && (
-            <div className="flex gap-3 mt-1 text-xs text-white/60">
-              {(data.imported as number) > 0 && <span className="text-green-300">{data.imported as number} importados</span>}
-              {(data.skipped as number) > 0 && <span className="text-white/50">{data.skipped as number} omitidos</span>}
-            </div>
-          )}
-          {(data.last_email_subject as string) && (
-            <p className="text-[11px] text-white/50 truncate mt-1" title={data.last_email_subject as string}>
-              Último: {data.last_email_subject as string}
-            </p>
-          )}
-        </>
+      {total > 0 ? (
+        <div className="flex justify-between items-baseline text-xs text-white/80">
+          <span>
+            {`${itemLabel} ${current} de ${total}`}
+            {elapsedStr ? ` · ${elapsedStr}` : ''}
+            {etaStr ? ` · ${etaStr}` : ''}
+          </span>
+          <span className="font-bold text-white text-sm">{pct}%</span>
+        </div>
+      ) : (
+        elapsedStr && <div className="text-xs text-white/70">{elapsedStr}</div>
       )}
 
-      {step && <p className="text-xs text-white/60 truncate mt-1">{step}</p>}
+      {subphase && (
+        <p className="text-[11px] text-white/60 mt-1.5">
+          <span className="text-white/40">Subfase: </span>{subphase}
+        </p>
+      )}
+
+      {step && (
+        <p className="text-[11px] text-white/70 truncate mt-0.5" title={step}>
+          <span className="text-white/40">{process.key === 'gmail' ? 'Asunto: ' : 'Caso actual: '}</span>{step}
+        </p>
+      )}
+
+      {lastSubject && lastSubject !== step && (
+        <p className="text-[11px] text-white/50 truncate mt-0.5" title={lastSubject}>
+          <span className="text-white/40">Último: </span>{lastSubject}
+        </p>
+      )}
+
+      {(emailsFound > 0 || imported > 0 || skipped > 0 || success > 0 || errors > 0 || docsVerified > 0) && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-xs">
+          {process.key === 'gmail' && emailsFound > 0 && (
+            <span className="text-white/70">{emailsFound} correos encontrados</span>
+          )}
+          {imported > 0 && <span className="text-green-300">✓ {imported} importados</span>}
+          {skipped > 0 && <span className="text-white/50">{skipped} omitidos</span>}
+          {process.key === 'extraction' && success > 0 && (
+            <span className="text-green-300">✓ {success}{total > 0 ? ` / ${total}` : ''} exitosos</span>
+          )}
+          {docsVerified > 0 && (
+            <span className="text-blue-300">{docsVerified}{docsTotal > 0 ? ` / ${docsTotal}` : ''} docs verificados</span>
+          )}
+          {errors > 0 && <span className="text-red-300">⚠ {errors} errores</span>}
+        </div>
+      )}
     </div>
   )
 }
@@ -271,6 +293,9 @@ export default function ProgressModal() {
     }
   }
 
+  // Header dinámico: si hay un solo proceso activo, mostrar su label; si hay múltiples, "Procesando N tareas"
+  const singleActive = activeProcesses.length === 1 ? activeProcesses[0] : null
+
   return (
     <>
       <style>{`
@@ -285,18 +310,26 @@ export default function ProgressModal() {
           {/* Active processes */}
           {hasActive && (
             <>
-              <div className="flex justify-center mb-5">
+              <div className="flex justify-center mb-4">
                 <div className="relative">
                   <div className="w-16 h-16 rounded-full border-4 border-white/10 flex items-center justify-center">
                     <Loader2 size={28} className="text-white animate-spin" />
                   </div>
-                  <div className="absolute -top-1 -right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center">
-                    <span className="text-white text-[10px] font-bold">{activeProcesses.length}</span>
-                  </div>
+                  {activeProcesses.length > 1 && (
+                    <div
+                      className="absolute -top-1 -right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center"
+                      title={`${activeProcesses.length} procesos activos`}
+                    >
+                      <span className="text-white text-[10px] font-bold">{activeProcesses.length}</span>
+                    </div>
+                  )}
                 </div>
               </div>
-              <h2 className="text-center text-white font-semibold text-lg mb-1">Procesando</h2>
-              <p className="text-center text-white/50 text-xs mb-5">Puede navegar entre modulos.</p>
+              <h2 className="text-center text-white font-semibold text-lg mb-1">
+                {singleActive ? singleActive.label : `Procesando ${activeProcesses.length} tareas`}
+              </h2>
+              <p className="text-center text-white/50 text-xs mb-5">Puede navegar entre módulos.</p>
+              {/* Si hay un solo proceso, ya está en el header — no repetir el label dentro del tracker */}
               {activeProcesses.map((p) => <ProcessTracker key={p.key} process={p} />)}
             </>
           )}

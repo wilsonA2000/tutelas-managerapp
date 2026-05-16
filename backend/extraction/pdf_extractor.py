@@ -22,8 +22,20 @@ class PDFResult:
     error: str | None = None
 
 
-def extract_pdf(file_path: str | Path) -> PDFResult:
-    """Extrae texto de PDF con pymupdf. Sin fallback OCR."""
+def extract_pdf(
+    file_path: str | Path,
+    first_pages: int | None = 5,
+    last_pages: int | None = 3,
+) -> PDFResult:
+    """Extrae texto de PDF con pymupdf. Por default lee primeras 5 + últimas 3 páginas.
+
+    Justificación (experimento 2026-05-09): en docs legales (Auto Avoca,
+    Sentencia, Escrito Tutela) los campos del cuadro están concentrados en
+    las primeras y últimas páginas. Reducir 76% del texto perdió solo 4% de
+    cobertura. Speedup LLM ~3-4x.
+
+    Pasar first_pages=None y last_pages=None para leer todo (legacy).
+    """
     file_path = Path(file_path)
     if not file_path.exists():
         return PDFResult(text="", error=f"Archivo no existe: {file_path}")
@@ -35,19 +47,32 @@ def extract_pdf(file_path: str | Path) -> PDFResult:
 
     try:
         doc = pymupdf.open(str(file_path))
-        text_parts = []
         n_pages = doc.page_count
+
+        if first_pages is None and last_pages is None:
+            indices = list(range(n_pages))
+            method = "pymupdf"
+        else:
+            fp = first_pages or 0
+            lp = last_pages or 0
+            if n_pages <= fp + lp:
+                indices = list(range(n_pages))
+                method = "pymupdf"
+            else:
+                indices = list(range(fp)) + list(range(n_pages - lp, n_pages))
+                method = f"pymupdf_first{fp}_last{lp}"
+
+        text_parts = []
         scanned_pages = 0
-        for i in range(n_pages):
+        for i in indices:
             page_text = doc[i].get_text()
             text_parts.append(page_text)
-            # Heurística: página con muy poco texto y muchas imágenes = escaneada
             if len(page_text.strip()) < 50:
                 scanned_pages += 1
         doc.close()
         return PDFResult(
             text="\n".join(text_parts),
-            method="pymupdf",
+            method=method,
             pages=n_pages,
             has_scanned_pages=(scanned_pages > 0),
         )
