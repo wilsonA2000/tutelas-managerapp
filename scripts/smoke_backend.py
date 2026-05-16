@@ -25,7 +25,7 @@ import requests
 # que se vayan arreglando en las fases siguientes, se quitan de aquí.
 KNOWN_FAILING: list[str] = [
     # "GET /api/dashboard/kpis",  ← arreglado en Fase 2 (AmbiguousForeignKeysError)
-    "GET /api/intelligence/similar/",  # 500: faiss no instalado + índice BGE-M3 no versionado (se reconstruye aparte)
+    # "GET /api/intelligence/similar/",  ← retirado: la búsqueda por similitud (faiss/BGE-M3) y la pestaña "Casos parecidos" se quitaron
 ]
 
 
@@ -138,8 +138,6 @@ def main() -> int:
         GETS += [
             (f"/api/cases/{case_id}", has("id", "radicado_23_digitos", "accionante")),
             (f"/api/cases/{case_id}/email-packages", None),
-            (f"/api/cases/{case_id}/pii-hints", None),
-            (f"/api/intelligence/similar/{case_id}", None),
             (f"/api/v9/preview/{case_id}", has("values", "completitud")),
         ]
     if email_id is not None:
@@ -202,7 +200,7 @@ def main() -> int:
         ("POST", "/api/extraction/verify-all"), ("POST", "/api/reports/excel"),
         ("POST", "/api/seguimiento/{id}/extract-order"), ("POST", "/api/seguimiento/scan"),
         ("POST", "/api/sync"), ("POST", "/api/sync/cancel"), ("POST", "/api/v9/extract/{caseId}"),
-        ("PUT", "/api/cases/{id}"), ("PUT", "/api/seguimiento/{id}"), ("PATCH", "/api/cases/{id}/pii-mode"),
+        ("PUT", "/api/cases/{id}"), ("PUT", "/api/seguimiento/{id}"),
         ("GET", "/api/extraction/docs/{docId}/suggest-target"), ("GET", "/api/intelligence/predict"),
         ("GET", "/api/documents/{id}/preview"), ("GET", "/api/cleanup/diagnosis.md"),
     ]

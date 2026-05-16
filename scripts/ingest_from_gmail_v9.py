@@ -352,24 +352,38 @@ def _match_by_rad21(db, rad21: str) -> Optional[Case]:
     return db.query(Case).filter(Case.radicado_23_digitos.like(f"{rad21}%")).first()
 
 
-def _match_by_rad_corto(db, rad_corto: str, juzgado_code: Optional[str] = None) -> tuple[Optional[Case], str]:
-    """Busca Case por rad_corto en folder_name. Si hay >1, desambigua por juzgado_code.
+def _match_by_rad_corto(
+    db, rad_corto: str, juzgado_code: Optional[str] = None, accionante: str = "",
+) -> tuple[Optional[Case], str]:
+    """Busca Case por rad_corto en folder_name. Si hay >1 (homónimos year:seq de
+    juzgados distintos), desambigua por juzgado_code o por nombre del accionante. Si
+    NO se puede desambiguar → devuelve (None, ...) en vez de agarrar el primero
+    (conflar dos expedientes distintos es peor que dejar que la cascada cree un shell).
 
-    Returns: (case, method) — method indica si fue exacto, ambiguo o por desambiguación
+    Returns: (case|None, method)
     """
     cases = db.query(Case).filter(Case.folder_name.like(f"{rad_corto} %")).all()
     if not cases:
         return None, "no_match"
     if len(cases) == 1:
         return cases[0], "rad_corto_unique"
-    # Múltiples: desambiguar por juzgado_code
+    # Múltiples → desambiguar. 1º por código de juzgado (díg. 6-12 del rad23).
     if juzgado_code:
-        for c in cases:
-            if c.radicado_23_digitos and len(c.radicado_23_digitos) >= 12:
-                if c.radicado_23_digitos[5:12] == juzgado_code:
-                    return c, "rad_corto+juzgado"
-    # Sin desambiguación, retornar el primero (mejor que orphan)
-    return cases[0], "rad_corto_ambiguous"
+        jz_hits = [c for c in cases if c.radicado_23_digitos and len(c.radicado_23_digitos) >= 12
+                   and c.radicado_23_digitos[5:12] == juzgado_code]
+        if len(jz_hits) == 1:
+            return jz_hits[0], "rad_corto+juzgado"
+    # 2º por similaridad del nombre del accionante (solo entre los homónimos).
+    if accionante and len(accionante) >= 6:
+        import difflib as _dl
+        a = accionante.upper().strip()
+        scored = sorted(cases, key=lambda c: _dl.SequenceMatcher(None, a, (c.accionante or "").upper()).ratio(), reverse=True)
+        r1 = _dl.SequenceMatcher(None, a, (scored[0].accionante or "").upper()).ratio()
+        r2 = _dl.SequenceMatcher(None, a, (scored[1].accionante or "").upper()).ratio() if len(scored) > 1 else 0.0
+        if r1 >= 0.80 and r1 - r2 >= 0.15:
+            return scored[0], "rad_corto+accionante"
+    # No se pudo desambiguar → no adivinar (la cascada seguirá a personería/nombre/shell).
+    return None, "rad_corto_ambiguous_unresolved"
 
 
 def _match_by_cedula(db, cedula: str) -> Optional[Case]:
@@ -487,10 +501,11 @@ def find_case_cascade(
         if case:
             return case, f"cedula({cedula})", False
 
-    # 5. rad_corto en subject/body + (juzgado_code si disponible)
+    # 5. rad_corto en subject/body. Si hay homónimos year:seq se desambigua por nombre
+    #    del accionante; si no se puede, NO se agarra el primero (sigue la cascada).
     rad_corto = _extract_rad_corto_relajado(subject) or _extract_rad_corto_relajado(body[:1500] if body else "")
     if rad_corto:
-        case, method = _match_by_rad_corto(db, rad_corto, juzgado_code=None)
+        case, method = _match_by_rad_corto(db, rad_corto, juzgado_code=None, accionante=accionante_extracted)
         if case:
             return case, f"rad_corto:{method}", False
 

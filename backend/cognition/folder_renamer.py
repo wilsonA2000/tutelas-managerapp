@@ -157,6 +157,12 @@ def clean_accionante(s: str) -> str:
     return re.sub(r"\s+", " ", " ".join(words)).strip()
 
 
+# Marcadores de "carpeta sin identificar" — placeholders de ingesta, no nombres reales.
+_PLACEHOLDER_TAIL_RE = re.compile(
+    r"(?i)^\s*(?:\d{6,7}\s+)?(?:SIN[_ ]ACCIONANTE|REVISAR_ACCIONANTE|PENDIENTE[_ ]|HECHOS\s+PROBADOS)\b"
+)
+
+
 def is_likely_real_name(s: str) -> bool:
     """Heurística: ¿el string parece un nombre/persona/institución real?
 
@@ -166,6 +172,14 @@ def is_likely_real_name(s: str) -> bool:
         return False
 
     s = s.strip()
+    # Placeholders de ingesta ("SIN_ACCIONANTE", "[REVISAR_ACCIONANTE]", …) → NO es un nombre.
+    if _PLACEHOLDER_TAIL_RE.match(s):
+        return False
+    # Personería/Personero municipal: institución accionante legítima (aunque empiece por un
+    # prefijo "institucional" — el actor real es la personería, no una persona natural).
+    if re.match(r"(?i)^personer[íio]+a?\b", s):
+        return True
+
     words = s.split()
     if len(words) < 2 or len(words) > 12:
         return False

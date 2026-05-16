@@ -227,8 +227,10 @@ def _checks_field_extractor() -> list[tuple]:
             _extract_pretensiones_from_text, _clean_abogado_name, _resolve_abogado_combined,
             _ASUNTO_TO_L1, _classify_sentido_fallo,
             _RE_OBS_MEDIDA_PROVISIONAL, _RE_OBS_SEP,
+            _normalize_entity_list, _canon_entity, _looks_like_accionado_value,
         )
         from backend.cognition.legal_schema import clasificar_sed_tematica, categoria_tematica_de_asunto
+        from backend.v9.regex_pass import _extract_ciudad as _regex_ciudad
     except Exception as e:  # noqa: BLE001
         print(f"\n  (checks de field_extractor omitidos: {e})")
         return []
@@ -316,6 +318,22 @@ def _checks_field_extractor() -> list[tuple]:
         "SAN GIL",
         _ciudad_de("JUZGADO PROMISCUO DEL CIRCUITO DE SAN GIL (DERIVADO)"),
     ))
+    # regex_pass._extract_ciudad (fallback): compuestos y atributos del juzgado
+    out.append((
+        "ciudad (regex_pass): compuesto 'SAN VICENTE DE CHUCURÍ' (antes solo 'SAN')",
+        "SAN VICENTE DE CHUCURÍ",
+        _regex_ciudad("JUZGADO 02 PROMISCUO MUNICIPAL DE SAN VICENTE DE CHUCURÍ (SANTANDER)"),
+    ))
+    out.append((
+        "ciudad (regex_pass): 'SABANA DE TORRES' (antes solo 'SABANA')",
+        "SABANA DE TORRES",
+        _regex_ciudad("JUZGADO PRIMERO PROMISCUO MUNICIPAL DE SABANA DE TORRES"),
+    ))
+    out.append((
+        "ciudad (regex_pass): atributo del juzgado no es ciudad ('EJECUCIÓN DE SENTENCIAS DE X' → X)",
+        "BUCARAMANGA",
+        _regex_ciudad("JUZGADO PRIMERO CIVIL MUNICIPAL DE EJECUCIÓN DE SENTENCIAS DE BUCARAMANGA"),
+    ))
     # --- FECHA_INGRESO (campo 10): parser de fechas en español ---
     out.append((
         "fecha: dateline numérico",
@@ -357,6 +375,74 @@ def _checks_field_extractor() -> list[tuple]:
         "asunto: 'incidente de desacato' → INCIDENTE_DESACATO",
         "INCIDENTE_DESACATO",
         _asunto_cat("Se solicita abrir incidente de desacato por incumplimiento del fallo de tutela."),
+    ))
+    out.append((
+        "asunto: 'nombramiento de docente' → NOMBRAMIENTO",
+        "NOMBRAMIENTO",
+        _asunto_cat("Solicito el nombramiento de un docente de matemáticas para la institución educativa."),
+    ))
+    out.append((
+        "asunto: 'traslado del cargo' (lo SOLICITA el actor) → TRASLADO",
+        "TRASLADO",
+        _asunto_cat("Respetuosamente solicito el traslado del cargo a otra institución más cercana a mi domicilio."),
+    ))
+    # Regresión (DeepSeek): el ACTO PROCESAL "auto de traslado" / "traslado de la
+    # demanda" NO es el asunto TRASLADO (aparecía en casi todos los expedientes).
+    out.append((
+        "asunto: 'auto de traslado de la demanda' NO matchea TRASLADO",
+        None,
+        _asunto_cat("Por medio del presente auto se corre traslado de la demanda al accionado por el término de un día."),
+    ))
+    out.append((
+        "asunto: subject 'RESPUESTA AUTO DE TRASLADO' NO matchea TRASLADO",
+        None,
+        _asunto_cat("RESPUESTA AUTO DE TRASLADO - acción de tutela radicado 2026-00099"),
+    ))
+    # Regresión: substring laxo — "provisional" ⊅ NOMBRAMIENTO, "encargado" ⊅ NOMBRAMIENTO.
+    out.append((
+        "asunto: 'medida provisional' sola NO matchea NOMBRAMIENTO",
+        None,
+        _asunto_cat("Se solicita decretar como medida provisional la suspensión del acto administrativo demandado."),
+    ))
+    out.append((
+        "asunto: 'docente encargado' NO matchea NOMBRAMIENTO ('encargado' ≠ 'encargo')",
+        None,
+        _asunto_cat("El docente encargado del aula renunció y los estudiantes llevan dos semanas sin clase."),
+    ))
+    # --- ACCIONADOS (campos 5/6): preservar TODAS las entidades listadas ---
+    # Regresión (DeepSeek, ~191 casos): antes se descartaba todo lo que no fuera GOB/SecEdu.
+    out.append((
+        "accionados: lista mixta preserva todas (GOB/SecEdu canónicas, resto tal cual)",
+        "FONDO DE PENSIONES Y CESANTÍAS PORVENIR S.A - GOBERNACIÓN DE SANTANDER - "
+        "SECRETARÍA DE EDUCACIÓN DEL DEPARTAMENTO DE SANTANDER - FONDO EDUCATIVO DEPARTAMENTAL DE SANTANDER",
+        _normalize_entity_list(
+            "FONDO DE PENSIONES Y CESANTÍAS PORVENIR S.A. - Gobernación de Santander - "
+            "Secretaría de Educación - Fondo Educativo Departamental de Santander"),
+    ))
+    out.append((
+        "accionados: una entidad por línea → todas, separadas por ' - '",
+        "LICEO INFANTIL SEMILLITAS - SECRETARÍA DE EDUCACIÓN DE BARRANCABERMEJA - SIMAT",
+        _normalize_entity_list("Liceo Infantil Semillitas\nSecretaría de Educación de Barrancabermeja\nSIMAT"),
+    ))
+    out.append((
+        "accionados: SecEdu MUNICIPAL no se confunde con la DEPARTAMENTAL",
+        "SECRETARÍA DE EDUCACIÓN MUNICIPAL DE GIRÓN - SECRETARÍA DE EDUCACIÓN DEL DEPARTAMENTO DE SANTANDER",
+        _normalize_entity_list("Secretaría de Educación Municipal de Girón - Secretaría de Educación del Departamento de Santander"),
+    ))
+    out.append((
+        "accionados: 'Departamento de Santander' = Gobernación (misma persona jurídica)",
+        "GOBERNACIÓN DE SANTANDER",
+        _canon_entity("Departamento de Santander"),
+    ))
+    out.append((
+        "accionados: guarda rechaza placeholder '(ninguno)'",
+        False,
+        _looks_like_accionado_value("(ninguno)"),
+    ))
+    out.append((
+        "accionados: guarda acepta 'LICEO INFANTIL SEMILLITAS' (antes se rechazaba)",
+        True,
+        _looks_like_accionado_value("LICEO INFANTIL SEMILLITAS"),
     ))
     # --- PRETENSIONES (campo 12): transcripción de la sección de la demanda ---
     out.append((

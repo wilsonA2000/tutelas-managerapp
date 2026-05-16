@@ -5,6 +5,7 @@ Aplicable a tutelas contra la Secretaría de Educación de Santander.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 # ─── Distritos judiciales de Santander ──────────────────────────────
@@ -544,11 +545,19 @@ def derivar_juzgado_segunda(
 SED_TEMA_MAPPING: list[tuple[list[str], str, str, str | None, str]] = [
     # (keywords, direccion_L1, grupo_L2, equipo_L3, categoria_tematica)
     # ─── Talento Docente / Carrera Docente ───
-    (["traslado", "reubicacion", "permuta"],
+    # OJO: "traslado" pelado matchea el ACTO PROCESAL del juez ("auto de traslado",
+    # "traslado de la demanda"), que aparece en casi todos los expedientes — por eso
+    # se exige que el traslado sea DEL DOCENTE / DEL CARGO o que lo SOLICITE el actor.
+    (["traslado del docente", "traslado de docente", "traslado de la docente",
+      "traslado del cargo", "traslado de cargo", "traslado de plaza", "traslado laboral",
+      "solicita traslado", "solicito traslado", "solicitud de traslado", "pide traslado",
+      "reubicacion", "permuta"],
      "DIRECCION_TALENTO_DOCENTE", "CARRERA_DOCENTE", None, "TRASLADO"),
     (["reintegro laboral", "reintegro al cargo", "reintegrar"],
      "DIRECCION_TALENTO_DOCENTE", "CARRERA_DOCENTE", None, "REINTEGRO"),
-    (["nombramiento", "vacante", "provision", "encargo"],
+    (["nombramiento", "vacante", "provision de cargo", "provision del cargo",
+      "provision de vacante", "provision de la vacante", "encargo del cargo",
+      "encargo en vacante", "nombramiento en provisionalidad"],
      "DIRECCION_TALENTO_DOCENTE", "ADMINISTRACION_PLANTA", None, "NOMBRAMIENTO"),
     (["pension", "jubilacion", "reconocimiento pension"],
      "DIRECCION_TALENTO_DOCENTE", "PRESTACIONES_SOCIALES", None, "PENSION"),
@@ -569,7 +578,8 @@ SED_TEMA_MAPPING: list[tuple[list[str], str, str, str | None, str]] = [
      "DIRECCION_ADMIN_FINANCIERA", "NOMINA", None, "SALARIO"),
     (["fondo servicios educativos", "fse"],
      "DIRECCION_ADMIN_FINANCIERA", "FINANCIERA", "EQUIPO_FONDOS_SERVICIOS", "FSE"),
-    (["tesoreria", "pago", "giro"],
+    (["tesoreria", "pago de recursos", "giro de recursos", "giro de transferencias",
+      "pago a contratista", "orden de pago"],
      "DIRECCION_ADMIN_FINANCIERA", "FINANCIERA", "EQUIPO_TESORERIA", "TESORERIA"),
 
     # ─── Estratégica / Cobertura Educativa ───
@@ -627,7 +637,9 @@ def clasificar_sed_tematica(texto: str | None) -> tuple[str | None, str | None, 
     txt = txt.lower()
     for kws, l1, l2, l3, cat in SED_TEMA_MAPPING:
         for kw in kws:
-            if kw in txt:
+            # Coincidencia por límites de palabra: evita falsos positivos por substring
+            # ("provision" ⊄ "provisional", "encargo" ⊄ "encargado", "pago" ⊄ ...).
+            if re.search(r"\b" + re.escape(kw) + r"\b", txt):
                 return (l1, l2, l3, cat)
     return (None, None, None, None)
 

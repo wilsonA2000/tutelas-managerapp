@@ -297,29 +297,36 @@ def rebuild_from_folders(
         db.close()
 
 
+def _norm_rad_corto(text: str) -> str | None:
+    """Normaliza 'YYYY[-/ ]NNNN[N]' → 'YYYY:SEQ' (sin ceros a la izq.) para comparar."""
+    m = re.match(r"\s*(20\d{2})[-\s/]?0*(\d{1,6})", str(text or ""))
+    return f"{m.group(1)}:{m.group(2)}" if m else None
+
+
 def _match_email_to_case(db, subject: str, body: str):
     """Intentar vincular email a un caso por radicado en subject/body."""
     # Buscar radicado corto (2026-NNNNN) o largo (23 digitos)
     text = f"{subject} {body}"
 
-    # Radicado corto: 2026-00095
-    m = re.search(r"20[2][0-9][-\s]?(\d{3,5})", text)
+    # Radicado corto: 2026-00095. OJO: comparar el radicado COMPLETO normalizado
+    # (no un prefijo) — "2026-0009" como substring conflaba 2026-00091/95/99…
+    m = re.search(r"(20\d{2})[-\s]?0*(\d{2,5})\b", text)
     if m:
-        year_match = re.search(r"(20[2][0-9])", text[:m.end()])
-        if year_match:
-            full = f"{year_match.group(1)}-{m.group(1).zfill(5)}"
-            case = db.query(Case).filter(Case.folder_name.contains(full[:9])).first()
-            if case:
-                return case
+        target = f"{m.group(1)}:{m.group(2).lstrip('0') or '0'}"
+        year = m.group(1)
+        cands = db.query(Case).filter(Case.folder_name.ilike(f"{year}%")).all()
+        hits = [c for c in cands if _norm_rad_corto(c.folder_name) == target]
+        if len(hits) == 1:
+            return hits[0]
+        # 0 ó >1 (homónimos year:seq) → no se puede decidir con solo el rad_corto.
 
-    # FOREST number
+    # FOREST number — comparar el FOREST COMPLETO, no un prefijo de 8.
     forest = re.search(r"EXT\d{2}[-\s]?\d{1,6}", text)
     if forest:
-        case = db.query(Case).filter(
-            Case.radicado_forest.contains(forest.group(0)[:8])
-        ).first()
-        if case:
-            return case
+        fnorm = re.sub(r"[\s-]", "", forest.group(0)).upper()
+        for c in db.query(Case).filter(Case.radicado_forest.isnot(None), Case.radicado_forest != "").all():
+            if re.sub(r"[\s-]", "", (c.radicado_forest or "")).upper() == fnorm:
+                return c
 
     return None
 

@@ -19,9 +19,10 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 @router.post("/excel")
 def api_generate_excel(db: Session = Depends(get_db)):
-    """Generar archivo Excel con todos los datos activos (excluye DUPLICATE_MERGED)."""
+    """Generar archivo Excel con todos los datos activos (excluye DUPLICATE_MERGED y el shell de huérfanos)."""
     cases = db.query(Case).filter(
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+        Case.folder_name != "__SIN_RADICADO__",
         Case.processing_status != "DUPLICATE_MERGED",
     ).all()
     if not cases:
@@ -70,6 +71,7 @@ def api_list_exports():
 def api_metrics(db: Session = Depends(get_db)):
     cases = db.query(Case).filter(
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
+        Case.folder_name != "__SIN_RADICADO__",
         Case.processing_status != "DUPLICATE_MERGED",
     ).all()
     return calculate_metrics(cases)

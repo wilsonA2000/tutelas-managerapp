@@ -2,8 +2,8 @@
  * Red de seguridad — smoke test del frontend (Fase 1 del plan de modernización).
  *
  * Hace login en la SPA, navega cada ruta de App.tsx, captura errores de consola /
- * pageerror, abre el botón flotante "Asistente jurídico" y manda una pregunta de
- * prueba. Reporta OK/FAIL por ruta. Exit 1 si hay algún FAIL.
+ * pageerror, y prueba el endpoint del asistente jurídico (POST /api/chat/) — el
+ * botón flotante se retiró. Reporta OK/FAIL por ruta. Exit 1 si hay algún FAIL.
  *
  * Requiere backend (:8000) y frontend (:5173) levantados, y el navegador de Playwright:
  *     cd frontend && npx playwright install chromium      # una sola vez
@@ -128,23 +128,22 @@ const isIgnored = (msg) => IGNORE_CONSOLE.some((re) => re.test(msg));
     }
   }
 
-  // ── botón flotante "Asistente jurídico" ──
+  // ── endpoint del asistente jurídico (el botón flotante se retiró; el endpoint sigue vivo) ──
   currentRoute = '(asistente)';
   try {
-    await page.goto(`${BASE}/cuadro`, { waitUntil: 'networkidle', timeout: 25000 });
-    const trigger = page.locator('button:has-text("Asistente"), [aria-label*="asistente" i], [title*="asistente" i]').first();
-    await trigger.waitFor({ state: 'visible', timeout: 8000 });
-    await trigger.click();
-    const input = page.locator('textarea, input[type="text"]').last();
-    await input.waitFor({ state: 'visible', timeout: 8000 });
-    await input.fill('¿cuántas tutelas hay?');
-    await input.press('Enter');
-    await page.waitForTimeout(6000);
-    const bodyText = await page.locator('body').innerText();
-    const errored = /no pude procesar|error al|algo salió mal/i.test(bodyText);
-    results.push({ route: '(asistente jurídico)', status: errored ? 'FAIL' : 'OK', detail: errored ? 'la respuesta parece de error' : 'respondió' });
+    const r = await page.evaluate(async () => {
+      const tok = localStorage.getItem('token') || localStorage.getItem('access_token') || '';
+      const res = await fetch('/api/chat/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },
+        body: JSON.stringify({ message: '¿cuántas tutelas hay?' }),
+      });
+      return { ok: res.ok, status: res.status, text: (await res.text()).slice(0, 200) };
+    });
+    const errored = !r.ok || /no pude procesar|error al|algo salió mal/i.test(r.text);
+    results.push({ route: '(asistente — endpoint)', status: errored ? 'FAIL' : 'OK', detail: errored ? `HTTP ${r.status}` : 'respondió' });
   } catch (e) {
-    results.push({ route: '(asistente jurídico)', status: 'FAIL', detail: `${e.message.slice(0, 160)}` });
+    results.push({ route: '(asistente — endpoint)', status: 'FAIL', detail: `${e.message.slice(0, 160)}` });
   }
 
   await browser.close();
@@ -159,5 +158,5 @@ const isIgnored = (msg) => IGNORE_CONSOLE.some((re) => re.test(msg));
   }
   console.log('='.repeat(70));
   if (nFail) { console.log(`❌ ${nFail} ruta(s) con error`); process.exit(1); }
-  console.log(`✅ ${results.length} rutas OK · botón flotante OK`);
+  console.log(`✅ ${results.length} rutas OK · endpoint asistente OK`);
 })().catch((e) => { console.error('smoke_frontend crashed:', e); process.exit(1); });

@@ -99,18 +99,27 @@ def run_forest(db, apply: bool):
                 break
 
 
-def run_accionante(db, apply: bool):
-    """Extrae accionante (+ nota observaciones) para todos los cases."""
+def run_accionante(db, apply: bool, only_empty: bool = False):
+    """Extrae accionante (+ nota observaciones) para todos los cases.
+
+    only_empty=True: solo escribe en cases cuyo `accionante` esté vacío (no pisa los ya
+    extraídos) — modo seguro para rellenar los SIN_ACCIONANTE sin riesgo de regresión.
+    """
     cases = db.query(Case).filter(Case.folder_name != "__SIN_RADICADO__").all()
     total = len(cases)
-    print(f"Procesando {total} cases para ACCIONANTE...")
+    print(f"Procesando {total} cases para ACCIONANTE{' (solo vacíos)' if only_empty else ''}...")
 
     stats = Counter()
     samples_pers, samples_agente, samples_natural, samples_sin = [], [], [], []
+    written = 0
     t0 = time.perf_counter()
     for i, c in enumerate(cases):
         if i % 50 == 0 and i > 0:
             print(f"  {i}/{total} ({i*100//total}%)")
+        was_empty = not (c.accionante or "").strip()
+        if only_empty and not was_empty:
+            stats["con_accionante"] += 1  # ya lo tenía
+            continue
         acc, nota = extract_accionante_for_case(db, c)
         if acc:
             stats["con_accionante"] += 1
@@ -128,6 +137,7 @@ def run_accionante(db, apply: bool):
                     samples_natural.append((c.id, acc))
             if apply and c.accionante != acc:
                 c.accionante = acc
+                written += 1
             if apply and nota:
                 obs = (c.observaciones or "").strip()
                 if nota not in obs:
@@ -147,6 +157,7 @@ def run_accionante(db, apply: bool):
     print(f"    · Agente oficioso:      {stats['agente_oficioso']:>4}")
     print(f"    · Persona natural:      {stats['persona_natural']:>4}")
     print(f"  SIN accionante:        {stats['sin_accionante']:>4} / {total}")
+    print(f"  Escritos a DB:         {written}{' (solo en vacíos)' if only_empty else ''}")
     print(f"  Modo: {'APPLY' if apply else 'DRY-RUN'}")
     print(f"\n  Muestras Personería:")
     for cid, acc, nota in samples_pers:
@@ -727,6 +738,7 @@ def main():
     ap.add_argument("--field", default="forest", choices=["forest", "accionante", "accionados", "derecho", "juzgado", "ciudad", "fecha", "asunto", "pretensiones", "asignacion", "fallo", "impugnacion", "incidentes", "estado", "categoria", "all"])
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--no-llm", action="store_true", help="desactiva el fallback LLM (solo regex) para derecho/asunto/pretensiones")
+    ap.add_argument("--only-empty", action="store_true", help="(solo --field accionante) escribe únicamente en cases con el campo vacío — no pisa los ya extraídos")
     args = ap.parse_args()
 
     db = SessionLocal()
@@ -734,7 +746,7 @@ def main():
         if args.field in ("forest", "all"):
             run_forest(db, apply=args.apply)
         if args.field in ("accionante", "all"):
-            run_accionante(db, apply=args.apply)
+            run_accionante(db, apply=args.apply, only_empty=args.only_empty)
         if args.field in ("accionados", "all"):
             run_accionados(db, apply=args.apply)
         if args.field in ("derecho", "all"):

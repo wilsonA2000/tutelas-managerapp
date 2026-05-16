@@ -463,24 +463,44 @@ def match_to_case(db: Session, radicado_data: dict, accionante: str) -> Case | N
         m = re.match(r"(20\d{2})[-]?0*(\d+)", rad_corto)
         if m:
             year, num = m.group(1), m.group(2)
+            target = f"{year}:{num}"
             cases = db.query(Case).filter(Case.folder_name.ilike(f"{year}%")).all()
-            for c in cases:
-                norm = _normalize_rad_num(c.folder_name)
-                if norm and norm == f"{year}:{num}":
-                    # F7 (v5.0): si ambos tienen rad23, verificar que el codigo de juzgado
-                    # (digitos 6-12 del rad23 canonico) coincida. Evita matchear dos tutelas
-                    # con mismo year:seq pero juzgados distintos (ej. 2026-00057 Bucaramanga
-                    # vs 2026-00057 San Gil → casos distintos).
-                    if rad_23 and c.radicado_23_digitos:
-                        norm_new = re.sub(r"[^0-9]", "", rad_23)
-                        norm_ex = re.sub(r"[^0-9]", "", c.radicado_23_digitos)
-                        if len(norm_new) >= 18 and len(norm_ex) >= 18 and norm_new[5:12] != norm_ex[5:12]:
-                            logger.info(
-                                "F7: match por rad_corto rechazado (juzgado distinto): email=%s vs case=%s",
-                                norm_new[5:12], norm_ex[5:12],
-                            )
-                            continue
-                    return c
+            # Todos los casos con ese mismo "año:secuencia". OJO: puede haber HOMÓNIMOS
+            # (dos tutelas distintas con el mismo rad_corto pero juzgados distintos —
+            # p.ej. "2026-00041" Juzgado 6 Bquilla vs "2026-00041" Juzgado 1 San Gil).
+            matches = [c for c in cases if _normalize_rad_num(c.folder_name) == target]
+
+            def _juzgado_compatible(c: Case) -> bool:
+                # F7 (v5.0): si email y caso tienen rad23, el código de juzgado (díg. 6-12
+                # del rad23 canónico) debe coincidir. Sin rad23 no se puede verificar → no
+                # se descarta por esto (pero tampoco da certeza).
+                if not (rad_23 and c.radicado_23_digitos):
+                    return True
+                a = re.sub(r"[^0-9]", "", rad_23)
+                b = re.sub(r"[^0-9]", "", c.radicado_23_digitos or "")
+                if len(a) < 18 or len(b) < 18:
+                    return True
+                return a[5:12] == b[5:12]
+
+            verified = [c for c in matches if _juzgado_compatible(c)]
+            if len(verified) == 1:
+                return verified[0]
+            if len(verified) > 1:
+                # Homonimia year:seq y no se puede desambiguar por juzgado → NO auto-asignar
+                # (conflar dos expedientes es peor que dejar el email sin caso). El llamador
+                # lo deja PENDIENTE / lo manda a cuarentena.
+                logger.warning(
+                    "match_to_case: rad_corto %s ambiguo (%d casos: %s) — no se auto-asigna",
+                    target, len(verified), [c.id for c in verified],
+                )
+                return None
+            if matches and not verified:
+                # Había caso(s) con ese rad_corto pero el juzgado NO coincide → es otra
+                # tutela. Se deja seguir a personería/accionante (ya sin radicado que valide).
+                logger.info(
+                    "F7: rad_corto %s rechazado en %d caso(s) (juzgado distinto)",
+                    target, len(matches),
+                )
 
     # 3. Personería por municipio
     if accionante:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Red de seguridad anti-regresiones (Fase 1 del plan de modernización).
-# Encadena: tests standalone v9 + smoke del backend + smoke del frontend (Playwright).
+# Encadena: tests standalone v9 + tests sobre la DB de producción + smoke del backend + smoke del frontend (Playwright).
 # Se corre al final de CADA fase. Un FAIL nuevo (no presente en la baseline) = regresión.
 #
 # Requiere: backend en :8000 y frontend en :5173 levantados.
@@ -19,13 +19,16 @@ echo "════════════════════════�
 echo "  RED DE SEGURIDAD — $(date '+%Y-%m-%d %H:%M:%S')"
 echo "════════════════════════════════════════════════════════════════"
 
-echo; echo ">>> [1/3] Tests standalone v9 (sin DB)"
+echo; echo ">>> [1/4] Tests standalone v9 (sin DB)"
 if "$PY" scripts/v9_test_standalone.py; then echo "    OK"; else echo "    FAIL"; fail=1; fi
 
-echo; echo ">>> [2/3] Smoke del backend (endpoints que usa el frontend)"
+echo; echo ">>> [2/4] Tests sobre la DB de producción (cobertura/cotas/consistencia/no-clobber)"
+if V9_DISABLE_LLM=true "$PY" scripts/v9_test_db.py; then echo "    OK"; else echo "    FAIL"; fail=1; fi
+
+echo; echo ">>> [3/4] Smoke del backend (endpoints que usa el frontend)"
 if "$PY" scripts/smoke_backend.py; then echo "    OK"; else echo "    FAIL"; fail=1; fi
 
-echo; echo ">>> [3/3] Smoke del frontend (Playwright — navega las rutas + botón flotante)"
+echo; echo ">>> [4/4] Smoke del frontend (Playwright — navega las rutas + endpoint del asistente)"
 if [ -d "$HOME/.cache/ms-playwright" ] && ls "$HOME"/.cache/ms-playwright/chromium-* >/dev/null 2>&1; then
   if (cd frontend && node ../scripts/smoke_frontend.mjs); then echo "    OK"; else echo "    FAIL"; fail=1; fi
 else

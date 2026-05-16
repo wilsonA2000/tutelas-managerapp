@@ -54,10 +54,26 @@ def normalize_ciudad(ciudad: str) -> str:
     return c
 
 
+# Vocabulario controlado v9 de `decision_incidente` → categoría legible para el dashboard.
+# Match EXACTO (antes de las heurísticas por substring, que confunden p.ej. "NO_SANCIONA" ⊂
+# "SANCIONA", o mandan "NIEGA_APERTURA"/"CIERRA" a "EN TRÁMITE").
+_V9_DECISION_INCIDENTE = {
+    "SANCIONA": "SANCIONADO",
+    "NO_SANCIONA": "NO SANCIONADO",
+    "NIEGA_APERTURA": "NO ADMITIDO",
+    "CIERRA": "ARCHIVADO",
+    "EN_TRAMITE": "EN TRÁMITE",
+}
+
+
 def categorize_decision_incidente(decision: str, observaciones: str = "") -> str:
     """Categorizar decisión de incidente de desacato en categorías estándar.
     Usa primero el campo decision_incidente, y si está vacío busca pistas en observaciones."""
-    # Primero intentar con la decisión directa
+    d0 = (decision or "").strip().upper()
+    if d0 in _V9_DECISION_INCIDENTE:
+        return _V9_DECISION_INCIDENTE[d0]
+
+    # Primero intentar con la decisión directa (texto libre legacy)
     d = (decision or "").upper()
     if d and d != "PENDIENTE":
         if any(w in d for w in ["SANCIONA", "SANCIÓN", "MULTA", "ARRESTO"]):
