@@ -69,12 +69,9 @@ class Settings(BaseSettings):
     UNIFIED_EXTRACTOR_ENABLED: bool = True  # True = usar extractor unificado IR
     KB_ENHANCED_EXTRACTION: bool = True  # True = inyectar contexto KB en prompt IA
 
-    # PII Redaction (v5.3) — anonimización antes de enviar a IA externa
-    PII_REDACTION_ENABLED: bool = True
-    PII_MODE_DEFAULT: str = "selective"  # "selective" | "aggressive"
-    PII_GATE_STRICT: bool = False        # False (default) = solo warn. True = bloquear envío si gate detecta PII residual
-    PII_PRESIDIO_MODEL: str = "es_core_news_md"
-    PII_MASTER_KEY: str = ""             # Fernet key. Si vacía y PII_REDACTION_ENABLED, auto-genera en memoria con warning
+    # (Retirado) PII Redaction (v5.3): la anonimización pre-IA-externa se quitó —
+    # todo el procesamiento es local (Qwen3 en el equipo), el texto no sale del equipo.
+    # Se borró backend/privacy/ y la columna Case.pii_mode del modelo.
 
     # v5.5 Experiment mode — probar ingesta completa desde Gmail en workspace paralelo
     EXPERIMENT_MODE: bool = False         # True = modo experimento (DB fresh, workspace vacío)
@@ -101,8 +98,8 @@ class Settings(BaseSettings):
     LLM_LOCAL_MODEL_ID: str = "qwen3-4b-iuris"     # identificador para token_usage
     LLM_LOCAL_SYSTEM_PROMPT_PATH: str = "docs/iuris/SYSTEM_PROMPT_COMPILER.md"
 
-    # v6.1.1: modo 100% local (sin IA externa, sin PII redaction porque datos no salen)
-    LOCAL_ONLY: bool = False              # True = silencia smart_router + ai_extractor + skip Presidio
+    # v6.1.1: modo 100% local (sin IA externa — datos no salen del equipo)
+    LOCAL_ONLY: bool = False              # True = silencia smart_router + ai_extractor
     USE_AI_EXTRACTION: bool = True        # False = nunca invocar route() para extracción IA
 
     # v6.0.2 Remote extraction (RunPod GPU pod) — delega Capas 0-5 a un worker remoto.

@@ -229,20 +229,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         add_monitor_log(f"Active learning no activado: {e}", level="warning")
 
-    # v5.4.2: precargar Presidio analyzer en background.
-    # Evita el KeyError('spacy') del primer caso en batch — la caché lru_cache
-    # no se construye hasta la primera llamada, y bajo carga concurrente el
-    # modelo spaCy no termina de cargar antes de que llegue la primera redacción.
-    def _warmup_presidio():
-        try:
-            from backend.privacy.detectors import _get_analyzer
-            _get_analyzer()
-            add_monitor_log("Presidio analyzer precargado")
-        except Exception as e:
-            add_monitor_log(f"Presidio warmup fallo: {e}", level="warning")
-
-    warmup_thread = threading.Thread(target=_warmup_presidio, daemon=True, name="presidio-warmup")
-    warmup_thread.start()
+    # (Retirado) La precarga del analizador Presidio se quitó junto con backend/privacy/:
+    # la anonimización PII pre-IA-externa no aplica en modo local-only.
 
     # v5.4.4: construir CaseLookupCache al startup (KB en memoria del monitor Gmail)
     def _build_case_cache():
@@ -1146,13 +1134,6 @@ def _extraction_worker_init():
     try:
         from backend.cognition.ner_spacy import _get_nlp
         _get_nlp()
-    except Exception:
-        pass
-    try:
-        from backend.core.settings import settings as _s
-        if not getattr(_s, "LOCAL_ONLY", False) and getattr(_s, "PII_REDACTION_ENABLED", True):
-            from backend.privacy.detectors import _get_analyzer
-            _get_analyzer()
     except Exception:
         pass
 

@@ -9,8 +9,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.database.models import Base, Case, Email, PiiMapping
-from backend.email.case_lookup_cache import CaseLookupCache, hash_cc
+from backend.database.models import Base, Case, Email
+from backend.email.case_lookup_cache import CaseLookupCache
 from backend.email.matcher import (
     EmailSignals,
     MatchResult,
@@ -68,17 +68,6 @@ def db():
     for c in cases:
         session.add(c)
 
-    # PII mapping para CC lookup
-    cc_hash_juan = hash_cc("1098765432")
-    session.add(PiiMapping(
-        case_id=100,
-        token="[CC_####5432]",
-        kind="CC",
-        value_encrypted=b"fake",
-        value_hash=cc_hash_juan,
-        meta_json="{}",
-    ))
-
     # Email padre para thread test
     session.add(Email(
         id=1,
@@ -124,10 +113,9 @@ class TestCacheBuild:
         # rad_corto único queda bien indexado
         assert cache.lookup_by_rad_corto("2026-00200") == 200
 
-    def test_indexa_cc_hash(self, cache):
-        assert cache.lookup_by_cc("1098765432") == 100
-
-    def test_cc_inexistente(self, cache):
+    def test_cc_lookup_vestigial(self, cache):
+        # La capa PII se retiró → el índice by_cc_hash queda vacío permanentemente.
+        assert cache.lookup_by_cc("1098765432") is None
         assert cache.lookup_by_cc("9999999999") is None
 
 
@@ -158,11 +146,12 @@ class TestScoringUnica:
         assert r.case_id == 100
         assert r.score == 50  # v6.0.1: WEIGHT_FOREST_VERIFIED_SENDER bumped 25→50
 
-    def test_solo_cc(self, db, cache):
+    def test_solo_cc_ya_no_matchea(self, db, cache):
+        # La señal por CC dependía de pii_mappings (capa PII retirada) → ya no produce match.
         s = EmailSignals(cc_accionante="1098765432")
         r = score_case_match(db, cache, s)
-        assert r.case_id == 100
-        assert r.score == 20
+        assert r.case_id is None
+        assert r.score == 0
 
     def test_ningun_match(self, db, cache):
         s = EmailSignals(rad23="68-001-40-09-027-2099-99999-00")

@@ -80,13 +80,6 @@ def _extraction_worker_init():
         _get_nlp()
     except Exception:
         pass
-    try:
-        from backend.core.settings import settings as _s
-        if not getattr(_s, "LOCAL_ONLY", False) and getattr(_s, "PII_REDACTION_ENABLED", True):
-            from backend.privacy.detectors import _get_analyzer
-            _get_analyzer()
-    except Exception:
-        pass
 
 
 def _process_one_case_router(args: tuple) -> tuple:

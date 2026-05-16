@@ -75,13 +75,13 @@ class CaseLookupCache:
 
     def build(self, db: "Session") -> dict:
         """Reconstruye todos los dicts desde la DB. Llamar al startup."""
-        from backend.database.models import Case, PiiMapping  # import lazy
+        from backend.database.models import Case  # import lazy
 
         with self._lock:
             self.by_rad23.clear()
             self.by_rad_corto.clear()
             self.by_forest.clear()
-            self.by_cc_hash.clear()
+            self.by_cc_hash.clear()  # (vestigial) la capa PII se retiró — este dict queda vacío
 
             cases = db.query(Case).filter(
                 Case.processing_status != "DUPLICATE_MERGED"
@@ -89,14 +89,6 @@ class CaseLookupCache:
 
             for c in cases:
                 self._index_case_no_lock(c)
-
-            # CC lookups desde pii_mappings (solo value_hash, no el valor)
-            cc_mappings = db.query(
-                PiiMapping.case_id, PiiMapping.value_hash
-            ).filter(PiiMapping.kind.in_(["CC", "NUIP"])).all()
-            for case_id, value_hash in cc_mappings:
-                if value_hash and case_id:
-                    self.by_cc_hash[value_hash] = case_id
 
             self._built = True
             stats = {
