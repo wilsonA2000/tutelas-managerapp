@@ -12,8 +12,14 @@ export const getCases = (params: Record<string, string | number>) =>
 export const getCase = (id: number) =>
   api.get(`/cases/${id}`).then(r => r.data);
 
+export const createCase = (payload: { radicado_23_digitos: string; accionante: string; juzgado?: string; ciudad?: string }) =>
+  api.post('/cases', payload).then(r => r.data);
+
 export const updateCase = (id: number, fields: Record<string, string>) =>
   api.put(`/cases/${id}`, fields).then(r => r.data);
+
+export const renameCaseFolder = (id: number, folderName: string) =>
+  api.put(`/cases/${id}/folder-name`, { folder_name: folderName }).then(r => r.data);
 
 export const syncSingleCase = (id: number) =>
   api.post(`/cases/${id}/sync`).then(r => r.data);
@@ -23,16 +29,6 @@ export const deleteCase = (id: number) =>
 
 export const deleteDocument = (caseId: number, docId: number) =>
   api.delete(`/cases/${caseId}/docs/${docId}`).then(r => r.data);
-
-// v5.3 PII privacy mode
-export const setPiiMode = (caseId: number, mode: 'selective' | 'aggressive' | null) =>
-  api.patch(`/cases/${caseId}/pii-mode`, { mode }).then(r => r.data);
-
-export const getPiiHints = (caseId: number) =>
-  api.get(`/cases/${caseId}/pii-hints`).then(r => r.data as {
-    case_id: number; current_mode: string | null;
-    hints: string[]; recommend_aggressive: boolean;
-  });
 
 export const getFilterOptions = () =>
   api.get('/cases/filters').then(r => r.data);
@@ -124,6 +120,18 @@ export const getEmailPackage = (id: number) =>
 
 export const getCaseEmailPackages = (caseId: number) =>
   api.get(`/cases/${caseId}/email-packages`).then(r => r.data);
+
+// v9.2: Acumulación procesal de tutelas (Dec 2591/91 art. 13 + Dec 1834/2015)
+export interface CaseAcumulacion {
+  case_id: number;
+  tipo: 'RECTOR' | 'ACUMULADO' | null;
+  fecha: string | null;
+  rector: { id: number; folder_name: string; radicado_23_digitos: string; juzgado?: string; accionante?: string } | null;
+  acumulados: Array<{ id: number; folder_name: string; radicado_23_digitos: string; juzgado?: string; accionante?: string }>;
+  auto_doc: { id: number; filename: string; case_id: number; doc_type: string } | null;
+}
+export const getCaseAcumulacion = (caseId: number): Promise<CaseAcumulacion> =>
+  api.get(`/cases/${caseId}/acumulacion`).then(r => r.data);
 
 export const checkInbox = () =>
   api.post('/emails/check', {}, { timeout: 10000 }).then(r => r.data);
@@ -222,46 +230,6 @@ export const getCalendarEvents = () =>
 
 export const getDeadlineSummary = () =>
   api.get('/intelligence/deadlines').then(r => r.data);
-
-// v9.0 — Similitud semántica BGE-M3
-export interface SimilarNeighbor {
-  rank: number;
-  score: number;
-  source: 'historical' | 'current';
-  case_id: number;
-  tema: string | null;
-  dependencia: string | null;
-  direccion: string | null;
-  tipo: string | null;
-  fallo: string | null;
-  text_preview: string;
-}
-
-export interface SimilarConsensus {
-  target: string;
-  value: string;
-  confidence: number;
-  n_valid: number;
-  n_neighbors: number;
-}
-
-export interface SimilarResponse {
-  case_id: number;
-  k: number;
-  source: string;
-  latency_ms: number;
-  neighbors: SimilarNeighbor[];
-  consensus: SimilarConsensus[];
-  reasoning: string;
-}
-
-export const getSimilarCases = (
-  caseId: number,
-  k = 5,
-  source: 'historical' | 'current' | 'mixed' = 'historical',
-): Promise<SimilarResponse> =>
-  api.get(`/intelligence/similar/${caseId}`, { params: { k, source } })
-    .then(r => r.data);
 
 // Agent
 export const runAgent = (instruction: string) =>

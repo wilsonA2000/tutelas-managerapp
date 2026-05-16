@@ -137,3 +137,27 @@ body {
     @apply font-sans;
   }
 }
+
+/* Barra de scroll horizontal SIEMPRE visible (no overlay) para tablas anchas.
+   Aplicar a un contenedor que envuelva una <table> más ancha que el viewport. */
+.table-scroll {
+  overflow-x: scroll;
+  overflow-y: visible;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted-foreground) var(--muted);
+}
+.table-scroll::-webkit-scrollbar {
+  height: 11px;
+}
+.table-scroll::-webkit-scrollbar-track {
+  background: var(--muted);
+  border-radius: 9999px;
+}
+.table-scroll::-webkit-scrollbar-thumb {
+  background: var(--muted-foreground);
+  border: 2px solid var(--muted);
+  border-radius: 9999px;
+}
+.table-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--foreground);
+}

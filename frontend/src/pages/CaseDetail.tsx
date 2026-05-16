@@ -4,11 +4,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import {
   ArrowLeft, Save, FileText, ExternalLink, Loader2,
-  AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package, Sparkles,
+  AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package, Lock, FolderInput, Search, Pencil, FolderPlus, Link2,
 } from 'lucide-react'
-import { getCase, updateCase, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, setPiiMode, getPiiHints } from '../services/api'
+import { getCase, getCases, updateCase, renameCaseFolder, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, createCase, getCaseAcumulacion } from '../services/api'
 import StatusBadge from '../components/StatusBadge'
-import SimilarCasesPanel from '../components/SimilarCasesPanel'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -224,7 +223,33 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
   const [resolveDocId, setResolveDocId] = useState<number | null>(null)
   const [suggestions, setSuggestions] = useState<Array<{ case_id: number; folder_name: string; confidence: string; reason: string }>>([])
   const [loadingSuggest, setLoadingSuggest] = useState(false)
+  // Buscador de caso destino (mover documento manualmente a cualquier expediente)
+  const [moveSearch, setMoveSearch] = useState('')
+  const [moveResults, setMoveResults] = useState<Array<{ id: number; folder_name: string; ACCIONANTE?: string; RADICADO_23_DIGITOS?: string }>>([])
+  const [moveLoading, setMoveLoading] = useState(false)
+  // Mini-form "Crear expediente" dentro del mismo modal — para cuando el buscador no
+  // encuentra el caso destino (ej: tutela homónima por rad_corto que aún no estaba creada).
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [createRad23, setCreateRad23] = useState('')
+  const [createAccionante, setCreateAccionante] = useState('')
+  const [createJuzgado, setCreateJuzgado] = useState('')
+  const [createCiudad, setCreateCiudad] = useState('')
+  const [createBusy, setCreateBusy] = useState(false)
   const qc = useQueryClient()
+
+  useEffect(() => {
+    const q = moveSearch.trim()
+    if (resolveDocId == null || q.length < 2) { setMoveResults([]); return }
+    setMoveLoading(true)
+    const t = setTimeout(async () => {
+      try {
+        const data = await getCases({ search: q, per_page: 10 })
+        setMoveResults((data?.items ?? []).filter((c: { folder_name?: string }) => c.folder_name !== '__SIN_RADICADO__'))
+      } catch { setMoveResults([]) }
+      setMoveLoading(false)
+    }, 280)
+    return () => clearTimeout(t)
+  }, [moveSearch, resolveDocId])
 
   if (!docs?.length) {
     return <div className="text-center py-12 text-muted-foreground text-sm">No hay documentos en este caso</div>
@@ -258,19 +283,71 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
   const noPerteneceDocs = docs.filter(d => d.verificacion === 'NO_PERTENECE')
   const sospechosoDocs = docs.filter(d => d.verificacion === 'SOSPECHOSO')
 
+  function resetCreateForm() {
+    setShowCreateForm(false); setCreateRad23(''); setCreateAccionante(''); setCreateJuzgado(''); setCreateCiudad(''); setCreateBusy(false)
+  }
+  function closeResolve() { setResolveDocId(null); setSuggestions([]); setMoveSearch(''); setMoveResults([]); resetCreateForm() }
+
+  // Abre el panel en modo "buscar caso destino" (cualquier documento, sin auto-sugerencias)
+  function openMover(docId: number) {
+    setResolveDocId(docId); setSuggestions([]); setMoveSearch(''); setMoveResults([]); resetCreateForm()
+  }
+
+  async function handleCreateAndMove() {
+    if (resolveDocId == null) return
+    const radInput = createRad23.trim()
+    const accionante = createAccionante.trim()
+    // Acepta 23 dígitos completos o el corto YYYY-NNNNN (los juzgados muchas veces no entregan el de 23).
+    // El sufijo -NN opcional al final es típico de los oficios (ej. 2026-00028-00).
+    const digits = radInput.replace(/\D/g, '')
+    const isShort = /^\s*20\d{2}[\s\-/_]*\d{1,5}(?:[\s\-/_]+\d{1,3})?\s*$/.test(radInput)
+    if (digits.length < 21 && !isShort) {
+      toast.error('Radicado inválido. Use los 23 dígitos completos o el corto AAAA-NNNNN (ej. 2026-00028 o 2026-00028-00).')
+      return
+    }
+    if (!accionante) { toast.error('Falta el nombre del accionante'); return }
+    setCreateBusy(true)
+    try {
+      const newCase = await createCase({
+        radicado_23_digitos: radInput,
+        accionante,
+        juzgado: createJuzgado.trim() || undefined,
+        ciudad: createCiudad.trim() || undefined,
+      })
+      toast.success(`Expediente «${newCase.folder_name}» creado`)
+      // Mover el doc actual al expediente recién creado
+      const moveRes = await moveDocument(resolveDocId, newCase.id)
+      toast.success(moveRes?.message || 'Documento movido al nuevo expediente')
+      closeResolve()
+      qc.invalidateQueries({ queryKey: ['case'] })
+      qc.invalidateQueries({ queryKey: ['cases'] })
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      toast.error(msg || 'No se pudo crear el expediente')
+      setCreateBusy(false)
+    }
+  }
+
+  // Abre el panel para un doc NO_PERTENECE: además precarga las sugerencias automáticas
   async function handleResolve(docId: number) {
-    setResolveDocId(docId); setLoadingSuggest(true); setSuggestions([])
+    setResolveDocId(docId); setMoveSearch(''); setMoveResults([]); setLoadingSuggest(true); setSuggestions([])
     try { const data = await suggestDocTarget(docId); setSuggestions(data.suggestions || []) } catch { toast.error('Error buscando sugerencias') }
     setLoadingSuggest(false)
   }
 
-  async function handleMove(docId: number, targetCaseId: number) {
-    if (!confirm('Mover este documento al caso seleccionado?')) return
-    try { await moveDocument(docId, targetCaseId); toast.success('Documento movido exitosamente'); setResolveDocId(null); qc.invalidateQueries({ queryKey: ['case'] }) } catch { toast.error('Error moviendo documento') }
+  async function handleMove(docId: number, targetCaseId: number, targetName: string) {
+    if (!confirm(`Mover este documento a "${targetName}"?\n\nSi el documento vino por correo, se moverán también todos los adjuntos de ese mismo correo (hermanos viajan juntos).`)) return
+    try {
+      const data = await moveDocument(docId, targetCaseId)
+      toast.success(data?.message || 'Documento movido')
+      closeResolve()
+      qc.invalidateQueries({ queryKey: ['case'] })
+      qc.invalidateQueries({ queryKey: ['cases'] })
+    } catch { toast.error('Error moviendo documento') }
   }
 
   async function handleMarkOk(docId: number) {
-    try { await markDocOk(docId); toast.success('Documento marcado como OK'); setResolveDocId(null); qc.invalidateQueries({ queryKey: ['case'] }) } catch { toast.error('Error marcando documento') }
+    try { await markDocOk(docId); toast.success('Documento marcado como OK'); closeResolve(); qc.invalidateQueries({ queryKey: ['case'] }) } catch { toast.error('Error marcando documento') }
   }
 
   const previewDoc = docs.find(d => d.id === previewDocId)
@@ -294,49 +371,161 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
         </div>
       )}
 
-      {resolveDocId && (
-        <Card className="mx-4 mt-3 border-destructive">
+      {resolveDocId != null && (() => {
+        const rdoc = docs.find(d => d.id === resolveDocId)
+        const isMisfiled = rdoc?.verificacion === 'NO_PERTENECE' || rdoc?.verificacion === 'SOSPECHOSO'
+        return (
+        <Card className={cn('mx-4 mt-3', isMisfiled && 'border-destructive')}>
           <CardContent className="pt-4 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium">Resolver documento</span>
-              <button onClick={() => setResolveDocId(null)} className="text-xs text-muted-foreground hover:text-foreground">Cerrar</button>
+              <span className="text-sm font-medium flex items-center gap-1.5"><FolderInput size={14} /> Mover documento a otro expediente</span>
+              <button onClick={closeResolve} className="text-xs text-muted-foreground hover:text-foreground">Cerrar</button>
             </div>
-            <p className="text-xs text-muted-foreground truncate">{docs.find(d => d.id === resolveDocId)?.filename}</p>
-            {loadingSuggest ? (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-                <Loader2 size={14} className="animate-spin" /> Buscando caso destino...
+            <p className="text-xs text-muted-foreground truncate" title={rdoc?.filename}>{rdoc?.filename}</p>
+
+            {/* Buscador de caso destino — escribe radicado, accionante o nombre de carpeta */}
+            <div>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={13} />
+                <Input
+                  autoFocus
+                  placeholder="Buscar expediente por radicado, accionante o carpeta…"
+                  value={moveSearch}
+                  onChange={(e) => setMoveSearch(e.target.value)}
+                  className="pl-8 h-8 text-sm"
+                />
               </div>
-            ) : suggestions.length > 0 ? (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground font-medium">Sugerencias:</p>
-                {suggestions.map(s => (
+              {moveSearch.trim().length >= 2 && (
+                <div className="mt-1.5 max-h-56 overflow-y-auto rounded-lg border border-border divide-y divide-border">
+                  {moveLoading ? (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground p-2"><Loader2 size={13} className="animate-spin" /> Buscando…</div>
+                  ) : moveResults.length === 0 ? (
+                    <div className="text-xs text-muted-foreground p-2">Sin coincidencias</div>
+                  ) : moveResults.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => handleMove(resolveDocId, c.id, c.folder_name)}
+                      className="w-full text-left flex items-center justify-between gap-2 p-2 hover:bg-primary/5 transition-colors"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-foreground truncate">{c.folder_name}</p>
+                        <p className="text-[10px] text-muted-foreground truncate">
+                          {c.ACCIONANTE || '(sin accionante)'}{c.RADICADO_23_DIGITOS ? ` · ${c.RADICADO_23_DIGITOS}` : ''}
+                        </p>
+                      </div>
+                      <FolderInput size={13} className="text-primary shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="text-[10px] text-muted-foreground mt-1">Si el documento llegó por correo, se moverán también los demás adjuntos de ese mismo correo (hermanos viajan juntos).</p>
+
+              {/* Crear expediente nuevo (para tutelas homónimas por rad_corto aún no registradas) */}
+              {!showCreateForm ? (
+                <button
+                  onClick={() => setShowCreateForm(true)}
+                  className="mt-2 flex items-center gap-1.5 text-xs text-primary hover:underline"
+                  title="Crear un expediente nuevo y mover este documento allí"
+                >
+                  <FolderPlus size={13} /> ¿No encuentras el expediente? Crear nuevo y mover aquí
+                </button>
+              ) : (
+                <div className="mt-2 p-2.5 rounded-lg border border-primary/30 bg-primary/5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium flex items-center gap-1.5"><FolderPlus size={13} /> Crear expediente nuevo</span>
+                    <button onClick={resetCreateForm} className="text-[10px] text-muted-foreground hover:text-foreground">Cancelar</button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    <div>
+                      <Input
+                        placeholder="Radicado: 23 dígitos o corto 2026-00028"
+                        value={createRad23}
+                        onChange={(e) => setCreateRad23(e.target.value)}
+                        className="h-8 text-xs font-mono"
+                        maxLength={25}
+                      />
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        Si el juzgado no proporcionó los 23 dígitos, usa el corto (ej. <span className="font-mono">2026-00028</span>) — el expediente quedará en <span className="font-medium">REVISIÓN</span> hasta que se complete.
+                      </p>
+                    </div>
+                    <Input
+                      placeholder="Accionante (nombre completo)"
+                      value={createAccionante}
+                      onChange={(e) => setCreateAccionante(e.target.value)}
+                      className="h-8 text-xs"
+                    />
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <Input
+                        placeholder="Juzgado (opcional)"
+                        value={createJuzgado}
+                        onChange={(e) => setCreateJuzgado(e.target.value)}
+                        className="h-8 text-xs"
+                      />
+                      <Input
+                        placeholder="Ciudad (opcional)"
+                        value={createCiudad}
+                        onChange={(e) => setCreateCiudad(e.target.value)}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <Button size="xs" onClick={handleCreateAndMove} disabled={createBusy} className="w-full">
+                    {createBusy ? (<><Loader2 size={12} className="animate-spin mr-1.5" /> Creando y moviendo…</>) : 'Crear expediente y mover documento'}
+                  </Button>
+                  <p className="text-[10px] text-muted-foreground">Se crea la carpeta en disco y se trasladan el documento + sus hermanos del mismo correo.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Sugerencias automáticas (cuando se abrió desde "Resolver" en un doc NO_PERTENECE) */}
+            {(loadingSuggest || suggestions.length > 0) && (
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground font-medium">Sugerencias automáticas:</p>
+                {loadingSuggest ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-1"><Loader2 size={13} className="animate-spin" /> Buscando…</div>
+                ) : suggestions.map(s => (
                   <div key={s.case_id} className="flex items-center justify-between bg-muted p-2 rounded-lg text-xs">
                     <div className="min-w-0">
                       <p className="font-medium text-foreground truncate">{s.folder_name}</p>
                       <p className="text-muted-foreground">{s.reason}</p>
                       <StatusBadge type="status" value={s.confidence === 'ALTA' ? 'ok' : s.confidence === 'MEDIA' ? 'warning' : 'unknown'} className="mt-1" />
                     </div>
-                    <Button size="xs" onClick={() => handleMove(resolveDocId, s.case_id)} className="ml-2">Mover</Button>
+                    <Button size="xs" onClick={() => handleMove(resolveDocId, s.case_id, s.folder_name)} className="ml-2">Mover</Button>
                   </div>
                 ))}
               </div>
-            ) : (
-              <p className="text-xs text-muted-foreground py-2">No se encontraron sugerencias de destino</p>
             )}
-            <Separator />
-            <Button variant="outline" size="xs" onClick={() => handleMarkOk(resolveDocId)} className="text-emerald-700 border-emerald-200 hover:bg-emerald-50">
-              Pertenece aqui (marcar OK)
-            </Button>
+
+            {isMisfiled && (
+              <>
+                <Separator />
+                <Button variant="outline" size="xs" onClick={() => handleMarkOk(resolveDocId)} className="text-emerald-700 border-emerald-200 hover:bg-emerald-50">
+                  No, sí pertenece a este caso (marcar OK)
+                </Button>
+              </>
+            )}
           </CardContent>
         </Card>
-      )}
+        )
+      })()}
 
       {previewDoc && canPreview(previewDoc.filename) && (
         <div className="border-b border-border">
-          <div className="flex items-center justify-between px-4 py-2 bg-muted">
-            <span className="text-xs font-medium text-foreground truncate">{previewDoc.filename}</span>
-            <div className="flex gap-2">
-              <a href={getDocumentPreviewUrl(previewDoc.id)} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">Abrir en pestana</a>
+          <div className="flex items-center justify-between gap-2 px-4 py-1.5 bg-muted">
+            <span className="text-xs font-medium text-foreground truncate" title={previewDoc.filename}>{previewDoc.filename}</span>
+            <div className="flex items-center gap-3 shrink-0">
+              {previewDoc.verificacion === 'SOSPECHOSO' && (
+                <Button variant="outline" size="xs" onClick={() => handleMarkOk(previewDoc.id)} className="text-emerald-700 border-emerald-200 hover:bg-emerald-50" title="Marcar como correcto: quita el estado 'sospechoso'">
+                  No es sospechoso
+                </Button>
+              )}
+              <button onClick={() => openMover(previewDoc.id)} className="flex items-center gap-1 text-xs text-primary hover:underline" title="Trasladar este documento a otro expediente">
+                <FolderInput size={13} /> Trasladar
+              </button>
+              <button onClick={() => onDeleteDoc?.(previewDoc.id)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors" title="Eliminar este documento">
+                <Trash2 size={13} /> Eliminar
+              </button>
+              <a href={getDocumentPreviewUrl(previewDoc.id)} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline">Abrir en pestaña</a>
               <button onClick={() => setPreviewDocId(null)} className="text-xs text-muted-foreground hover:text-foreground">Cerrar</button>
             </div>
           </div>
@@ -365,24 +554,37 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
                 </Badge>
                 {doc.verificacion === 'NO_PERTENECE' && <Badge variant="destructive" className="text-[10px]">NO PERTENECE</Badge>}
                 {doc.verificacion === 'SOSPECHOSO' && <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-200 bg-amber-50">Sospechoso</Badge>}
-                {doc.verificacion === 'OK' && <span className="text-xs text-emerald-600">\u2713</span>}
+                {doc.verificacion === 'OK' && <span className="text-xs text-emerald-600" title="Verificado">{'\u2713'}</span>}
               </div>
             </div>
             <div className="flex flex-col items-end gap-1 flex-shrink-0 mt-1">
               {doc.verificacion === 'NO_PERTENECE' ? (
                 <Button variant="destructive" size="xs" onClick={(e) => { e.stopPropagation(); handleResolve(doc.id) }}>Resolver</Button>
+              ) : doc.verificacion === 'SOSPECHOSO' ? (
+                <Button variant="outline" size="xs" onClick={(e) => { e.stopPropagation(); handleMarkOk(doc.id) }} className="text-emerald-700 border-emerald-200 hover:bg-emerald-50" title="Marcar como correcto: quita el estado 'sospechoso'">
+                  No es sospechoso
+                </Button>
               ) : canPreview(doc.filename) ? (
                 <span className="text-xs text-muted-foreground">Vista previa</span>
               ) : (
                 <ExternalLink size={14} className="text-muted-foreground group-hover:text-primary transition-colors" />
               )}
-              <button
-                onClick={(e) => { e.stopPropagation(); onDeleteDoc?.(doc.id) }}
-                className="text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
-                title="Eliminar documento"
-              >
-                <Trash2 size={12} />
-              </button>
+              <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={(e) => { e.stopPropagation(); openMover(doc.id) }}
+                  className="text-muted-foreground hover:text-primary transition-colors"
+                  title="Mover este documento a otro expediente"
+                >
+                  <FolderInput size={12} />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDeleteDoc?.(doc.id) }}
+                  className="text-muted-foreground hover:text-destructive transition-colors"
+                  title="Eliminar documento"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
             </div>
           </div>
         ))}
@@ -449,7 +651,7 @@ function ResizablePanels({ caseData, fields, handleChange, onDeleteDoc }: {
 function RightPanelWithTabs({ caseId, docs, onDeleteDoc }: {
   caseId: number; docs: Array<{ id: number; filename: string; doc_type: string; verificacion?: string; verificacion_detalle?: string }>; onDeleteDoc: (docId: number) => void
 }) {
-  const [tab, setTab] = useState<'docs' | 'emails' | 'similar'>('docs')
+  const [tab, setTab] = useState<'docs' | 'emails'>('docs')
   const packagesQ = useQuery({ queryKey: ['case-email-packages', caseId], queryFn: () => getCaseEmailPackages(caseId), enabled: tab === 'emails' })
 
   const TabButton = ({ id, icon, label, badge }: { id: typeof tab; icon: React.ReactNode; label: string; badge?: React.ReactNode }) => (
@@ -476,13 +678,11 @@ function RightPanelWithTabs({ caseId, docs, onDeleteDoc }: {
               <Badge variant="secondary" className="text-[10px] px-1.5">{packagesQ.data.packages_count}</Badge>
             ) : undefined
           } />
-          <TabButton id="similar" icon={<Sparkles size={14} />} label="Casos parecidos" />
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
         {tab === 'docs' && <DocumentPanel docs={docs} onDeleteDoc={onDeleteDoc} />}
         {tab === 'emails' && <EmailPackagesTimeline query={packagesQ} />}
-        {tab === 'similar' && <SimilarCasesPanel caseId={caseId} />}
       </div>
     </>
   )
@@ -521,7 +721,7 @@ function EmailPackagesTimeline({ query }: { query: any }) {
             </div>
             <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
               <span className="truncate max-w-[160px]">{pkg.sender}</span>
-              {pkg.date_received && <span>\u00B7 {new Date(pkg.date_received).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' })}</span>}
+              {pkg.date_received && <span>{'\u00B7'} {new Date(pkg.date_received).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: '2-digit' })}</span>}
             </div>
           </div>
           <CardContent className="p-2 space-y-0.5">
@@ -548,6 +748,12 @@ export default function CaseDetail() {
   const caseId = parseInt(id ?? '0', 10)
 
   const caseQ = useQuery({ queryKey: ['case', caseId], queryFn: () => getCase(caseId), enabled: !!caseId })
+  const acumQ = useQuery({
+    queryKey: ['case-acumulacion', caseId],
+    queryFn: () => getCaseAcumulacion(caseId),
+    enabled: !!caseId,
+    staleTime: 60_000,
+  })
 
   const [fields, setFields] = useState<Record<string, string>>({})
   const [dirty, setDirty] = useState(false)
@@ -586,6 +792,23 @@ export default function CaseDetail() {
     onError: (e) => { if ((e as Error).message !== 'Cancelado') toast.error('Error al eliminar') },
   })
 
+  const renameMutation = useMutation({
+    mutationFn: () => {
+      const current = caseQ.data?.folder_name ?? ''
+      const v = window.prompt('Nuevo nombre de la carpeta del expediente:', current)
+      if (v === null) throw new Error('Cancelado')
+      const name = v.trim()
+      if (!name || name === current) throw new Error('Cancelado')
+      return renameCaseFolder(caseId, name)
+    },
+    onSuccess: () => { toast.success('Carpeta renombrada'); qc.invalidateQueries({ queryKey: ['case', caseId] }); qc.invalidateQueries({ queryKey: ['cases'] }) },
+    onError: (e) => {
+      if ((e as Error).message === 'Cancelado') return
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      toast.error(detail || 'No se pudo renombrar la carpeta')
+    },
+  })
+
   const deleteDocMut = useMutation({
     mutationFn: (docId: number) => {
       if (!window.confirm('Eliminar este documento del caso y del disco?')) throw new Error('Cancelado')
@@ -595,32 +818,14 @@ export default function CaseDetail() {
     onError: (e) => { if ((e as Error).message !== 'Cancelado') toast.error('Error al eliminar documento') },
   })
 
-  const piiHintsQ = useQuery({
-    queryKey: ['pii-hints', caseId],
-    queryFn: () => getPiiHints(caseId),
-    enabled: !!caseId,
-    staleTime: 60_000,
-  })
-
-  const piiMut = useMutation({
-    mutationFn: (mode: 'selective' | 'aggressive' | null) => setPiiMode(caseId, mode),
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ['case', caseId] })
-      qc.invalidateQueries({ queryKey: ['pii-hints', caseId] })
-      toast.success(`Modo PII: ${data.pii_mode ?? 'default'}${data.requires_reextract ? ' — re-extrae el caso' : ''}`)
-    },
-    onError: () => toast.error('Error al cambiar modo PII'),
-  })
-
-  function toggleAggressive() {
-    const current = (caseQ.data as any)?.pii_mode
-    if (current === 'aggressive') {
-      piiMut.mutate(null)
-      return
-    }
-    if (!window.confirm('Activar anonimización AGGRESSIVE?\n\nTokeniza también nombres, diagnósticos y radicados. Reduce calidad de campos narrativos (~5-15%) pero maximiza privacidad. Útil para casos con menores con discapacidad, violencia de género o salud mental.\n\nRequiere re-extraer el caso.')) return
-    piiMut.mutate('aggressive')
-  }
+  // Sujetos de especial protección detectados por v9 (sembrado en `observaciones`) —
+  // indicador pasivo para el operador: el expediente trae datos sensibles, manejar con reserva.
+  const _obsText = String((caseQ.data as any)?.OBSERVACIONES ?? '')
+  const sensitiveCategories: string[] = (() => {
+    const m = _obsText.match(/Sujeto de especial protecci[oó]n:\s*([^\n]+)/i)
+    return m ? m[1].split(',').map((s) => s.trim()).filter(Boolean) : []
+  })()
+  const hasMedidaProvisional = /Se solicit[oó] medida provisional/i.test(_obsText)
 
   function handleChange(key: string, val: string) { setFields((prev) => ({ ...prev, [key]: val })); setDirty(true) }
 
@@ -653,7 +858,19 @@ export default function CaseDetail() {
             <ArrowLeft size={16} />
           </Button>
           <div>
-            <h1 className="text-sm font-semibold text-foreground leading-tight">{caseData.folder_name}</h1>
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-sm font-semibold text-foreground leading-tight">{caseData.folder_name}</h1>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="h-5 w-5 text-muted-foreground hover:text-foreground"
+                title="Renombrar carpeta del expediente"
+                onClick={() => renameMutation.mutate()}
+                disabled={renameMutation.isPending}
+              >
+                {renameMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <Pencil size={11} />}
+              </Button>
+            </div>
             <p className="text-xs text-muted-foreground mt-0.5">
               Expediente #{caseId} · {caseData.documents?.length ?? 0} documento{(caseData.documents?.length ?? 0) === 1 ? '' : 's'}
             </p>
@@ -661,29 +878,18 @@ export default function CaseDetail() {
         </div>
 
         <div className="flex items-center gap-2">
-          {(caseData as any).pii_mode === 'aggressive' && (
-            <Badge variant="outline" className="text-violet-700 border-violet-200 bg-violet-50" title="Anonimización agresiva: nombres y diagnósticos tokenizados">
-              🔒 PII Aggressive
+          {sensitiveCategories.length > 0 && (
+            <Badge variant="outline" className="text-rose-700 border-rose-200 bg-rose-50 gap-1" title={`Datos sensibles — manejar con reserva (iniciales, no compartir nombres externamente). Detectado: ${sensitiveCategories.join(', ')}`}>
+              <Lock size={11} />
+              {sensitiveCategories.includes('menor de edad') ? 'Menor de edad' : 'Datos sensibles'}
+              {sensitiveCategories.length > 1 ? ` +${sensitiveCategories.length - 1}` : ''}
             </Badge>
           )}
-          <Button
-            variant={(caseData as any).pii_mode === 'aggressive' ? 'default' : 'ghost'}
-            size="sm"
-            onClick={toggleAggressive}
-            disabled={piiMut.isPending}
-            title={
-              (caseData as any).pii_mode === 'aggressive'
-                ? 'Desactivar anonimización agresiva'
-                : (piiHintsQ.data?.recommend_aggressive
-                    ? `Sugerencia: ${piiHintsQ.data.hints.join(', ')}`
-                    : 'Activar anonimización agresiva')
-            }
-            className={piiHintsQ.data?.recommend_aggressive && (caseData as any).pii_mode !== 'aggressive'
-              ? 'ring-2 ring-amber-400 animate-pulse'
-              : ''}
-          >
-            🔒 {(caseData as any).pii_mode === 'aggressive' ? 'Aggressive' : 'Selective'}
-          </Button>
+          {hasMedidaProvisional && (
+            <Badge variant="outline" className="text-amber-700 border-amber-200 bg-amber-50" title="El escrito de tutela solicitó medida provisional / cautelar">
+              Medida provisional
+            </Badge>
+          )}
           {dirty && <Badge variant="outline" className="text-amber-700 border-amber-200 bg-amber-50">Cambios sin guardar</Badge>}
           <Button variant="ghost" size="icon-sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} title="Sincronizar carpeta">
             <RefreshCw size={14} className={syncMutation.isPending || caseQ.isFetching ? 'animate-spin' : ''} />
@@ -698,7 +904,72 @@ export default function CaseDetail() {
         </div>
       </div>
 
+      {acumQ.data && acumQ.data.tipo && (
+        <AcumulacionBanner data={acumQ.data} onNavigate={(id) => navigate(`/cases/${id}`)} />
+      )}
+
       <ResizablePanels caseData={caseData} fields={fields} handleChange={handleChange} onDeleteDoc={(docId) => deleteDocMut.mutate(docId)} />
+    </div>
+  )
+}
+
+function AcumulacionBanner({ data, onNavigate }: { data: import('../services/api').CaseAcumulacion; onNavigate: (id: number) => void }) {
+  if (!data.tipo) return null
+  const isRector = data.tipo === 'RECTOR'
+  const accent = isRector ? 'bg-indigo-50 border-indigo-200 text-indigo-900' : 'bg-amber-50 border-amber-200 text-amber-900'
+  const radCorto = (rad?: string) => (rad && rad.length >= 21 ? `${rad.slice(12, 16)}-${rad.slice(16, 21)}` : rad ?? '')
+  return (
+    <div className={`flex-shrink-0 flex items-start gap-2.5 px-6 py-2.5 border-b ${accent}`}>
+      <Link2 size={14} className="mt-0.5 flex-shrink-0" />
+      <div className="text-xs leading-relaxed flex-1">
+        {isRector ? (
+          <>
+            <span className="font-semibold">Expediente rector de acumulación.</span>{' '}
+            {data.acumulados.length > 0 ? (
+              <>
+                Acumula a este despacho{' '}
+                {data.acumulados.map((c, i) => (
+                  <span key={c.id}>
+                    {i > 0 && (i === data.acumulados.length - 1 ? ' y ' : ', ')}
+                    <button
+                      type="button"
+                      className="font-medium underline decoration-dotted hover:decoration-solid"
+                      onClick={() => onNavigate(c.id)}
+                      title={c.folder_name}
+                    >
+                      #{c.id} ({radCorto(c.radicado_23_digitos)})
+                    </button>
+                  </span>
+                ))}.
+              </>
+            ) : (
+              <span>(sin acumulados registrados)</span>
+            )}
+            {data.fecha && <span className="ml-1 text-indigo-700/70">Auto del {data.fecha}.</span>}
+          </>
+        ) : (
+          <>
+            <span className="font-semibold">Expediente acumulado.</span>{' '}
+            {data.rector ? (
+              <>
+                Fue acumulado al expediente{' '}
+                <button
+                  type="button"
+                  className="font-medium underline decoration-dotted hover:decoration-solid"
+                  onClick={() => data.rector && onNavigate(data.rector.id)}
+                  title={data.rector.folder_name}
+                >
+                  #{data.rector.id} ({radCorto(data.rector.radicado_23_digitos)})
+                </button>
+                {data.fecha && <span className="text-amber-700/70"> por auto del {data.fecha}</span>}.
+                <span className="block text-amber-700/70 mt-0.5">Las pretensiones y la sentencia se resuelven conjuntamente en el rector.</span>
+              </>
+            ) : (
+              <span>(rector no identificado)</span>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }

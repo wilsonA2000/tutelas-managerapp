@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { Search, Filter, ChevronLeft, ChevronRight, AlertCircle, Loader2, RefreshCw, Scale } from 'lucide-react'
+import { Search, Filter, ChevronLeft, ChevronRight, AlertCircle, Loader2, RefreshCw, Scale, Lock, Link2 } from 'lucide-react'
 import { getCases, getFilterOptions, syncFolders, getSyncStatus } from '../services/api'
 import PageHeader from '../components/PageHeader'
 import PageShell from '../components/PageShell'
@@ -15,6 +15,16 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 
+const REVISION_FLAG_LABEL: Record<string, string> = {
+  sin_accionante: 'sin accionante',
+  sin_radicado: 'sin radicado',
+  pocos_docs: '≤1 doc',
+  docs_sospechosos: 'docs sosp.',
+  sin_fallo: 'sin fallo',
+  baja_completitud: 'baja compl.',
+  necesita_revision: 'revisar',
+}
+
 export default function CasesList() {
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -22,6 +32,7 @@ export default function CasesList() {
   const [estado, setEstado] = useState('')
   const [fallo, setFallo] = useState('')
   const [ciudad, setCiudad] = useState('')
+  const [revision, setRevision] = useState('')
   const [page, setPage] = useState(1)
   const pageSize = 20
 
@@ -52,7 +63,7 @@ export default function CasesList() {
     }
   }, [isSyncing, syncStep, qc])
 
-  const params = { search, estado, fallo, ciudad, page, page_size: pageSize }
+  const params = { search, estado, fallo, ciudad, revision, page, per_page: pageSize }
 
   const casesQ = useQuery({
     queryKey: ['cases', params],
@@ -75,6 +86,7 @@ export default function CasesList() {
     if (key === 'estado') setEstado(value)
     if (key === 'fallo') setFallo(value)
     if (key === 'ciudad') setCiudad(value)
+    if (key === 'revision') setRevision(value)
     setPage(1)
   }
 
@@ -109,6 +121,15 @@ export default function CasesList() {
               <Filter size={13} />
               <span className="text-xs font-medium">Filtros:</span>
             </div>
+            <select value={revision} onChange={(e) => handleFilter('revision', e.target.value)} className="text-sm border border-input rounded-lg px-2.5 py-1.5 bg-background focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 text-foreground" title="Surface los casos que necesitan revisión manual antes de extraer">
+              <option value="">Todos (revisión)</option>
+              <option value="necesita_revision">🔴 Necesita revisión (peor primero)</option>
+              <option value="sin_accionante">Sin accionante</option>
+              <option value="sin_radicado">Sin radicado</option>
+              <option value="pocos_docs">Carpeta vacía / ≤1 documento</option>
+              <option value="docs_sospechosos">Docs sospechosos</option>
+              <option value="sin_fallo">Sin fallo 1ra registrado</option>
+            </select>
             <select value={estado} onChange={(e) => handleFilter('estado', e.target.value)} className="text-sm border border-input rounded-lg px-2.5 py-1.5 bg-background focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 text-foreground">
               <option value="">Todos los estados</option>
               <option value="ACTIVO">Activo</option>
@@ -126,8 +147,8 @@ export default function CasesList() {
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
-            {(search || estado || fallo || ciudad) && (
-              <button onClick={() => { setSearch(''); setEstado(''); setFallo(''); setCiudad(''); setPage(1) }} className="text-xs text-destructive hover:underline">
+            {(search || estado || fallo || ciudad || revision) && (
+              <button onClick={() => { setSearch(''); setEstado(''); setFallo(''); setCiudad(''); setRevision(''); setPage(1) }} className="text-xs text-destructive hover:underline">
                 Limpiar filtros
               </button>
             )}
@@ -156,7 +177,9 @@ export default function CasesList() {
                       <TableHead className="hidden lg:table-cell">Ciudad</TableHead>
                       <TableHead>Estado</TableHead>
                       <TableHead>Fallo</TableHead>
-                      <TableHead className="hidden xl:table-cell">Abogado</TableHead>
+                      {revision
+                        ? <TableHead>Revisión</TableHead>
+                        : <TableHead className="hidden xl:table-cell">Abogado</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -171,7 +194,7 @@ export default function CasesList() {
                     ) : cases.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
-                          No se encontraron casos
+                          {revision ? 'Ningún caso con esa condición de revisión 🎉' : 'No se encontraron casos'}
                         </TableCell>
                       </TableRow>
                     ) : (
@@ -190,8 +213,34 @@ export default function CasesList() {
                             </span>
                           </TableCell>
                           <TableCell className="max-w-[180px]">
-                            <span className="text-foreground font-medium text-sm truncate block" title={c.ACCIONANTE || ''}>
-                              {c.ACCIONANTE || <span className="text-muted-foreground">—</span>}
+                            <span className="flex items-center gap-1">
+                              {/Sujeto de especial protecci[oó]n/i.test(c.OBSERVACIONES || '') && (
+                                <span title="Datos sensibles (sujeto de especial protección — manejar con reserva)" className="shrink-0 text-rose-500">
+                                  <Lock size={11} />
+                                </span>
+                              )}
+                              {c.tipo_acumulacion === 'RECTOR' && (
+                                <span
+                                  className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-semibold px-1 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200"
+                                  title={`Expediente rector de acumulación (Dec. 2591/91 art. 13 + Dec. 1834/2015). Tutelas acumuladas a este despacho.`}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <Link2 size={9} />Rector
+                                </span>
+                              )}
+                              {c.tipo_acumulacion === 'ACUMULADO' && c.acumulado_a_case_id && (
+                                <button
+                                  type="button"
+                                  className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-semibold px-1 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
+                                  title={`Acumulado al expediente #${c.acumulado_a_case_id}. Pretensiones y sentencia se resuelven en el rector.`}
+                                  onClick={(e) => { e.stopPropagation(); navigate(`/cases/${c.acumulado_a_case_id}`) }}
+                                >
+                                  <Link2 size={9} />Acum→#{c.acumulado_a_case_id}
+                                </button>
+                              )}
+                              <span className="text-foreground font-medium text-sm truncate" title={c.ACCIONANTE || ''}>
+                                {c.ACCIONANTE || <span className="text-muted-foreground">—</span>}
+                              </span>
                             </span>
                           </TableCell>
                           <TableCell className="hidden md:table-cell">
@@ -206,9 +255,25 @@ export default function CasesList() {
                           <TableCell>
                             {c.SENTIDO_FALLO_1ST ? <StatusBadge type="fallo" value={c.SENTIDO_FALLO_1ST} /> : <span className="text-muted-foreground text-xs">—</span>}
                           </TableCell>
-                          <TableCell className="hidden xl:table-cell">
-                            <span className="text-muted-foreground text-xs">{c.ABOGADO_RESPONSABLE || '—'}</span>
-                          </TableCell>
+                          {revision ? (
+                            <TableCell>
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className={`text-[10px] font-semibold tabular-nums ${(c._completitud_pct ?? 0) < 30 ? 'text-rose-600' : (c._completitud_pct ?? 0) < 50 ? 'text-amber-600' : 'text-muted-foreground'}`}>
+                                  {c._completitud_pct ?? 0}%
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">· {c._n_docs ?? 0} doc{c._n_docs === 1 ? '' : 's'}</span>
+                                {Object.keys(c._review ?? {}).map((k: string) => (
+                                  <span key={k} className="text-[9px] px-1 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">
+                                    {REVISION_FLAG_LABEL[k] ?? k}
+                                  </span>
+                                ))}
+                              </div>
+                            </TableCell>
+                          ) : (
+                            <TableCell className="hidden xl:table-cell">
+                              <span className="text-muted-foreground text-xs">{c.ABOGADO_RESPONSABLE || '—'}</span>
+                            </TableCell>
+                          )}
                         </TableRow>
                       ))
                     )}

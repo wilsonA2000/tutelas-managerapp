@@ -74,6 +74,12 @@ def test_engine(tmp_app_dir):
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
+        # función `unaccent(text)` — espejo de backend.database.database (búsquedas sin acentos)
+        from backend.database.database import strip_accents
+        try:
+            dbapi_conn.create_function("unaccent", 1, strip_accents, deterministic=True)
+        except TypeError:
+            dbapi_conn.create_function("unaccent", 1, strip_accents)
 
     return engine
 

@@ -1,9 +1,29 @@
 """Motor de base de datos SQLite con SQLAlchemy."""
 
-from sqlalchemy import create_engine, event
+import unicodedata
+
+from sqlalchemy import create_engine, event, func
 from sqlalchemy.orm import sessionmaker, Session
 from backend.core.settings import settings
 from backend.database.models import Base
+
+
+def strip_accents(s):
+    """Quita tildes/diacríticos. 'García' -> 'Garcia', None -> None.
+
+    Se registra como función SQLite `unaccent(text)` (ver _set_sqlite_pragma).
+    """
+    if s is None:
+        return None
+    return "".join(c for c in unicodedata.normalize("NFD", str(s)) if unicodedata.category(c) != "Mn")
+
+
+def ilike_unaccent(column, raw: str):
+    """Filtro de búsqueda insensible a acentos Y mayúsculas:
+        func.lower(func.unaccent(column)) LIKE '%<término normalizado>%'
+    Úsalo en TODOS los buscadores de texto libre de la plataforma."""
+    term = f"%{strip_accents((raw or '').strip().lower())}%"
+    return func.lower(func.unaccent(column)).like(term)
 
 DATABASE_URL = f"sqlite:///{settings.db_path}"
 
@@ -30,6 +50,11 @@ def _set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.execute("PRAGMA synchronous=NORMAL")  # menor overhead que FULL, seguro con WAL
     cursor.execute("PRAGMA busy_timeout=30000")  # 30s — DrvFs (/mnt/c) sufre contención con N workers
     cursor.close()
+    # función escalar `unaccent(text)` para búsquedas insensibles a acentos en toda la app
+    try:
+        dbapi_connection.create_function("unaccent", 1, strip_accents, deterministic=True)
+    except TypeError:  # `deterministic` no soportado (Python/SQLite antiguos)
+        dbapi_connection.create_function("unaccent", 1, strip_accents)
 
 
 def wal_checkpoint(mode: str = "PASSIVE") -> dict:

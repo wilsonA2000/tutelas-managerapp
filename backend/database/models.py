@@ -86,6 +86,15 @@ class Case(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Acumulación de tutelas (Decreto 2591/1991 art. 13 + CGP art. 159 supletorio).
+    # Cuando un juez ordena acumular dos o más expedientes (tutela o desacato),
+    # uno actúa como RECTOR (recibe los demás) y los otros como ACUMULADO
+    # (mantienen su rad/folder propios pero quedan colgados del rector para
+    # efectos procesales y de presentación en el cuadro).
+    acumulado_a_case_id = Column(Integer, ForeignKey("cases.id"), nullable=True, index=True)
+    tipo_acumulacion = Column(String, nullable=True, index=True)  # 'RECTOR' / 'ACUMULADO' / NULL
+    acumulacion_auto_doc_id = Column(Integer, ForeignKey("documents.id"), nullable=True)
+    acumulacion_fecha = Column(String, nullable=True)  # DD/MM/AAAA del auto que ordenó acumular
     # (Retirado) `pii_mode` — la anonimización PII no aplica en modo local-only.
 
     # Relaciones
@@ -154,6 +163,11 @@ class Case(Base):
             "processing_status": self.processing_status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            # Acumulación procesal (Dec 2591/91 art. 13 + Dec 1834/2015 tutelas masivas)
+            "tipo_acumulacion": self.tipo_acumulacion,
+            "acumulado_a_case_id": self.acumulado_a_case_id,
+            "acumulacion_fecha": self.acumulacion_fecha,
+            "acumulacion_auto_doc_id": self.acumulacion_auto_doc_id,
         }
         if include_doc_count:
             result["document_count"] = len(self.documents) if self.documents else 0

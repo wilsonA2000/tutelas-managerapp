@@ -3,6 +3,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from backend.database.models import Email, Case
+from backend.database.database import ilike_unaccent
 
 
 def list_emails(db: Session, search: str = "", status: str = "", page: int = 1, per_page: int = 20) -> dict:
@@ -13,11 +14,10 @@ def list_emails(db: Session, search: str = "", status: str = "", page: int = 1, 
         query = query.filter(Email.status.ilike(status))
 
     if search:
-        term = f"%{search}%"
         query = query.filter(or_(
-            Email.subject.ilike(term),
-            Email.sender.ilike(term),
-            Email.body_preview.ilike(term),
+            ilike_unaccent(Email.subject, search),
+            ilike_unaccent(Email.sender, search),
+            ilike_unaccent(Email.body_preview, search),
         ))
 
     total = query.count()

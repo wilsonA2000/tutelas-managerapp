@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session, subqueryload
 from sqlalchemy import func, or_, case as sql_case
 
+from backend.database.database import strip_accents, ilike_unaccent
 from backend.database.models import Case, Document, AuditLog
 from backend.services.normalizer import (
     normalize_abogado, normalize_ciudad, categorize_decision_incidente,
@@ -16,6 +17,32 @@ _kpi_cache: dict = {"data": None, "ts": 0}
 KPI_CACHE_TTL = 60
 
 
+# Señales de "necesita revisión manual" por caso (para el filtro `revision` del listado).
+_REVISION_OPTIONS = {"necesita_revision", "sin_accionante", "sin_radicado", "pocos_docs", "docs_sospechosos", "sin_fallo"}
+
+
+def _case_review_flags(c: Case) -> dict:
+    """Calcula las señales de revisión de un caso (lazy-loads documents)."""
+    n_docs = len(c.documents)
+    susp = any((d.verificacion or "") in ("SOSPECHOSO", "NO_PERTENECE") for d in c.documents)
+    no_acc = not (c.accionante or "").strip() or "[REVISAR_ACCIONANTE]" in (c.folder_name or "")
+    no_rad = not (c.radicado_23_digitos or "").strip()
+    compl = _get_case_completitud(c)
+    baja = compl < MIN_COMPLETITUD_PERCENT  # <20% del cuadro v9 — el caso casi no tiene datos
+    return {
+        "sin_accionante": no_acc,
+        "sin_radicado": no_rad,
+        "pocos_docs": n_docs <= 1,
+        "docs_sospechosos": susp,
+        "sin_fallo": not (c.sentido_fallo_1st or "").strip(),
+        "baja_completitud": baja,
+        # "necesita_revision" NO incluye sin_fallo (es normal en tutelas en curso)
+        "necesita_revision": no_acc or no_rad or n_docs <= 1 or susp or baja,
+        "_completitud": compl,
+        "_n_docs": n_docs,
+    }
+
+
 def list_cases(
     db: Session,
     search: str = "",
@@ -24,10 +51,17 @@ def list_cases(
     abogado: str = "",
     ciudad: str = "",
     status: str = "",
+    revision: str = "",
     page: int = 1,
     per_page: int = 50,
 ) -> dict:
-    """Listar casos con filtros y paginacion."""
+    """Listar casos con filtros y paginacion.
+
+    `revision` (opcional): surface casos que necesitan revisión manual antes de extraer —
+    'necesita_revision' (unión: sin accionante / sin radicado / ≤1 doc / docs sospechosos /
+    completitud <30% — ordenados peor-primero), o uno específico: 'sin_accionante',
+    'sin_radicado', 'pocos_docs', 'docs_sospechosos', 'sin_fallo'.
+    """
     query = db.query(Case).filter(
         Case.folder_name.isnot(None),
         Case.folder_name != "None",
@@ -36,36 +70,60 @@ def list_cases(
     )
 
     if search:
-        term = f"%{search}%"
         query = query.filter(or_(
-            Case.accionante.ilike(term),
-            Case.radicado_23_digitos.ilike(term),
-            Case.radicado_forest.ilike(term),
-            Case.folder_name.ilike(term),
-            Case.observaciones.ilike(term),
-            Case.accionados.ilike(term),
+            ilike_unaccent(Case.accionante, search),
+            ilike_unaccent(Case.radicado_23_digitos, search),
+            ilike_unaccent(Case.radicado_forest, search),
+            ilike_unaccent(Case.folder_name, search),
+            ilike_unaccent(Case.observaciones, search),
+            ilike_unaccent(Case.accionados, search),
         ))
 
     if estado:
-        query = query.filter(Case.estado.ilike(estado))
+        query = query.filter(func.lower(func.unaccent(Case.estado)) == strip_accents(estado.strip().lower()))
     if fallo:
-        query = query.filter(Case.sentido_fallo_1st.ilike(f"%{fallo}%"))
+        query = query.filter(ilike_unaccent(Case.sentido_fallo_1st, fallo))
     if abogado:
-        query = query.filter(Case.abogado_responsable.ilike(f"%{abogado}%"))
+        query = query.filter(ilike_unaccent(Case.abogado_responsable, abogado))
     if ciudad:
-        query = query.filter(Case.ciudad.ilike(f"%{ciudad}%"))
+        query = query.filter(ilike_unaccent(Case.ciudad, ciudad))
     if status:
         query = query.filter(Case.processing_status == status)
 
-    total = query.count()
-    cases = query.order_by(Case.id.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    revision = (revision or "").strip()
+    if revision not in _REVISION_OPTIONS:
+        # camino rápido (sin filtro de revisión): paginar en SQL, orden id desc
+        total = query.count()
+        cases = query.order_by(Case.id.desc()).offset((page - 1) * per_page).limit(per_page).all()
+        items = [c.to_dict() for c in cases]
+    else:
+        # filtro de revisión: requiere mirar documentos/completitud → filtrar y paginar en Python
+        all_cases = query.all()
+        scored = [(c, _case_review_flags(c)) for c in all_cases]
+        scored = [(c, f) for c, f in scored if f.get(revision)]
+        if revision == "necesita_revision":
+            scored.sort(key=lambda t: (t[1]["_completitud"], -t[0].id))  # peor completitud primero
+        else:
+            scored.sort(key=lambda t: -t[0].id)
+        total = len(scored)
+        page_slice = scored[(page - 1) * per_page: page * per_page]
+        items = []
+        _chip_hide = {"necesita_revision"}  # redundante en la vista; no se muestra como chip
+        if revision != "sin_fallo":
+            _chip_hide.add("sin_fallo")      # ruido (normal en tutelas en curso) salvo si es el filtro activo
+        for c, f in page_slice:
+            d = c.to_dict()
+            d["_review"] = {k: v for k, v in f.items() if not k.startswith("_") and v and k not in _chip_hide}
+            d["_completitud_pct"] = round(f["_completitud"])
+            d["_n_docs"] = f["_n_docs"]
+            items.append(d)
 
     return {
-        "items": [c.to_dict() for c in cases],
+        "items": items,
         "total": total,
         "page": page,
         "per_page": per_page,
-        "pages": (total + per_page - 1) // per_page,
+        "pages": (total + per_page - 1) // per_page if per_page else 1,
     }
 
 
@@ -130,6 +188,56 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
 
 MIN_COMPLETITUD_PERCENT = 20.0
 
+# Campos del cuadro Excel que v9 efectivamente puebla — base para el % de completitud.
+# Se excluyen los 5 campos heredados de v8 que v9 NO escribe (DIRECCION/GRUPO/EQUIPO del
+# organigrama y los *_CANONICAL); incluirlos deprimía artificialmente la completitud.
+_V8_ONLY_FIELDS = {"direccion", "grupo", "equipo", "abogado_canonical", "dependencia_canonical"}
+_CUADRO_FIELDS: tuple[str, ...] = tuple(
+    attr for attr in Case.CSV_FIELD_MAP.values() if attr not in _V8_ONLY_FIELDS
+)
+
+# Etiquetas legibles para los charts del dashboard (los valores en DB son códigos en MAYÚSCULAS).
+_OFICINA_LABEL = {
+    "DIRECCION_TALENTO_DOCENTE": "Talento Humano",
+    "DIRECCION_ESTRATEGICA": "Dirección Estratégica",
+    "DIRECCION_ADMIN_FINANCIERA": "Administrativa y Financiera",
+    "DIRECCION_PERMANENCIA": "Cobertura y Permanencia",
+    "APOYO_DIRECTO": "Apoyo Directo / Despacho",
+}
+_DERECHO_LABEL = {
+    "EDUCACION": "Educación", "SALUD": "Salud", "PETICION": "Petición",
+    "DEBIDO_PROCESO": "Debido proceso", "VIDA": "Vida",
+    "SEGURIDAD_SOCIAL": "Seguridad social", "MINIMO_VITAL": "Mínimo vital",
+    "TRABAJO": "Trabajo", "IGUALDAD": "Igualdad", "INTIMIDAD": "Intimidad",
+    "HABEAS_DATA": "Hábeas data", "OTRO": "Otro",
+}
+# tags de `derecho_vulnerado` que NO son un derecho (no van al chart)
+_DERECHO_SKIP = {"SIN_DETERMINAR", "SIN DETERMINAR", "NO_DETERMINADO"}
+
+
+def _label_oficina(code: str) -> str:
+    c = (code or "").strip().upper()
+    return _OFICINA_LABEL.get(c, c.replace("_", " ").title())
+
+
+def _label_derecho(tag: str) -> str:
+    t = (tag or "").strip().upper()
+    return _DERECHO_LABEL.get(t, t.replace("_", " ").title())
+
+
+def _count_derecho_tags(rows) -> list[tuple[str, int]]:
+    """De filas [(derecho_vulnerado,), ...] cuenta cada tag (campo separado por ' - '),
+    normaliza la etiqueta y descarta SIN_DETERMINAR. Devuelve [(label, count)] orden desc."""
+    counts: dict[str, int] = {}
+    for (dv,) in rows:
+        for tag in (dv or "").split(" - "):
+            tag = tag.strip().upper()
+            if not tag or tag in _DERECHO_SKIP:
+                continue
+            label = _label_derecho(tag)
+            counts[label] = counts.get(label, 0) + 1
+    return sorted(counts.items(), key=lambda x: -x[1])
+
 
 def _real_cases_filter(valid_ids: set | None = None):
     """Filtro para excluir casos fantasma (sin carpeta real) y opcionalmente por IDs validos."""
@@ -141,13 +249,9 @@ def _real_cases_filter(valid_ids: set | None = None):
 
 
 def _get_case_completitud(case: Case) -> float:
-    """Calcular completitud de un caso individual."""
-    filled = 0
-    for attr in Case.CSV_FIELD_MAP.values():
-        val = getattr(case, attr) or ""
-        if str(val).strip():
-            filled += 1
-    return round(filled / len(Case.CSV_FIELD_MAP) * 100, 1)
+    """Calcular completitud de un caso individual (sobre los campos del cuadro v9)."""
+    filled = sum(1 for attr in _CUADRO_FIELDS if str(getattr(case, attr, "") or "").strip())
+    return round(filled / len(_CUADRO_FIELDS) * 100, 1)
 
 
 def _get_valid_case_ids(db: Session, min_completitud: float = MIN_COMPLETITUD_PERCENT):
@@ -232,13 +336,13 @@ def get_dashboard_kpis(db: Session) -> dict:
 
     # QUERY 2: Completitud — contar campos llenos con CASE expressions en UNA query
     field_counts = []
-    for attr in Case.CSV_FIELD_MAP.values():
+    for attr in _CUADRO_FIELDS:
         col = getattr(Case, attr)
         field_counts.append(func.sum(sql_case((col.isnot(None), sql_case((col != "", 1), else_=0)), else_=0)))
 
     completitud_row = db.query(*field_counts).filter(*gf).first()
     filled_fields = sum(v or 0 for v in completitud_row) if completitud_row else 0
-    n_fields = len(Case.CSV_FIELD_MAP)
+    n_fields = len(_CUADRO_FIELDS)
     total_fields = total * n_fields
     completitud = round(filled_fields / total_fields * 100, 1) if total_fields > 0 else 0
 
@@ -263,10 +367,17 @@ def get_dashboard_kpis(db: Session) -> dict:
     con_impugnacion = stats.con_impugnacion or 0
     imp_resueltas = stats.imp_resueltas or 0
     tutelas_unicas = total - (stats.total_incidentes or 0)
+    # Total REAL de expedientes en el sistema (no-fusionados, con carpeta) — distinto
+    # de `total`, que es solo los válidos para métricas (sin shells / incompletos).
+    total_carpetas = db.query(func.count(Case.id)).filter(
+        Case.processing_status != "DUPLICATE_MERGED",
+        Case.folder_name.isnot(None), Case.folder_name != "", Case.folder_name != "None",
+    ).scalar() or 0
 
     result = {
         "total": total,
         "total_casos": total,
+        "total_carpetas": total_carpetas,
         "tutelas_unicas": tutelas_unicas,
         "total_incidentes": stats.total_incidentes or 0,
         "activos": stats.activos or 0,
@@ -281,9 +392,10 @@ def get_dashboard_kpis(db: Session) -> dict:
             "favorable": fallos.get("FAVORABLE", 0),
             "improcedente": fallos.get("IMPROCEDENTE", 0),
             "modificado": fallos.get("MODIFICADO", 0),
+            "otro": fallos.get("OTRO", 0),
             "sin_fallo": fallos.get("SIN FALLO", 0),
             "desistimiento": fallos.get("DESISTIMIENTO", 0),
-            "tooltip": "Fallo definitivo: si hay 2da instancia que REVOCA, se considera favorable aunque en 1ra fue desfavorable",
+            "tooltip": "Fallo definitivo: si hay 2da instancia que REVOCA, se considera favorable aunque en 1ra fue desfavorable. OTRO = carencia de objeto / hecho superado / nulidad.",
         },
         "con_impugnacion": con_impugnacion,
         "impugnaciones_resueltas": imp_resueltas,
@@ -342,7 +454,15 @@ def _get_quality_metrics(db: Session, valid_ids: set | None = None) -> dict:
         "forest": base.filter(Case.radicado_forest.isnot(None), Case.radicado_forest != "").count(),
     }
 
-    confiabilidad = round((doc_score * 0.3 + ext_score * 0.3 + (sum(campos_criticos.values()) / (total_cases * 5) * 100) * 0.4), 1) if total_cases > 0 else 0
+    campos_score = (sum(campos_criticos.values()) / (total_cases * 5) * 100) if total_cases > 0 else 0
+    if total_cases == 0:
+        confiabilidad = 0
+    elif ext_total > 0:
+        confiabilidad = round(doc_score * 0.3 + ext_score * 0.3 + campos_score * 0.4, 1)
+    else:
+        # v9 escribe a las columnas del Case y no llena la tabla Extraction:
+        # se redistribuye el 30% del componente "extracciones" entre docs (3) y campos (4).
+        confiabilidad = round(doc_score * (3 / 7) + campos_score * (4 / 7), 1)
 
     return {
         "confiabilidad": confiabilidad,
@@ -395,43 +515,19 @@ def get_chart_data(db: Session) -> dict:
                 months[key] = months.get(key, 0) + 1
     by_month = sorted(months.items())
 
-    # Por derecho vulnerado — parsear campo separado por " - "
+    # Por derecho vulnerado — parsear campo separado por " - " (vocab v9), normalizar etiqueta
     raw_derechos = db.query(Case.derecho_vulnerado).filter(
         *gf, Case.derecho_vulnerado.isnot(None), Case.derecho_vulnerado != ""
     ).all()
-    derechos_count = {}
-    for (dv,) in raw_derechos:
-        for d in (dv or "").split(" - "):
-            d = d.strip().upper()
-            if d and len(d) > 2:
-                # Normalizar variaciones comunes
-                if "EDUCACI" in d:
-                    d = "EDUCACION"
-                elif "SALUD" in d:
-                    d = "SALUD"
-                elif "PETICI" in d:
-                    d = "PETICION"
-                elif "VIDA" in d and "DIGNA" in d:
-                    d = "VIDA DIGNA"
-                elif "IGUALDAD" in d:
-                    d = "IGUALDAD"
-                elif "DEBIDO" in d and "PROCESO" in d:
-                    d = "DEBIDO PROCESO"
-                elif "TRABAJO" in d:
-                    d = "TRABAJO"
-                elif "MINIMO" in d and "VITAL" in d:
-                    d = "MINIMO VITAL"
-                derechos_count[d] = derechos_count.get(d, 0) + 1
-    derechos_sorted = sorted(derechos_count.items(), key=lambda x: -x[1])[:10]
+    derechos_sorted = _count_derecho_tags(raw_derechos)[:10]
 
-    # Por oficina responsable
+    # Por oficina responsable (Dirección L1 SED) — etiqueta legible
     raw_oficinas = db.query(Case.oficina_responsable, func.count(Case.id)).filter(
         *gf, Case.oficina_responsable.isnot(None), Case.oficina_responsable != ""
     ).group_by(Case.oficina_responsable).all()
-    oficinas_norm = {}
+    oficinas_norm: dict[str, int] = {}
     for ofi, count in raw_oficinas:
-        key = ofi.strip().title()[:40]
-        oficinas_norm[key] = oficinas_norm.get(key, 0) + count
+        oficinas_norm[_label_oficina(ofi)] = oficinas_norm.get(_label_oficina(ofi), 0) + count
     oficinas_sorted = sorted(oficinas_norm.items(), key=lambda x: -x[1])[:10]
 
     # Fallos desfavorables por derecho (cruce fallo CONCEDE x derecho_vulnerado)
@@ -439,29 +535,16 @@ def get_chart_data(db: Session) -> dict:
         *gf, Case.sentido_fallo_1st.ilike("%concede%"),
         Case.derecho_vulnerado.isnot(None), Case.derecho_vulnerado != ""
     ).all()
-    desfav_count = {}
-    for (dv,) in raw_desfav:
-        for d in (dv or "").split(" - "):
-            d = d.strip().upper()
-            if d and len(d) > 2:
-                if "EDUCACI" in d: d = "EDUCACION"
-                elif "SALUD" in d: d = "SALUD"
-                elif "PETICI" in d: d = "PETICION"
-                elif "VIDA" in d and "DIGNA" in d: d = "VIDA DIGNA"
-                elif "IGUALDAD" in d: d = "IGUALDAD"
-                desfav_count[d] = desfav_count.get(d, 0) + 1
-    desfav_sorted = sorted(desfav_count.items(), key=lambda x: -x[1])[:10]
+    desfav_sorted = _count_derecho_tags(raw_desfav)[:10]
 
-    # Favorabilidad REAL (considerando 2da instancia)
+    # Favorabilidad REAL (considerando 2da instancia) — mismo desglose que el KPI:
+    # CARENCIA_OBJETO/HECHO_SUPERADO/DESISTIMIENTO/NULIDAD caen en "OTRO" (no en IMPROCEDENTE).
     all_cases = db.query(Case).filter(*gf).all()
     fav_counts = {"DESFAVORABLE": 0, "FAVORABLE": 0, "IMPROCEDENTE": 0,
-                  "MODIFICADO": 0, "SIN FALLO": 0}
+                  "MODIFICADO": 0, "SIN FALLO": 0, "OTRO": 0}
     for c in all_cases:
         fallo_def, _ = get_fallo_definitivo(c.sentido_fallo_1st, c.sentido_fallo_2nd)
-        if fallo_def in fav_counts:
-            fav_counts[fallo_def] += 1
-        elif fallo_def in ("DESISTIMIENTO", "OTRO"):
-            fav_counts["IMPROCEDENTE"] += 1
+        fav_counts[fallo_def if fallo_def in fav_counts else "OTRO"] += 1
 
     # Desacatos categorizados
     desacatos_chart = {}
@@ -485,6 +568,7 @@ def get_chart_data(db: Session) -> dict:
             {"fallo": "FAVORABLE", "count": fav_counts["FAVORABLE"]},
             {"fallo": "IMPROCEDENTE", "count": fav_counts["IMPROCEDENTE"]},
             {"fallo": "MODIFICADO", "count": fav_counts["MODIFICADO"]},
+            {"fallo": "OTRO", "count": fav_counts["OTRO"]},
             {"fallo": "SIN FALLO", "count": fav_counts["SIN FALLO"]},
         ],
         "by_desacato": [{"estado": k, "count": v} for k, v in sorted(desacatos_chart.items(), key=lambda x: -x[1])],

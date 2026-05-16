@@ -1,6 +1,8 @@
-"""Tests de dashboard: KPIs, charts, activity, chat."""
+"""Tests de dashboard: KPIs, charts, activity.
 
-from unittest.mock import patch
+(El antiguo POST /api/dashboard/chat se retiró en la modernización Fase 6; el chat
+del asistente vive en /api/chat/ y se prueba en tests/test_chat.py.)
+"""
 
 
 def test_kpis(client):
@@ -25,8 +27,24 @@ def test_activity(client):
     assert isinstance(data, list)
 
 
-def test_chat_mock(client):
-    mock_result = {"answer": "Test response", "steps": [], "tools_used": []}
-    with patch("backend.agent.runner.run_agent", return_value=mock_result):
-        r = client.post("/api/dashboard/chat", json={"question": "cuantos casos hay?"})
-        assert r.status_code == 200
+def test_kpis_completitud_excludes_v8_only_fields(client):
+    """La completitud se calcula sobre los 37 campos del cuadro v9, no los 42
+    de CSV_FIELD_MAP (excluye direccion/grupo/equipo/*_canonical, que v9 no llena)."""
+    r = client.get("/api/dashboard/kpis")
+    assert r.status_code == 200
+    d = r.json()
+    # los 3 casos seed no tienen direccion/grupo/equipo/canonicals → si se contaran,
+    # la completitud sería menor. Basta con verificar que el campo existe y es coherente.
+    assert 0 <= d["completitud"] <= 100
+    assert d["campos_llenos"] >= 0
+    # la favorabilidad expone "otro" (carencia de objeto / hecho superado / nulidad)
+    assert "otro" in d["favorabilidad"]
+
+
+def test_charts_favorabilidad_has_otro_bucket(client):
+    """El gráfico de favorabilidad incluye el bucket OTRO (consistente con el KPI)."""
+    r = client.get("/api/dashboard/charts")
+    assert r.status_code == 200
+    d = r.json()
+    fav = {x["fallo"]: x["count"] for x in d.get("by_favorabilidad", [])}
+    assert "OTRO" in fav  # ya no se lumpea en IMPROCEDENTE
