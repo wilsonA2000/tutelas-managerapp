@@ -75,6 +75,21 @@ _CASE_FIELD_MAP = {
     "juzgado_2nd": "juzgado_2nd",
 }
 
+# Campos identificadores del expediente: una vez establecidos NUNCA se sobreescriben
+# por re-extracción. El extractor de regex_pass puede capturar rads ajenos del texto
+# (anexos de antecedentes, citas jurisprudenciales, oficios multiplexados, etc.) —
+# si pisara el rad del case, perderíamos el identificador único.
+#
+# Si el rad detectado por v9 difiere del actual, generamos warning para que el
+# operador lo revise en la UI; pero NO escribimos.
+#
+# Para corregir el rad de un case se edita manualmente en la ficha (UI o
+# `UPDATE cases SET radicado_23_digitos=... WHERE id=...`), no por re-extract.
+STICKY_FIELDS: frozenset[str] = frozenset({
+    "radicado_23_digitos",
+    "radicado_forest",
+})
+
 
 def persist(
     db: Session,
@@ -111,6 +126,7 @@ def persist(
             prev_sources = {}
 
     changes: dict[str, dict] = {}
+    sticky_conflicts: list[dict] = []  # rads ajenos detectados que NO se aplican
     for v9_key, value in fields.values.items():
         if not value:
             continue
@@ -120,6 +136,21 @@ def persist(
         current = getattr(case, col, None)
         # Respeta valor manual previo
         if prev_sources.get(v9_key) == FieldSource.MANUAL.value:
+            continue
+        # STICKY: identificadores del expediente nunca se sobreescriben una vez
+        # establecidos (regresión 2026-05-15: v9 pisaba radicado_23_digitos con
+        # rads ajenos capturados en anexos de antecedentes).
+        if v9_key in STICKY_FIELDS and current and current != value:
+            sticky_conflicts.append({
+                "field": v9_key,
+                "current": current,
+                "v9_proposed": value,
+                "source": fields.sources[v9_key].value,
+            })
+            logger.warning(
+                "Case %d: v9 propuso %s=%r pero campo ya es %r (sticky, no se pisa)",
+                case_id, v9_key, value, current,
+            )
             continue
         # Respeta valor existente que no vino de v9 (no pisar v8 todavía)
         if current and v9_key not in prev_sources:
@@ -168,6 +199,7 @@ def persist(
             "case_id": case_id,
             "dry_run": True,
             "changes": changes,
+            "sticky_conflicts": sticky_conflicts,
             "completitud": fields.completitud(),
         }
 
@@ -199,5 +231,6 @@ def persist(
         "case_id": case_id,
         "dry_run": False,
         "changes": changes,
+        "sticky_conflicts": sticky_conflicts,
         "completitud": fields.completitud(),
     }

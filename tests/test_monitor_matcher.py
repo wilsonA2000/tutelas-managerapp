@@ -118,6 +118,35 @@ class TestCacheBuild:
         assert cache.lookup_by_cc("1098765432") is None
         assert cache.lookup_by_cc("9999999999") is None
 
+    def test_no_colapsa_consecutivos_contiguos(self, db):
+        """Regresión 2026-05-15: el bug histórico usaba `[:20]` como key del
+        by_rad23, colapsando rads que difieren solo en el último dígito del
+        consec (00011 ↔ 00012, 00100 ↔ 00101, …). Fix: usar `[:21]`.
+
+        Aquí montamos 2 cases con consecutivos contiguos en el mismo despacho
+        y verificamos que cada rad-23 hace lookup a su case correcto.
+        """
+        # Limpieza: borrar cases previos del fixture y montar 2 con consecs
+        # contiguos en el mismo despacho.
+        db.query(Case).delete()
+        db.commit()
+        db.add(Case(
+            id=500, folder_name="2026-00500 ANA TORRES",
+            radicado_23_digitos="68-001-40-09-027-2026-00500-00",
+            processing_status="COMPLETO",
+        ))
+        db.add(Case(
+            id=501, folder_name="2026-00501 LUIS GARCIA",
+            radicado_23_digitos="68-001-40-09-027-2026-00501-00",  # difiere SOLO en último dígito del consec
+            processing_status="COMPLETO",
+        ))
+        db.commit()
+        c = CaseLookupCache()
+        c.build(db)
+        # Cada uno hace lookup a su propio case (no se colapsan al mismo bucket)
+        assert c.lookup_by_rad23("68001400902720260050000") == 500
+        assert c.lookup_by_rad23("68001400902720260050100") == 501
+
 
 # ─────────────────────────────────────────────────────────────
 # Scoring — un solo criterio

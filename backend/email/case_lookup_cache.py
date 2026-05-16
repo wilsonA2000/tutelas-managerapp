@@ -7,7 +7,7 @@ Problema que resuelve:
 
 Solución:
     Construir al startup 4 diccionarios en memoria:
-        - by_rad23[digitos_20] → case_id
+        - by_rad23[digitos_21] → case_id (rad-21 = despacho+año+consec, sin cuadernillo)
         - by_rad_corto["AAAA-NNNNN"] → case_id
         - by_forest → case_id
         - by_cc_hash[sha256(cc)] → case_id (vía pii_mappings)
@@ -19,6 +19,12 @@ Invalidación:
     build() al startup (main.py lifespan).
     Stamp file `data/case_cache.stamp` con timestamp — si DB se modifica
     externamente (CLI, script), próximo boot reconstruye cache.
+
+Bug histórico (corregido 2026-05-15): la versión anterior usaba `[:20]` como
+key, colapsando rads consecutivos que diferían en el último dígito del consec
+(p.ej. 2026-00011 y 2026-00012 quedaban en el mismo bucket). El monitor de
+Gmail trataba ambos cases como uno solo → conflación de paquetes. Ver
+`scripts/move_misplaced_doc.py` para limpiar el daño histórico que generó.
 """
 
 from __future__ import annotations
@@ -119,11 +125,15 @@ class CaseLookupCache:
 
     def _index_case_no_lock(self, c) -> None:
         """Añade un caso a todos los dicts relevantes (debe ser llamado bajo lock)."""
-        # rad23: key = primeros 20 dígitos normalizados
+        # rad23: key = primeros 21 dígitos normalizados (rad-21 = despacho+año+consec,
+        # sin los 2 del cuadernillo). El cuadernillo (00 / 01 / 02…) distingue piezas
+        # del mismo expediente, no expedientes distintos — colapsarlas al mismo bucket
+        # es lo deseado. Usar `[:20]` era un bug histórico que colapsaba consecutivos
+        # contiguos (00011 ↔ 00012).
         if c.radicado_23_digitos:
             norm = normalize_rad23(c.radicado_23_digitos)
-            if len(norm) >= 18:
-                self.by_rad23[norm[:20]] = c.id
+            if len(norm) >= 21:
+                self.by_rad23[norm[:21]] = c.id
                 # rad_corto derivado del rad23 (fuente autoritativa)
                 derived = derive_rad_corto_from_rad23(c.radicado_23_digitos)
                 if derived:
@@ -153,12 +163,17 @@ class CaseLookupCache:
     # ─────────────────────────────────────────────────────────
 
     def lookup_by_rad23(self, rad23: str | None) -> int | None:
+        """Lookup por rad-21 (despacho+año+consec). Requiere ≥21 dígitos.
+
+        Si el rad llega más corto (truncado en email), no se busca aquí —
+        el caller debe usar lookup_by_rad_corto o cascada de matchers.
+        """
         if not rad23:
             return None
         norm = normalize_rad23(rad23)
-        if len(norm) < 18:
+        if len(norm) < 21:
             return None
-        return self.by_rad23.get(norm[:20])
+        return self.by_rad23.get(norm[:21])
 
     def lookup_by_rad_corto(self, rad_corto: str | None) -> int | None:
         if not rad_corto:
