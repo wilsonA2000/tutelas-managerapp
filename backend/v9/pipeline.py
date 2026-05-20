@@ -25,7 +25,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from backend.v9 import doc_io, regex_pass, catalog_resolve, excel_reconcile, llm_gap_fill, persist, field_extractor_pass
+from backend.v9 import doc_io, regex_pass, catalog_resolve, excel_reconcile, llm_gap_fill, persist, field_extractor_pass, field_extractor
 from backend.v9.types import ExtractedFields, ExtractionResult
 
 logger = logging.getLogger("tutelas.v9.pipeline")
@@ -108,9 +108,25 @@ def extract_case(
         docs_ok = [d for d in docs if d.ok]
         docs_failed = len(docs) - len(docs_ok)
 
-        # 3. regex_pass — rellena los campos doc-a-doc que el paso 1 no cubrió
+        # 3. regex_pass — rellena los campos doc-a-doc que el paso 1 no cubrió.
+        #    Pasamos accionante/radicados desde DB explícitamente: si la carpeta
+        #    está contaminada con docs prestados, el extractor de accionante puede
+        #    escribir un valor erróneo en `fields` y envenenar el filtro de
+        #    pertenencia para abogado_responsable. Usar `case.accionante` de DB es
+        #    más fiable.
+        from backend.v9.regex_pass import _rad_corto_from_23, _rad_corto_from_folder
+        case_acc = getattr(case, "accionante", None) if case else None
+        case_rads = {r for r in (
+            getattr(case, "radicado_23_digitos", None) if case else None,
+            getattr(case, "radicado_forest", None) if case else None,
+            _rad_corto_from_23(getattr(case, "radicado_23_digitos", None) if case else None),
+            _rad_corto_from_folder(folder_name),
+        ) if r}
         t = time.perf_counter()
-        regex_pass.run(docs_ok, fields, folder_name=folder_name)
+        regex_pass.run(
+            docs_ok, fields, folder_name=folder_name,
+            case_accionante=case_acc, case_radicados=case_rads,
+        )
         timing["regex_pass"] = int((time.perf_counter() - t) * 1000)
     else:
         warnings.append("sin documentos legibles en disco")
@@ -138,6 +154,26 @@ def extract_case(
     t = time.perf_counter()
     persist_out = persist.persist(db, case_id, fields, dry_run=dry_run)
     timing["persist"] = int((time.perf_counter() - t) * 1000)
+
+    # 8. Observaciones — resumen semántico (LLM, append-only fechado). Solo en apply
+    #    con use_llm. Complementa los campos semánticos con una narrativa factual del
+    #    estado del caso; NO pisa notas manuales ni resúmenes previos (idempotente).
+    if use_llm and not dry_run:
+        t = time.perf_counter()
+        try:
+            from datetime import datetime as _dt
+            _case = db.query(Case).filter(Case.id == case_id).first()
+            if _case is not None and not field_extractor.case_has_dated_observacion(_case):
+                resumen = field_extractor.llm_summarize_case_state(db, _case)
+                if resumen:
+                    prev = (_case.observaciones or "").rstrip()
+                    linea = f"[{_dt.now().strftime('%d/%m/%Y')}] {resumen}"
+                    _case.observaciones = (prev + "\n" + linea) if prev else linea
+                    db.commit()
+                    llm_calls += 1
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"observaciones_summary: {e}")
+        timing["obs_summary"] = int((time.perf_counter() - t) * 1000)
 
     timing["__total"] = int((time.perf_counter() - t0) * 1000)
 

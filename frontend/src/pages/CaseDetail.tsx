@@ -4,9 +4,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import {
   ArrowLeft, Save, FileText, ExternalLink, Loader2,
-  AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package, Lock, FolderInput, Search, Pencil, FolderPlus, Link2,
+  AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package, Lock, FolderInput, Search, Pencil, FolderPlus, Link2, History,
 } from 'lucide-react'
-import { getCase, getCases, updateCase, renameCaseFolder, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, createCase, getCaseAcumulacion } from '../services/api'
+import HistorialModal from '../components/HistorialModal'
+import { getCase, getCases, updateCase, renameCaseFolder, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, createCase, getCaseAcumulacion, compareCases, mergeCases, type CaseCompareResult } from '../services/api'
 import StatusBadge from '../components/StatusBadge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -218,7 +219,7 @@ function FormSection({ section, fields, onChange, defaultOpen = true }: {
 
 // ─── Document Panel ──────────────────────────────────────────────────────────
 
-function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filename: string; doc_type: string; verificacion?: string; verificacion_detalle?: string }>; onDeleteDoc?: (docId: number) => void }) {
+function DocumentPanel({ caseId, docs, onDeleteDoc }: { caseId: number; docs: Array<{ id: number; filename: string; doc_type: string; verificacion?: string; verificacion_detalle?: string }>; onDeleteDoc?: (docId: number) => void }) {
   const [previewDocId, setPreviewDocId] = useState<number | null>(null)
   const [resolveDocId, setResolveDocId] = useState<number | null>(null)
   const [suggestions, setSuggestions] = useState<Array<{ case_id: number; folder_name: string; confidence: string; reason: string }>>([])
@@ -228,13 +229,23 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
   const [moveResults, setMoveResults] = useState<Array<{ id: number; folder_name: string; ACCIONANTE?: string; RADICADO_23_DIGITOS?: string }>>([])
   const [moveLoading, setMoveLoading] = useState(false)
   // Mini-form "Crear expediente" dentro del mismo modal — para cuando el buscador no
-  // encuentra el caso destino (ej: tutela homónima por rad_corto que aún no estaba creada).
+  // encuentra el caso destino. Dos modos:
+  //  - TUTELA: rad (largo o corto) + accionante → folder_name = "<rad_corto> <ACCIONANTE>".
+  //  - COMUNICACION: folder_name libre + obs obligatorio. Carpeta sin radicado (oficios,
+  //    comunicaciones, etc.). Marcada con tipo_actuacion=COMUNICACION → excluida del cuadro.
   const [showCreateForm, setShowCreateForm] = useState(false)
+  const [createTipo, setCreateTipo] = useState<'TUTELA' | 'COMUNICACION'>('TUTELA')
   const [createRad23, setCreateRad23] = useState('')
   const [createAccionante, setCreateAccionante] = useState('')
   const [createJuzgado, setCreateJuzgado] = useState('')
   const [createCiudad, setCreateCiudad] = useState('')
+  const [createFolderName, setCreateFolderName] = useState('')
+  const [createObservaciones, setCreateObservaciones] = useState('')
   const [createBusy, setCreateBusy] = useState(false)
+  // Modal de reconciliación: se dispara automáticamente cuando un move deja al
+  // case origen vacío Y es similar al destino (mismo rad corto, accionante, etc.).
+  const [reconcileData, setReconcileData] = useState<CaseCompareResult | null>(null)
+  const [reconcileBusy, setReconcileBusy] = useState(false)
   const qc = useQueryClient()
 
   useEffect(() => {
@@ -251,6 +262,22 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
     return () => clearTimeout(t)
   }, [moveSearch, resolveDocId])
 
+  // ── Modal de reconciliación — hooks ANTES del early return (Rules of Hooks) ──
+  const [reconcileSelected, setReconcileSelected] = useState<Set<string>>(new Set())
+  const [reconcileDelete, setReconcileDelete] = useState(true)
+  useEffect(() => {
+    if (reconcileData) {
+      // Por default todos los exclusivos están seleccionados.
+      setReconcileSelected(new Set(reconcileData.exclusive_in_source.map(f => f.field)))
+      setReconcileDelete(reconcileData.source_can_be_deleted)
+    } else {
+      setReconcileSelected(new Set())
+    }
+  }, [reconcileData])
+
+  // Early return DESPUÉS de todos los hooks: si el caso queda sin docs (p. ej. al
+  // mover el último documento a una carpeta nueva) el conteo de hooks no cambia
+  // y se evita el crash "Rendered fewer hooks than expected" (pantalla blanca).
   if (!docs?.length) {
     return <div className="text-center py-12 text-muted-foreground text-sm">No hay documentos en este caso</div>
   }
@@ -284,7 +311,9 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
   const sospechosoDocs = docs.filter(d => d.verificacion === 'SOSPECHOSO')
 
   function resetCreateForm() {
-    setShowCreateForm(false); setCreateRad23(''); setCreateAccionante(''); setCreateJuzgado(''); setCreateCiudad(''); setCreateBusy(false)
+    setShowCreateForm(false); setCreateTipo('TUTELA')
+    setCreateRad23(''); setCreateAccionante(''); setCreateJuzgado(''); setCreateCiudad('')
+    setCreateFolderName(''); setCreateObservaciones(''); setCreateBusy(false)
   }
   function closeResolve() { setResolveDocId(null); setSuggestions([]); setMoveSearch(''); setMoveResults([]); resetCreateForm() }
 
@@ -295,35 +324,48 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
 
   async function handleCreateAndMove() {
     if (resolveDocId == null) return
-    const radInput = createRad23.trim()
-    const accionante = createAccionante.trim()
-    // Acepta 23 dígitos completos o el corto YYYY-NNNNN (los juzgados muchas veces no entregan el de 23).
-    // El sufijo -NN opcional al final es típico de los oficios (ej. 2026-00028-00).
-    const digits = radInput.replace(/\D/g, '')
-    const isShort = /^\s*20\d{2}[\s\-/_]*\d{1,5}(?:[\s\-/_]+\d{1,3})?\s*$/.test(radInput)
-    if (digits.length < 21 && !isShort) {
-      toast.error('Radicado inválido. Use los 23 dígitos completos o el corto AAAA-NNNNN (ej. 2026-00028 o 2026-00028-00).')
-      return
-    }
-    if (!accionante) { toast.error('Falta el nombre del accionante'); return }
+    const observaciones = createObservaciones.trim()
     setCreateBusy(true)
     try {
-      const newCase = await createCase({
-        radicado_23_digitos: radInput,
-        accionante,
-        juzgado: createJuzgado.trim() || undefined,
-        ciudad: createCiudad.trim() || undefined,
-      })
-      toast.success(`Expediente «${newCase.folder_name}» creado`)
-      // Mover el doc actual al expediente recién creado
+      let newCase
+      if (createTipo === 'COMUNICACION') {
+        const folder = createFolderName.trim()
+        if (!folder) { toast.error('Falta el nombre de la carpeta'); setCreateBusy(false); return }
+        if (!observaciones) { toast.error('Las observaciones (motivo del traslado) son obligatorias para carpetas sin radicado'); setCreateBusy(false); return }
+        newCase = await createCase({
+          tipo: 'COMUNICACION',
+          folder_name: folder,
+          observaciones,
+          accionante: createAccionante.trim() || undefined,
+        })
+      } else {
+        const radInput = createRad23.trim()
+        const accionante = createAccionante.trim()
+        const digits = radInput.replace(/\D/g, '')
+        const isShort = /^\s*20\d{2}[\s\-/_]*\d{1,5}(?:[\s\-/_]+\d{1,3})?\s*$/.test(radInput)
+        if (digits.length < 21 && !isShort) {
+          toast.error('Radicado inválido. Use los 23 dígitos completos o el corto AAAA-NNNNN (ej. 2026-00028 o 2026-00028-00).')
+          setCreateBusy(false); return
+        }
+        if (!accionante) { toast.error('Falta el nombre del accionante'); setCreateBusy(false); return }
+        newCase = await createCase({
+          radicado_23_digitos: radInput,
+          accionante,
+          juzgado: createJuzgado.trim() || undefined,
+          ciudad: createCiudad.trim() || undefined,
+          observaciones: observaciones || undefined,
+        })
+      }
+      toast.success(`Carpeta «${newCase.folder_name}» creada`)
       const moveRes = await moveDocument(resolveDocId, newCase.id)
-      toast.success(moveRes?.message || 'Documento movido al nuevo expediente')
+      toast.success(moveRes?.message || 'Documento movido a la nueva carpeta')
       closeResolve()
       qc.invalidateQueries({ queryKey: ['case'] })
       qc.invalidateQueries({ queryKey: ['cases'] })
+      await maybeOfferReconciliation(caseId, newCase.id)
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      toast.error(msg || 'No se pudo crear el expediente')
+      toast.error(msg || 'No se pudo crear la carpeta')
       setCreateBusy(false)
     }
   }
@@ -343,7 +385,23 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
       closeResolve()
       qc.invalidateQueries({ queryKey: ['case'] })
       qc.invalidateQueries({ queryKey: ['cases'] })
+      await maybeOfferReconciliation(caseId, targetCaseId)
     } catch { toast.error('Error moviendo documento') }
+  }
+
+  // Tras un move, si el case origen quedó vacío Y es similar al destino,
+  // ofrecemos al usuario migrar campos exclusivos antes de eliminar el origen.
+  async function maybeOfferReconciliation(sourceId: number, targetId: number) {
+    try {
+      const cmp = await compareCases(sourceId, targetId)
+      const hasSignals = (cmp.similarity_signals?.length ?? 0) > 0
+      const hasExclusive = (cmp.exclusive_in_source?.length ?? 0) > 0
+      if (cmp.source_can_be_deleted && hasSignals && hasExclusive) {
+        setReconcileData(cmp)
+      }
+    } catch {
+      // silencioso: la reconciliación es opcional
+    }
   }
 
   async function handleMarkOk(docId: number) {
@@ -352,8 +410,124 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
 
   const previewDoc = docs.find(d => d.id === previewDocId)
 
+  async function handleApplyReconciliation() {
+    if (!reconcileData) return
+    setReconcileBusy(true)
+    try {
+      const res = await mergeCases(reconcileData.source.id, reconcileData.target.id, {
+        fields: Array.from(reconcileSelected),
+        merge_observations: reconcileSelected.has('observaciones'),
+        delete_source: reconcileDelete,
+      })
+      const n = res?.migrated?.length ?? 0
+      toast.success(`${n} campo${n === 1 ? '' : 's'} migrado${n === 1 ? '' : 's'}${res?.source_deleted ? ' · expediente origen eliminado' : ''}`)
+      setReconcileData(null)
+      qc.invalidateQueries({ queryKey: ['case'] })
+      qc.invalidateQueries({ queryKey: ['cases'] })
+    } catch {
+      toast.error('Error aplicando reconciliación')
+    } finally {
+      setReconcileBusy(false)
+    }
+  }
+
   return (
     <div>
+      {reconcileData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+          <Card className="w-full max-w-2xl max-h-[85vh] overflow-auto">
+            <CardContent className="pt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold flex items-center gap-1.5">
+                  <FolderInput size={14} className="text-violet-600" /> Reconciliación de expediente
+                </span>
+                <button onClick={() => setReconcileData(null)} className="text-xs text-muted-foreground hover:text-foreground">Cerrar</button>
+              </div>
+
+              <div className="text-xs space-y-1 p-2.5 rounded-md bg-amber-50 border border-amber-200">
+                <p className="font-medium text-amber-900">
+                  El expediente origen <span className="font-mono">#{reconcileData.source.id}</span> «{reconcileData.source.folder_name}» quedó vacío después del traslado.
+                </p>
+                <p className="text-amber-800">
+                  Detecto que es similar al destino <span className="font-mono">#{reconcileData.target.id}</span> «{reconcileData.target.folder_name}»:
+                </p>
+                <ul className="text-amber-800 list-disc pl-5">
+                  {reconcileData.similarity_signals.map((s, i) => <li key={i}>{s.label}</li>)}
+                </ul>
+              </div>
+
+              {reconcileData.exclusive_in_source.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-foreground">Campos con valor en origen que NO están en destino:</p>
+                  <div className="space-y-1">
+                    {reconcileData.exclusive_in_source.map(f => {
+                      const checked = reconcileSelected.has(f.field)
+                      return (
+                        <label key={f.field} className="flex items-start gap-2 p-2 rounded border border-border hover:bg-muted/50 cursor-pointer text-xs">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const next = new Set(reconcileSelected)
+                              if (e.target.checked) next.add(f.field); else next.delete(f.field)
+                              setReconcileSelected(next)
+                            }}
+                            className="mt-0.5"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium text-foreground">{f.label}</div>
+                            <div className="font-mono text-[10px] text-muted-foreground break-all">{(f.value || '').slice(0, 200)}{(f.value || '').length > 200 ? '…' : ''}</div>
+                            {f.suggested_action === 'merge_text' && f.target_existing && (
+                              <div className="text-[10px] text-violet-700 mt-0.5">↳ se fusionará con el texto existente del destino (no lo reemplaza)</div>
+                            )}
+                          </div>
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {reconcileData.differs.length > 0 && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                    Campos que difieren ({reconcileData.differs.length}) — informativo, NO se tocan
+                  </summary>
+                  <div className="mt-1.5 space-y-1 pl-2 border-l-2 border-border">
+                    {reconcileData.differs.map(d => (
+                      <div key={d.field} className="text-[10px]">
+                        <div className="font-medium">{d.label}</div>
+                        <div className="text-muted-foreground">origen: {d.source_value.slice(0, 80)}{d.source_value.length > 80 ? '…' : ''}</div>
+                        <div className="text-muted-foreground">destino: {d.target_value.slice(0, 80)}{d.target_value.length > 80 ? '…' : ''}</div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
+              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={reconcileDelete}
+                  onChange={(e) => setReconcileDelete(e.target.checked)}
+                  disabled={!reconcileData.source_can_be_deleted}
+                />
+                <span>
+                  Eliminar el expediente origen <span className="font-mono">#{reconcileData.source.id}</span> después de migrar
+                  {!reconcileData.source_can_be_deleted && <span className="text-amber-700"> (no se puede: aún tiene documentos/emails)</span>}
+                </span>
+              </label>
+
+              <div className="flex gap-2 pt-1">
+                <Button onClick={handleApplyReconciliation} disabled={reconcileBusy || reconcileSelected.size === 0} className="flex-1">
+                  {reconcileBusy ? (<><Loader2 size={12} className="animate-spin mr-1.5" /> Aplicando…</>) : `Migrar ${reconcileSelected.size} campo${reconcileSelected.size === 1 ? '' : 's'}${reconcileDelete ? ' y eliminar origen' : ''}`}
+                </Button>
+                <Button variant="outline" onClick={() => setReconcileData(null)} disabled={reconcileBusy}>Mantener como está</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
       {noPerteneceDocs.length > 0 && (
         <Alert variant="destructive" className="mx-4 mt-3">
           <AlertCircle className="h-4 w-4" />
@@ -420,57 +594,133 @@ function DocumentPanel({ docs, onDeleteDoc }: { docs: Array<{ id: number; filena
               )}
               <p className="text-[10px] text-muted-foreground mt-1">Si el documento llegó por correo, se moverán también los demás adjuntos de ese mismo correo (hermanos viajan juntos).</p>
 
-              {/* Crear expediente nuevo (para tutelas homónimas por rad_corto aún no registradas) */}
+              {/* Crear carpeta nueva — TUTELA (con radicado) o COMUNICACION (libre, sin radicado).
+                  Uso típico de COMUNICACION: el doc es un oficio/comunicación que no pertenece a
+                  ninguna tutela y no tiene radicado propio. */}
               {!showCreateForm ? (
                 <button
                   onClick={() => setShowCreateForm(true)}
                   className="mt-2 flex items-center gap-1.5 text-xs text-primary hover:underline"
-                  title="Crear un expediente nuevo y mover este documento allí"
+                  title="Crear una carpeta nueva (tutela con radicado o comunicación libre) y mover este documento allí"
                 >
-                  <FolderPlus size={13} /> ¿No encuentras el expediente? Crear nuevo y mover aquí
+                  <FolderPlus size={13} /> ¿No encuentras dónde poner el documento? Crear carpeta nueva
                 </button>
               ) : (
                 <div className="mt-2 p-2.5 rounded-lg border border-primary/30 bg-primary/5 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium flex items-center gap-1.5"><FolderPlus size={13} /> Crear expediente nuevo</span>
+                    <span className="text-xs font-medium flex items-center gap-1.5"><FolderPlus size={13} /> Crear carpeta nueva</span>
                     <button onClick={resetCreateForm} className="text-[10px] text-muted-foreground hover:text-foreground">Cancelar</button>
                   </div>
-                  <div className="grid grid-cols-1 gap-1.5">
-                    <div>
-                      <Input
-                        placeholder="Radicado: 23 dígitos o corto 2026-00028"
-                        value={createRad23}
-                        onChange={(e) => setCreateRad23(e.target.value)}
-                        className="h-8 text-xs font-mono"
-                        maxLength={25}
-                      />
-                      <p className="text-[10px] text-muted-foreground mt-0.5">
-                        Si el juzgado no proporcionó los 23 dígitos, usa el corto (ej. <span className="font-mono">2026-00028</span>) — el expediente quedará en <span className="font-medium">REVISIÓN</span> hasta que se complete.
-                      </p>
-                    </div>
-                    <Input
-                      placeholder="Accionante (nombre completo)"
-                      value={createAccionante}
-                      onChange={(e) => setCreateAccionante(e.target.value)}
-                      className="h-8 text-xs"
-                    />
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <Input
-                        placeholder="Juzgado (opcional)"
-                        value={createJuzgado}
-                        onChange={(e) => setCreateJuzgado(e.target.value)}
-                        className="h-8 text-xs"
-                      />
-                      <Input
-                        placeholder="Ciudad (opcional)"
-                        value={createCiudad}
-                        onChange={(e) => setCreateCiudad(e.target.value)}
-                        className="h-8 text-xs"
-                      />
-                    </div>
+
+                  {/* Toggle tipo */}
+                  <div role="radiogroup" aria-label="Tipo de carpeta" className="grid grid-cols-2 gap-1 p-0.5 bg-background border border-border rounded-md">
+                    <button
+                      role="radio"
+                      aria-checked={createTipo === 'TUTELA'}
+                      onClick={() => setCreateTipo('TUTELA')}
+                      className={`text-[11px] py-1 px-2 rounded transition-colors ${
+                        createTipo === 'TUTELA'
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'text-muted-foreground hover:bg-muted'
+                      }`}
+                    >
+                      Tutela (con radicado)
+                    </button>
+                    <button
+                      role="radio"
+                      aria-checked={createTipo === 'COMUNICACION'}
+                      onClick={() => setCreateTipo('COMUNICACION')}
+                      className={`text-[11px] py-1 px-2 rounded transition-colors ${
+                        createTipo === 'COMUNICACION'
+                          ? 'bg-violet-600 text-white shadow-sm'
+                          : 'text-muted-foreground hover:bg-muted'
+                      }`}
+                      title="Carpeta libre sin radicado — para oficios/comunicaciones. Excluida del cuadro Excel."
+                    >
+                      📨 Comunicación (sin radicado)
+                    </button>
                   </div>
+
+                  {createTipo === 'TUTELA' ? (
+                    <div className="grid grid-cols-1 gap-1.5">
+                      <div>
+                        <Input
+                          placeholder="Radicado: 23 dígitos o corto 2026-00028"
+                          value={createRad23}
+                          onChange={(e) => setCreateRad23(e.target.value)}
+                          className="h-8 text-xs font-mono"
+                          maxLength={25}
+                        />
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          Si el juzgado no proporcionó los 23 dígitos, usa el corto (ej. <span className="font-mono">2026-00028</span>) — el expediente quedará en <span className="font-medium">REVISIÓN</span> hasta que se complete.
+                        </p>
+                      </div>
+                      <Input
+                        placeholder="Accionante (nombre completo)"
+                        value={createAccionante}
+                        onChange={(e) => setCreateAccionante(e.target.value)}
+                        className="h-8 text-xs"
+                      />
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <Input
+                          placeholder="Juzgado (opcional)"
+                          value={createJuzgado}
+                          onChange={(e) => setCreateJuzgado(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                        <Input
+                          placeholder="Ciudad (opcional)"
+                          value={createCiudad}
+                          onChange={(e) => setCreateCiudad(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                      <textarea
+                        placeholder="Observaciones / motivo del traslado (opcional)"
+                        value={createObservaciones}
+                        onChange={(e) => setCreateObservaciones(e.target.value)}
+                        className="text-xs px-2.5 py-1.5 border border-input rounded-md bg-background focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 min-h-[44px] resize-y"
+                        maxLength={500}
+                      />
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-1.5">
+                      <div>
+                        <Input
+                          placeholder="Nombre de la carpeta (ej. Oficio Procuraduria 1234)"
+                          value={createFolderName}
+                          onChange={(e) => setCreateFolderName(e.target.value)}
+                          className="h-8 text-xs"
+                          maxLength={200}
+                        />
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          Texto libre — sin radicado. Esta carpeta queda marcada como <span className="font-medium text-violet-700">📨 Comunicación</span> y <span className="font-medium">no aparece en el cuadro Excel</span> de tutelas.
+                        </p>
+                      </div>
+                      <Input
+                        placeholder="Accionante / remitente (opcional)"
+                        value={createAccionante}
+                        onChange={(e) => setCreateAccionante(e.target.value)}
+                        className="h-8 text-xs"
+                      />
+                      <div>
+                        <textarea
+                          placeholder="Observaciones / motivo del traslado (obligatorio)"
+                          value={createObservaciones}
+                          onChange={(e) => setCreateObservaciones(e.target.value)}
+                          className="w-full text-xs px-2.5 py-1.5 border border-input rounded-md bg-background focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 min-h-[56px] resize-y"
+                          maxLength={500}
+                          required
+                        />
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          {createObservaciones.length}/500 — ej: <em>"Doc no pertenecía al expediente 2026-00095. Es un oficio de la Procuraduría sin radicado propio."</em>
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   <Button size="xs" onClick={handleCreateAndMove} disabled={createBusy} className="w-full">
-                    {createBusy ? (<><Loader2 size={12} className="animate-spin mr-1.5" /> Creando y moviendo…</>) : 'Crear expediente y mover documento'}
+                    {createBusy ? (<><Loader2 size={12} className="animate-spin mr-1.5" /> Creando y moviendo…</>) : 'Crear carpeta y mover documento'}
                   </Button>
                   <p className="text-[10px] text-muted-foreground">Se crea la carpeta en disco y se trasladan el documento + sus hermanos del mismo correo.</p>
                 </div>
@@ -681,7 +931,7 @@ function RightPanelWithTabs({ caseId, docs, onDeleteDoc }: {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {tab === 'docs' && <DocumentPanel docs={docs} onDeleteDoc={onDeleteDoc} />}
+        {tab === 'docs' && <DocumentPanel caseId={caseId} docs={docs} onDeleteDoc={onDeleteDoc} />}
         {tab === 'emails' && <EmailPackagesTimeline query={packagesQ} />}
       </div>
     </>
@@ -746,6 +996,7 @@ export default function CaseDetail() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const caseId = parseInt(id ?? '0', 10)
+  const [historialOpen, setHistorialOpen] = useState(false)
 
   const caseQ = useQuery({ queryKey: ['case', caseId], queryFn: () => getCase(caseId), enabled: !!caseId })
   const acumQ = useQuery({
@@ -854,7 +1105,17 @@ export default function CaseDetail() {
       {/* Top bar */}
       <div className="flex-shrink-0 flex items-center justify-between px-6 py-3 bg-card border-b border-border">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon-sm" onClick={() => navigate('/cases')}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              // Volver a la página anterior (Seguimiento, Cuadro, Auditoría, etc.).
+              // Si no hay historial (acceso directo por URL), caer a /cases.
+              if (window.history.length > 1) navigate(-1)
+              else navigate('/cases')
+            }}
+            title="Volver"
+          >
             <ArrowLeft size={16} />
           </Button>
           <div>
@@ -891,6 +1152,14 @@ export default function CaseDetail() {
             </Badge>
           )}
           {dirty && <Badge variant="outline" className="text-amber-700 border-amber-200 bg-amber-50">Cambios sin guardar</Badge>}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => setHistorialOpen(true)}
+            title="Ver historial completo del expediente (creación, cambios, traslados, correos)"
+          >
+            <History size={14} />
+          </Button>
           <Button variant="ghost" size="icon-sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} title="Sincronizar carpeta">
             <RefreshCw size={14} className={syncMutation.isPending || caseQ.isFetching ? 'animate-spin' : ''} />
           </Button>
@@ -909,6 +1178,12 @@ export default function CaseDetail() {
       )}
 
       <ResizablePanels caseData={caseData} fields={fields} handleChange={handleChange} onDeleteDoc={(docId) => deleteDocMut.mutate(docId)} />
+
+      <HistorialModal
+        caseId={historialOpen ? caseId : null}
+        caseLabel={caseData?.folder_name as string | undefined}
+        onClose={() => setHistorialOpen(false)}
+      />
     </div>
   )
 }

@@ -291,6 +291,23 @@ def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str],
 
     Returns: (accionante, nota_observaciones). Nota puede ser None.
     """
+    # Filtro de pertenencia: si la carpeta tiene docs "prestados" de otras tutelas,
+    # NO leer el accionante desde ahí. Aquí no podemos usar acc_tokens (es lo que
+    # estamos extrayendo), así que filtramos SOLO por radicados del case.
+    # Regla (feedback Wilson 2026-05-18): el doc debe citar el rad23 o rad_forest
+    # (globalmente únicos) o el rad corto en el filename (señal operativa fuerte).
+    from backend.v9.regex_pass import (
+        doc_belongs_to_case as _doc_belongs_to_case_acc,
+        _rad_corto_from_23 as _rc23_acc,
+        _rad_corto_from_folder as _rcfolder_acc,
+    )
+    _rads_acc = {r for r in (
+        getattr(case, "radicado_23_digitos", None),
+        getattr(case, "radicado_forest", None),
+        _rc23_acc(getattr(case, "radicado_23_digitos", None)),
+        _rcfolder_acc(getattr(case, "folder_name", None)),
+    ) if r}
+
     # Reunir texto de los docs prioritarios. Para cada doc se mira el head (donde va el
     # encabezado de partes) y, si el doc trae una sección "[TABLAS]" más abajo (los DOCX
     # de respuesta de la SED tienen ahí la tabla REF/ACCIONANTE), también ese tramo.
@@ -299,6 +316,11 @@ def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str],
         for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt).all():
             text = _read_doc_text(d)
             if not text or len(text) <= 150:
+                continue
+            # Filtro de pertenencia (solo por radicados — el accionante todavía no se sabe)
+            if _rads_acc and not _doc_belongs_to_case_acc(
+                set(), _rads_acc, text, getattr(d, "filename", "") or ""
+            ):
                 continue
             search_text = text[:10000]  # encabezado de partes + (en sentencias largas) el RESUELVE recap
             ti = text.find("[TABLAS]")
@@ -1958,22 +1980,52 @@ def _resolve_abogado_combined(name_or_text: str, doc_text: str = "") -> tuple[Op
             return canon.upper(), "catalogo"
     except Exception:
         pass
-    # 4) sin match → nombre limpio crudo
-    return cleaned, "footer"
+    # 4) Regla cerrada (feedback Wilson 2026-05-18, mem feedback-abogado-responsable-fuente):
+    #    si el firmante extraído NO está en el roster del Grupo Jurídico ni en
+    #    abogados_canonicos.json, NO escribir nada. La respuesta puede ser un
+    #    oficio insumo, proyectado externo o de otra dependencia — no es el
+    #    abogado SED responsable del caso.
+    return None, "no_match"
+
+
+from backend.v9.regex_pass import (
+    accionante_tokens as _accionante_tokens,
+    doc_belongs_to_case as _doc_belongs_to_case,
+    _rad_corto_from_23,
+    _rad_corto_from_folder,
+)  # noqa: E402
 
 
 def extract_abogado_responsable_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
     """`abogado_responsable` = quien firma el DOCX de respuesta ("Proyectó: NOMBRE").
-    Si hay varias respuestas, el más frecuente (empate → la más reciente por id). Se
-    resuelve contra el roster del Grupo Jurídico (correo o nombre) y el catálogo de
-    abogados; si no hay match, se deja el nombre limpio crudo. Returns (valor, fuente)."""
+    Reglas (feedback Wilson 2026-05-18):
+    (1) Solo cuentan docs `doc_type == "RESPUESTA"` en la carpeta.
+    (2) La firma debe resolver al roster del Grupo Jurídico / catálogo de 17 oficiales.
+    (3) El doc debe pertenecer al case: o (a) menciona ≥2 tokens significativos del
+        accionante, o (b) cita uno de los radicados del case (rad23/forest/corto) en
+        texto o filename. Evita que firmas oficiales de docs prestados (insumos de
+        otras tutelas que terminan en la misma carpeta) se atribuyan al case actual.
+    Si hay varias respuestas válidas, el firmante más frecuente (empate → la más
+    reciente por id). Returns (valor, fuente)."""
     from collections import Counter
+    acc_tokens = _accionante_tokens(case.accionante)
+    rads = {r for r in (
+        getattr(case, "radicado_23_digitos", None),
+        getattr(case, "radicado_forest", None),
+        _rad_corto_from_23(getattr(case, "radicado_23_digitos", None)),
+        _rad_corto_from_folder(getattr(case, "folder_name", None)),
+    ) if r}
     candidates: list[tuple[str, str]] = []  # (valor_resuelto, fuente)
     for d in db.query(Document).filter(
         Document.case_id == case.id, Document.doc_type == "RESPUESTA"
     ).order_by(Document.id.asc()).all():
         t = d.extracted_text or ""
         if not t:
+            continue
+        # Regla (3): el doc debe pertenecer al case (accionante O radicado)
+        if (acc_tokens or rads) and not _doc_belongs_to_case(
+            acc_tokens, rads, t, getattr(d, "filename", "") or ""
+        ):
             continue
         f = _rp_abogado_footer(t)
         if not f:
@@ -2097,7 +2149,17 @@ _RE_ES_2DA = re.compile(
 _RE_VERBOS_2DA = re.compile(r"(?i)^\s*(?:primero\s*[\.\:]?\s*[-–]?\s*)?(?:CONFIRMAR|REVOCAR|MODIFICAR|INHIBIR)")
 
 # Patrones por sentido — orden importa (más específicos primero).
+# Desistimiento ACEPTADO por el juez (no basta el escrito del accionante): el
+# proceso termina sin fallo de fondo. Señal decisiva → va primero en _FALLO_PATTERNS.
+_RE_DESIST_ACEPTADO = re.compile(
+    r"(?:acept\w+|admit\w+|aprob\w+|reconoc\w+)\s+(?:el\s+|al\s+|del\s+|l[ao]\s+)?desistimiento"
+    r"|tener\s+por\s+desistid\w*"
+    r"|desistimiento[^.\n]{0,40}(?:archív|d[ae]r\s+por\s+terminad)",
+    re.I,
+)
+
 _FALLO_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
+    ("DESISTIMIENTO",   _RE_DESIST_ACEPTADO),
     ("CARENCIA_OBJETO", re.compile(r"(?i)\bcarenc[ií]a\s+(?:actual\s+)?de\s+objeto|sustracci[óo]n\s+de\s+materia")),
     ("HECHO_SUPERADO",  re.compile(r"(?i)\bhecho\s+super(?:ad|aci|ar)|da[ñn]o\s+consumad")),
     ("IMPROCEDENTE",    re.compile(r"(?i)\bdeclarar?\s+(?:la\s+)?improcedente|\bimprocedenc[ií]a\s+(?:de|del|por|en)|"
@@ -2172,12 +2234,32 @@ def _classify_recap_1ra(text: str) -> Optional[str]:
     return None
 
 
+def _desistimiento_aceptado(db: Session, case: Case) -> bool:
+    """True si el accionante desistió y el juez lo ACEPTÓ → el proceso termina sin
+    fallo de fondo. Señal fuerte: filename de un AUTO que ACEPTA/ADMITE el
+    desistimiento, o texto que lo acepta. NO basta el escrito de desistimiento del
+    accionante (eso es solo la solicitud); debe haber aceptación judicial."""
+    for d in db.query(Document).filter(Document.case_id == case.id).all():
+        fn = (d.filename or "").upper()
+        if "DESISTIMIENT" in fn and ("ACEPTA" in fn or "ADMITE" in fn):
+            return True
+        txt = d.extracted_text or ""
+        if txt and _RE_DESIST_ACEPTADO.search(txt):
+            return True
+    return False
+
+
 def extract_sentido_fallo_1ra_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
     """Lee la zona RESUELVE de la SENTENCIA_1RA del case y la clasifica al vocab
     `SENTIDO_FALLO_VOCAB`. Si no hay sentencia 1ra usable, recurre al recap dentro de la
     SENTENCIA_2DA / AUTO_CONCEDE_IMPUGNACION / IMPUGNACION / DESCONOCIDO (procesalmente
     OBLIGA a que haya habido fallo de 1ra si hay impugnación o incidente — art. 32 D2591/91).
-    Returns (valor, fuente) — fuente ∈ {"sentencia","desconocido","recap_2da","none"}."""
+    Returns (valor, fuente) — fuente ∈ {"desistimiento","sentencia","desconocido","recap_2da","none"}."""
+    # 0) DESISTIMIENTO aceptado por el juez: termina el proceso sin fallo de fondo.
+    # Determinista y decisivo → gana sobre el default CONCEDE de regex_pass (corre en
+    # Etapa 1, antes; fields.set es first-writer-wins).
+    if _desistimiento_aceptado(db, case):
+        return "DESISTIMIENTO", "desistimiento"
     # 1) SENTENCIA_1RA "real" (no las 2da mal clasificadas). Usa el ÚLTIMO RESUELVE.
     sents = [
         d for d in db.query(Document).filter(
@@ -2773,6 +2855,8 @@ def extract_estado_for_case(db: Session, case: Case) -> str:
     EN_TRAMITE). ACTIVO en cualquier otro caso (sin fallo aún, impugnación en curso,
     o incidente EN_TRAMITE)."""
     sentido1 = getattr(case, "sentido_fallo_1st", None)
+    if (sentido1 or "").upper() == "DESISTIMIENTO":
+        return "INACTIVO"  # desistimiento aceptado termina el proceso (art. 26 D2591/91)
     if not sentido1:
         return "ACTIVO"  # sin fallo de 1ra (en curso, o no archivado → tratar como pendiente)
     impug = (getattr(case, "impugnacion", "") or "").upper()

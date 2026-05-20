@@ -59,14 +59,15 @@ const navItems = [
 ]
 
 // Sección "Administración" — colapsada por defecto. Tareas técnicas / dev.
-// "Procesamiento" y "Herramientas IA" usan el motor de extracción v8 (legacy); el
-// cuadro se construye con el pipeline v9 (botón "v9 Preview" del Cuadro / scripts v9_*).
+// "Procesamiento" y "Herramientas IA" corren el pipeline de extracción v9
+// (backend.v9.pipeline.extract_case, igual que /single y /agent); el cuadro
+// también se construye con v9. (Rótulos actualizados 2026-05-20.)
 const adminItems = [
   { to: '/ejecutivo', label: 'Tablero ejecutivo', icon: TrendingUp },
   { to: '/alertas', label: 'Alertas tempranas', icon: AlertTriangle },
-  { to: '/extraction', label: 'Procesamiento (v8 · legacy)', icon: Cpu },
+  { to: '/extraction', label: 'Procesamiento (v9)', icon: Cpu },
   { to: '/cleanup', label: 'Mantenimiento', icon: Sparkles },
-  { to: '/agent', label: 'Herramientas IA (v8 · legacy)', icon: Wrench },
+  { to: '/agent', label: 'Herramientas IA (v9)', icon: Wrench },
   { to: '/settings', label: 'Configuración', icon: Settings },
 ]
 
@@ -291,8 +292,11 @@ export default function App() {
             </div>
           </header>
 
-          {/* Page content */}
-          <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto focus:outline-none">
+          {/* Page content — main es contenedor flex sin scroll; cada página
+              decide si scrollea (PageShell agrega overflow-y-auto) o usa
+              scroll interno (CaseDetail/Cuadro/Emails). Esto permite que
+              CaseDetail divida su altura en paneles con scroll independiente. */}
+          <main id="main-content" tabIndex={-1} className="flex-1 min-h-0 overflow-hidden flex flex-col focus:outline-none">
             <AnimatePresence mode="wait">
               <motion.div
                 key={location.pathname}
@@ -300,6 +304,7 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.12 }}
+                className="flex-1 min-h-0 flex flex-col"
               >
                 <Routes location={location}>
                   <Route path="/" element={<Dashboard />} />
@@ -322,9 +327,13 @@ export default function App() {
             </AnimatePresence>
           </main>
 
-          {/* Scroll to top */}
+          {/* Scroll to top — busca el elemento scrolleable real dentro del main
+              (PageShell ahora tiene su propio overflow-y-auto). */}
           <button
-            onClick={() => document.getElementById('main-content')?.scrollTo({ top: 0, behavior: 'smooth' })}
+            onClick={() => {
+              const scrollEl = document.querySelector('#main-content [class*="overflow-y-auto"]') as HTMLElement | null
+              ;(scrollEl ?? document.getElementById('main-content'))?.scrollTo({ top: 0, behavior: 'smooth' })
+            }}
             className="fixed bottom-6 right-6 z-40 w-9 h-9 bg-primary text-primary-foreground rounded-lg shadow-md hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 transition-all flex items-center justify-center opacity-70 hover:opacity-100"
             title="Ir arriba"
             aria-label="Volver al inicio de la página"

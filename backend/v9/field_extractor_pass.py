@@ -173,6 +173,8 @@ def _derive_estado(fields: ExtractedFields) -> str:
     """ACTIVO/INACTIVO derivado de los campos ya extraídos (misma regla que
     field_extractor.extract_estado_for_case, pero leyendo de `fields`)."""
     v = fields.values
+    if (v.get("sentido_fallo_1st") or "").upper() == "DESISTIMIENTO":
+        return "INACTIVO"  # desistimiento aceptado termina el proceso (art. 26 D2591/91)
     if not v.get("sentido_fallo_1st"):
         return "ACTIVO"
     if (v.get("impugnacion") or "").upper() == "SI" and not v.get("sentido_fallo_2nd"):
