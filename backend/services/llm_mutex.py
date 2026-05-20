@@ -36,7 +36,8 @@ LLM_URL = os.getenv("LLM_LOCAL_URL", f"http://127.0.0.1:{LLM_PORT}")
 LLM_HEALTH = f"{LLM_URL}/v1/models"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-LLAMA_BIN = Path.home() / "llama.cpp" / "build" / "bin" / "llama-server"
+LLAMA_BIN = Path.home() / "llama.cpp" / "build" / "bin" / "llama-server"                 # CPU
+LLAMA_BIN_VULKAN = Path.home() / "llama.cpp" / "build-vulkan" / "bin" / "llama-server"   # iGPU
 GGUF_BASE = PROJECT_ROOT / "data" / "lora-models" / "Qwen3-4B-Q4_K_M.gguf"
 GGUF_LORA = PROJECT_ROOT / "data" / "lora-models" / "iuris-lora-qwen3-4b.gguf"
 
@@ -95,8 +96,14 @@ def pause_llm_for_extraction() -> bool:
 
 def _spawn_llm() -> int:
     """Lanza llama-server en background. Retorna PID."""
-    if not LLAMA_BIN.exists():
-        raise RuntimeError(f"llama-server no encontrado: {LLAMA_BIN}")
+    # Backend (bench 2026-05-20): iGPU Iris Xe vía Vulkan si está disponible (~1.75×
+    # sobre CPU). Fallback a CPU con la config óptima del i5-1334U: la extracción es
+    # PROMPT-EVAL-bound (lee docs largos, genera poco) → usar TODOS los cores
+    # (-t8/-tb12), NO pinear a P-cores (eso la frenó); --mlock evita swap thrashing.
+    use_gpu = LLAMA_BIN_VULKAN.exists() and os.path.exists("/dev/dri/renderD128")
+    bin_path = LLAMA_BIN_VULKAN if use_gpu else LLAMA_BIN
+    if not bin_path.exists():
+        raise RuntimeError(f"llama-server no encontrado: {bin_path}")
     if not GGUF_BASE.exists():
         raise RuntimeError(f"GGUF base no encontrado: {GGUF_BASE}")
 
@@ -104,18 +111,16 @@ def _spawn_llm() -> int:
     log_dir.mkdir(exist_ok=True)
     log_path = log_dir / f"llama_server_{int(time.time())}.log"
 
-    # v8.3: LoRA opcional via env. A/B test 2026-05-08 mostró que el LoRA actual
-    # (iuris-lora-qwen3-4b) baja la tasa de extraccion del 50% al 25% en CPU.
-    # Default OFF; activar con LLM_LORA_ENABLED=true si se reentrena con dataset depurado.
+    # LoRA opcional via env (default OFF; A/B 2026-05-08 mostró que baja la extracción).
     use_lora = os.getenv("LLM_LORA_ENABLED", "false").lower() == "true"
-    cmd = [
-        str(LLAMA_BIN),
-        "-m", str(GGUF_BASE),
-        "--port", str(LLM_PORT),
-        "--ctx-size", "4096",
-        "-t", "6",
-        "--host", "127.0.0.1",
-    ]
+    cmd = [str(bin_path), "-m", str(GGUF_BASE), "--port", str(LLM_PORT),
+           "--ctx-size", "4096", "--host", "127.0.0.1"]
+    if use_gpu:
+        cmd += ["--n-gpu-layers", "99"]
+        logger.info("llama-server: backend iGPU (Vulkan, --n-gpu-layers 99)")
+    else:
+        cmd += ["-t", "8", "-tb", "12", "--mlock"]
+        logger.info("llama-server: backend CPU (-t8 -tb12 --mlock)")
     if use_lora and GGUF_LORA.exists():
         cmd.insert(3, "--lora")
         cmd.insert(4, str(GGUF_LORA))

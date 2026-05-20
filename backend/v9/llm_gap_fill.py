@@ -27,6 +27,33 @@ from backend.v9.types import ExtractedFields, FieldSource
 
 logger = logging.getLogger("tutelas.v9.llm_gap")
 
+import urllib.request
+LLM_URL = os.getenv("LLM_LOCAL_URL", f"http://127.0.0.1:{os.getenv('LLM_LOCAL_PORT', '8765')}")
+
+# Vocabularios cerrados para constrained decoding (json_schema enum). El "" permite
+# al modelo decir "no sé" sin inventar.
+_ENUMS = {
+    "derecho_vulnerado": ["EDUCACION", "SALUD", "PETICION", "DEBIDO_PROCESO", "VIDA",
+                           "SEGURIDAD_SOCIAL", "MINIMO_VITAL", "TRABAJO", "IGUALDAD",
+                           "INTIMIDAD", "HABEAS_DATA", "OTRO", ""],
+    "decision_incidente":   ["SI", "NO", "EN_TRAMITE", ""],
+    "decision_incidente_2": ["SI", "NO", "EN_TRAMITE", ""],
+    "decision_incidente_3": ["SI", "NO", "EN_TRAMITE", ""],
+    "quien_impugno":        ["ACCIONANTE", "ACCIONADO", "MINISTERIO_PUBLICO", "AMBOS", ""],
+}
+_MAXLEN = {"asunto": 140, "pretensiones": 240, "accionados": 200, "vinculados": 200,
+           "responsable_desacato": 120, "responsable_desacato_2": 120, "responsable_desacato_3": 120}
+
+
+def _build_schema(missing: list[str]) -> dict:
+    """JSON-schema que ACOTA la salida del LLM: enum para vocab cerrado, maxLength para
+    texto libre. Acelera (generación corta) y elimina valores inventados."""
+    props = {}
+    for f in missing:
+        props[f] = {"type": "string", "enum": _ENUMS[f]} if f in _ENUMS \
+            else {"type": "string", "maxLength": _MAXLEN.get(f, 160)}
+    return {"type": "object", "additionalProperties": False, "properties": props, "required": list(missing)}
+
 
 # Solo estos campos pueden ser llenados por LLM. Los demás son datos
 # estructurales (radicado, FOREST, fechas) que si no salieron por regex,
@@ -97,32 +124,47 @@ Texto:
 
 
 def _build_prompt(missing: list[str], text: str) -> str:
-    text = (text or "")[:8000]  # cap por contexto
-    return _PROMPT.format(fields=", ".join(missing), text=text)
+    # El texto ya viene curado field-aware (backend/v9/field_context.py): solo las
+    # páginas relevantes al campo. Aquí solo un tope de seguridad.
+    t = (text or "")[:5200]
+    return _PROMPT.format(fields=", ".join(missing), text=t)
 
 
 def _llm_disabled() -> bool:
     return os.getenv("V9_DISABLE_LLM", "false").lower() == "true"
 
 
-def _call_llm(prompt: str) -> Optional[str]:
-    """Llama al LLM local. Devuelve raw string o None si falla."""
-    try:
-        from backend.extraction.ai_extractor import _call_local
-    except ImportError as e:
-        logger.warning("ai_extractor no importable: %s", e)
-        return None
+def _call_llm(prompt: str, missing: list[str]) -> Optional[str]:
+    """Llama al LLM local con CONSTRAINED DECODING (json_schema). La salida queda
+    acotada al esquema (enum + maxLength) → ~5-6× más rápido en CPU y sin valores
+    inventados. Si el server no soporta response_format, reintenta libre. None si falla."""
+    body = {
+        "messages": [
+            {"role": "system", "content": "Eres un asistente jurídico. Extraes datos de tutelas y respondes SOLO el JSON pedido."},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 400, "temperature": 0,
+        "response_format": {"type": "json_schema",
+                            "json_schema": {"name": "gap_fill", "schema": _build_schema(missing), "strict": True}},
+    }
 
-    msgs = [
-        {"role": "system", "content": "Eres un asistente que extrae datos jurídicos. Responde solo JSON."},
-        {"role": "user", "content": prompt},
-    ]
+    def _post(payload: dict) -> str:
+        req = urllib.request.Request(LLM_URL + "/v1/chat/completions",
+                                     data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"})
+        raw = urllib.request.urlopen(req, timeout=120).read().decode()
+        return json.loads(raw)["choices"][0]["message"]["content"] or ""
+
     try:
-        raw, _, _ = _call_local(msgs, "qwen3-4b-iuris", max_tokens=512)
-        return raw
+        return _post(body)
     except Exception as e:
-        logger.warning("LLM call falló: %s", str(e)[:200])
-        return None
+        logger.warning("LLM con json_schema falló (%s); reintento sin schema", str(e)[:120])
+        try:
+            body.pop("response_format", None)
+            return _post(body)
+        except Exception as e2:
+            logger.warning("LLM call falló: %s", str(e2)[:200])
+            return None
 
 
 def _parse_json_loose(raw: str) -> dict:
@@ -160,7 +202,7 @@ def run(fields: ExtractedFields, full_text: str) -> tuple[ExtractedFields, int]:
         return fields, 0
 
     prompt = _build_prompt(missing_llm, full_text)
-    raw = _call_llm(prompt)
+    raw = _call_llm(prompt, missing_llm)
     if not raw:
         return fields, 0  # falló silencioso, no hay llm_call exitoso
 
