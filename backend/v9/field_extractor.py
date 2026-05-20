@@ -2123,6 +2123,7 @@ def extract_oficina_responsable_for_case(db: Session, case: Case) -> tuple[Optio
 
 SENTIDO_FALLO_VOCAB: tuple[str, ...] = (
     "CONCEDE", "CONCEDE_PARCIAL", "NIEGA", "IMPROCEDENTE", "HECHO_SUPERADO", "CARENCIA_OBJETO",
+    "DESISTIMIENTO",  # desistimiento aceptado por el juez (art. 26 D2591/91): termina sin fallo de fondo
 )
 
 # La parte resolutiva del fallo: lo que sigue a "RESUELVE:" / "RESUELVO:" (max ~2500 chars).
@@ -2135,6 +2136,64 @@ def _last_resuelve_zone(text: str) -> Optional[str]:
     """Devuelve la última ocurrencia de la zona RESUELVE (la dispositiva real)."""
     matches = list(_RE_RESUELVE_ZONE.finditer(text))
     return matches[-1].group(1) if matches else None
+
+
+# La dispositiva (zona RESUELVE) está SIEMPRE al final de un fallo/sentencia. Pero el
+# `extracted_text` de la DB se truncó a 30000 chars desde el PRINCIPIO, así que en fallos
+# largos el resolutivo queda AFUERA y lo que se halla es un "RESUELVE" citado/recapeado a
+# media página, sin el verbo dispositivo real (bug caso 20: decía NEGAR y salía CONCEDE;
+# casos 98/247: zona sin verbo). Por eso para clasificar el sentido leemos la dispositiva
+# desde el FINAL del PDF (últimas páginas completas, sin depender del texto capado).
+_TEXT_CAP = 30000
+
+
+# La dispositiva empieza con "PRIMERO: <VERBO>" aunque el keyword RESUELVE/FALLA no quede
+# pegado (a veces va en la página anterior, o sale como "R E S U E L V E" espaciado, o el
+# OCR lo pierde). Anclamos en el último PRIMERO seguido de un verbo dispositivo (caso 247:
+# "PRIMERO: DENEGAR POR CARENCIA ACTUAL DE OBJETO" sin RESUELVE captrable).
+_RE_PRIMERO_DECISION = re.compile(
+    r"(?is)\bPRIMERO\b\s*[:.\-–]?\s*[-\s]*"
+    r"(?=DENEGAR|NEGAR|NIEG|NO\s+(?:TUTELAR|AMPARAR|CONCEDER|SE)|CONCED|CONCÉD|TUTEL|AMPAR|"
+    r"DECLAR|ORDEN|PROTEG|OTORG|REVOCAR|CONFIRMAR)"
+)
+
+
+def _dispositiva_zone(d) -> Optional[str]:
+    """Zona dispositiva leída del FINAL del documento (donde SIEMPRE está el resolutivo).
+    En PDFs re-lee las últimas páginas completas y ancla en el último RESUELVE/FALLA o, si
+    no aparece el keyword, en el último 'PRIMERO: <VERBO>'. NO cae al texto almacenado
+    capado a 30k (cuya cola es narrativa media → falsos positivos)."""
+    fp = getattr(d, "file_path", None)
+    if fp and str(fp).lower().endswith(".pdf"):
+        try:
+            from backend.extraction.pdf_extractor import extract_pdf
+            tail = extract_pdf(fp, first_pages=0, last_pages=5).text or ""
+            z = _last_resuelve_zone(tail)
+            if z:
+                return z
+            m = list(_RE_PRIMERO_DECISION.finditer(tail))
+            if m:
+                return tail[m[-1].start():m[-1].start() + 2500]
+            return None
+        except Exception as e:  # pragma: no cover
+            logger.debug("dispositiva PDF falló (doc#%s): %s", getattr(d, "id", "?"), e)
+    # No-PDF (docx/.doc): usar la zona RESUELVE del texto (estos rara vez son fallos).
+    return _last_resuelve_zone(d.extracted_text or "")
+
+
+# Un doc clasificado SENTENCIA_1RA puede ser realmente de 2da instancia (mal etiquetado por
+# el librarian). El filename suele delatarlo ("SegundaInstancia", "fallo_confirma", etc.);
+# si no, el contenido (_doc_es_realmente_2da). Para `sentido_fallo_1st` debemos descartarlos.
+_RE_2DA_FILENAME = re.compile(
+    r"(?i)segund[ao]\s*instancia|2da?\s*instancia|2a\.?\s*inst|"
+    r"fallo[^a-z]*confirma|confirma[^a-z]*fallo|fallo[^a-z]*revoca|revoca[^a-z]*fallo"
+)
+
+
+def _is_segunda_instancia(d) -> bool:
+    if _RE_2DA_FILENAME.search(d.filename or ""):
+        return True
+    return _doc_es_realmente_2da(d.extracted_text or "")
 
 
 # Marcadores de que un doc clasificado SENTENCIA_1RA es REALMENTE una sentencia de 2da
@@ -2153,7 +2212,9 @@ _RE_VERBOS_2DA = re.compile(r"(?i)^\s*(?:primero\s*[\.\:]?\s*[-–]?\s*)?(?:CONF
 # proceso termina sin fallo de fondo. Señal decisiva → va primero en _FALLO_PATTERNS.
 _RE_DESIST_ACEPTADO = re.compile(
     r"(?:acept\w+|admit\w+|aprob\w+|reconoc\w+)\s+(?:el\s+|al\s+|del\s+|l[ao]\s+)?desistimiento"
-    r"|tener\s+por\s+desistid\w*"
+    # "tener por desistida la acción/tutela": exige que sea de la ACCIÓN (no del incidente)
+    # y NO condicional ("so pena de tener por desistido el incidente" — caso 40 falso+).
+    r"|(?<!pena de )\btener\s+por\s+desistid[ao]\s+(?:el\s+|la\s+|los\s+)?(?:acci[óo]n|tutela|solicitud|amparo)"
     r"|desistimiento[^.\n]{0,40}(?:archív|d[ae]r\s+por\s+terminad)",
     re.I,
 )
@@ -2177,7 +2238,10 @@ _FALLO_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
                                    r"derecho[s]?\s+fundamental)")),
     # CONCEDE: verbos del amparo + verbos dispositivos del SED context (cuando el juez
     # CONCEDE, ordena traslados/reintegros/nombramientos/dejar-sin-efecto-de-actos-SED).
-    ("CONCEDE",         re.compile(r"(?i)\b(?:tutel[aaerio]\w*|tut[ée]lese|conced[eaiu]\w*|conceder\b|"
+    # OJO: solo VERBOS del amparo. El sustantivo "tutela"/"acción de tutela" NO debe contar
+    # (antes `tutel[aaerio]\w*` pescaba "acción de tutela interpuesta por…" → falso CONCEDE,
+    # casos 98/247). Verbos: tutelar/tutélese, conceder, ampárese/amparar, proteger, otorgar.
+    ("CONCEDE",         re.compile(r"(?i)\b(?:tutelar\w*|tut[ée]les[ea]|conced[eaiou]\w*|conceder\b|"
                                    r"amp[áa]rese|amparar?\w*|protege\w*|otorga\w+|otorgar\b|"
                                    r"ordenar\s+(?:a|al)|ord[ée]nese|ord[ée]nase|"
                                    r"trasladar?\b|traslade?se|reintegrar?\b|rein[té]ges\w*|"
@@ -2255,12 +2319,8 @@ def extract_sentido_fallo_1ra_for_case(db: Session, case: Case) -> tuple[Optiona
     SENTENCIA_2DA / AUTO_CONCEDE_IMPUGNACION / IMPUGNACION / DESCONOCIDO (procesalmente
     OBLIGA a que haya habido fallo de 1ra si hay impugnación o incidente — art. 32 D2591/91).
     Returns (valor, fuente) — fuente ∈ {"desistimiento","sentencia","desconocido","recap_2da","none"}."""
-    # 0) DESISTIMIENTO aceptado por el juez: termina el proceso sin fallo de fondo.
-    # Determinista y decisivo → gana sobre el default CONCEDE de regex_pass (corre en
-    # Etapa 1, antes; fields.set es first-writer-wins).
-    if _desistimiento_aceptado(db, case):
-        return "DESISTIMIENTO", "desistimiento"
-    # 1) SENTENCIA_1RA "real" (no las 2da mal clasificadas). Usa el ÚLTIMO RESUELVE.
+    # 1) SENTENCIA_1RA "real" (descarta las 2da mal etiquetadas por filename O contenido).
+    # La dispositiva se lee del FINAL del PDF (no del texto capado), donde vive el resolutivo.
     sents = [
         d for d in db.query(Document).filter(
             Document.case_id == case.id, Document.doc_type == "SENTENCIA_1RA"
@@ -2268,24 +2328,23 @@ def extract_sentido_fallo_1ra_for_case(db: Session, case: Case) -> tuple[Optiona
     ]
     sents.sort(key=lambda d: -len(d.extracted_text or ""))
     for d in sents:
-        t = d.extracted_text
-        if _doc_es_realmente_2da(t):
-            continue  # mal clasificada; saltar
-        zone = _last_resuelve_zone(t) or t[-3000:]
-        tag = _classify_sentido_fallo(zone)
+        if _is_segunda_instancia(d):
+            continue  # es 2da mal etiquetada; su sentido va a sentido_fallo_2nd
+        zone = _dispositiva_zone(d)
+        tag = _classify_sentido_fallo(zone) if zone else None
         if tag:
             return tag, "sentencia"
 
-    # 2) DESCONOCIDO con zona RESUELVE clara (sentencia mal clasificada por el librarian)
+    # 2) DESCONOCIDO con dispositiva clara (sentencia 1ra mal clasificada por el librarian)
     for d in db.query(Document).filter(
         Document.case_id == case.id, Document.doc_type == "DESCONOCIDO"
     ).all():
         t = d.extracted_text or ""
         if not t or len(t) < 800:
             continue
-        if _doc_es_realmente_2da(t):
+        if _is_segunda_instancia(d):
             continue
-        zone = _last_resuelve_zone(t)
+        zone = _dispositiva_zone(d)
         if not zone:
             continue
         tag = _classify_sentido_fallo(zone)
@@ -2301,6 +2360,16 @@ def extract_sentido_fallo_1ra_for_case(db: Session, case: Case) -> tuple[Optiona
             tag = _classify_recap_1ra(t)
             if tag:
                 return tag, "recap_2da"
+
+    # 4) DESISTIMIENTO aceptado — ÚLTIMO RECURSO, solo si NO hay fallo de mérito propio.
+    # Jurídicamente un fallo de fondo (AMPARAR/NEGAR/carencia) SIEMPRE gobierna: el
+    # desistimiento aceptado solo define el sentido cuando el proceso terminó SIN
+    # sentencia (art. 26 D2591/91). Correrlo al final evita que un auto de
+    # desistimiento AJENO —carpeta mezclada por rad corto compartido entre juzgados
+    # distintos— clasifique mal un caso que sí tuvo fallo (bug casos 25/37: 2026-00037
+    # y 2026-00014 contaminados por el desistimiento de 2026-00014-00 del Hato).
+    if _desistimiento_aceptado(db, case):
+        return "DESISTIMIENTO", "desistimiento"
     return None, "none"
 
 
