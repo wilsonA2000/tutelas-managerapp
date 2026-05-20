@@ -12,33 +12,64 @@ router = APIRouter(prefix="/api/seguimiento", tags=["seguimiento"])
 
 COLOMBIA_TZ = timezone(timedelta(hours=-5))
 
+# Valores que NO viven en la columna `estado` sino que los deriva
+# _calcular_semaforo a partir de fecha_limite. Filtrar por estos exige
+# usar el semáforo, no el estado guardado, para coincidir con las cards.
+SEMAFORO_VALUES = {"VENCIDO", "URGENTE", "POR_VENCER", "EN_PLAZO"}
+
 
 def _calcular_semaforo(record: ComplianceTracking) -> str:
-    """Calcular estado semáforo basado en fecha límite."""
+    """Calcular el semáforo (badge de prioridad visual).
+
+    Prioridad (decisión 2026-05-19): el ESTADO MANUAL siempre prevalece sobre
+    el cálculo temporal. Solo cuando el estado es PENDIENTE (sin decisión
+    humana ni IA-suggested), el semáforo refleja la urgencia temporal o el
+    tipo_plazo.
+
+    Razón: si Wilson marca IMPUGNADO o EN_PROCESO, el badge debe reflejar
+    esa decisión inmediatamente. El badge "VENCIDO" se reserva para
+    pendientes con fecha pasada (candidatos reales a desacato).
+
+      1. CUMPLIDO / NO_APLICA / EN_PROCESO / IMPUGNADO / VENCIDO → estado tal cual
+      2. PENDIENTE → cálculo temporal (VENCIDO/URGENTE/POR_VENCER/EN_PLAZO)
+      3. Sin fecha → tipo_plazo (PERMANENTE/CONDICIONAL/SIN_PLAZO)
+    """
     if record.estado == "CUMPLIDO":
         return "CUMPLIDO"
-    if record.estado == "IMPUGNADO" and record.requiere_cumplimiento != "SI":
+    if record.estado == "NO_APLICA":
+        return "NO_APLICA"
+    if record.estado == "EN_PROCESO":
+        return "EN_PROCESO"
+    if record.estado == "IMPUGNADO":
+        # Si tiene requiere_cumplimiento=SI, igual aparece como IMPUGNADO en el badge
+        # (el chip 'Imp' separado ya indica la condición)
         return "IMPUGNADO"
+    if record.estado == "VENCIDO":
+        return "VENCIDO"
 
-    if not record.fecha_limite:
-        return "SIN_PLAZO"
-
-    try:
-        parts = record.fecha_limite.split("/")
-        fecha_lim = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
-        hoy = datetime.now(COLOMBIA_TZ).replace(tzinfo=None)
-        dias_restantes = (fecha_lim - hoy).days
-
-        if dias_restantes < 0:
-            return "VENCIDO"
-        elif dias_restantes <= 3:
-            return "URGENTE"
-        elif dias_restantes <= 7:
-            return "POR_VENCER"
-        else:
+    # PENDIENTE → cálculo temporal
+    if record.fecha_limite:
+        try:
+            parts = record.fecha_limite.split("/")
+            fecha_lim = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
+            hoy = datetime.now(COLOMBIA_TZ).replace(tzinfo=None)
+            dias_restantes = (fecha_lim - hoy).days
+            if dias_restantes < 0:
+                return "VENCIDO"
+            if dias_restantes <= 3:
+                return "URGENTE"
+            if dias_restantes <= 7:
+                return "POR_VENCER"
             return "EN_PLAZO"
-    except Exception:
-        return "SIN_PLAZO"
+        except Exception:
+            pass
+
+    # Sin fecha — el tipo_plazo describe la naturaleza
+    if record.tipo_plazo == "PERMANENTE":
+        return "PERMANENTE"
+    if record.tipo_plazo == "CONDICIONAL":
+        return "CONDICIONAL"
+    return "SIN_PLAZO"
 
 
 def _pipeline_stage(case: Case) -> dict:
@@ -81,6 +112,17 @@ def _pipeline_stage(case: Case) -> dict:
     }
 
 
+def _extraer_radicado_corto(case: Case) -> str:
+    """Extrae el radicado corto (YYYY-NNNNN) del folder_name del case.
+    Es el identificador que Wilson usa para reconocer cada tutela de un vistazo.
+    """
+    if not case or not case.folder_name:
+        return ""
+    import re as _re
+    m = _re.match(r"^(\d{4}-\d{4,5})", case.folder_name)
+    return m.group(1) if m else ""
+
+
 def _record_to_dict(r: ComplianceTracking, case: Case = None) -> dict:
     """Convertir registro a dict para API."""
     semaforo = _calcular_semaforo(r)
@@ -100,6 +142,7 @@ def _record_to_dict(r: ComplianceTracking, case: Case = None) -> dict:
         "id": r.id,
         "case_id": r.case_id,
         "folder_name": case.folder_name if case else None,
+        "radicado_corto": _extraer_radicado_corto(case) if case else "",
         "accionante": case.accionante if case else None,
         "juzgado": case.juzgado if case else None,
         "instancia": r.instancia,
@@ -120,6 +163,15 @@ def _record_to_dict(r: ComplianceTracking, case: Case = None) -> dict:
         "requiere_cumplimiento": r.requiere_cumplimiento,
         "extraido_por_ia": r.extraido_por_ia,
         "pipeline": _pipeline_stage(case),
+        # v2 — campos de la orden discreta
+        "ordinal_nombre": r.ordinal_nombre,
+        "tipo_plazo": r.tipo_plazo,
+        "destinatario_tipo": r.destinatario_tipo,
+        "accion_resumida": r.accion_resumida,
+        "condicion": r.condicion,
+        "verbo_orden": r.verbo_orden,
+        "fecha_especifica": r.fecha_especifica,
+        "evidencia_doc_id": r.evidencia_doc_id,
     }
 
 
@@ -132,7 +184,9 @@ def api_list_seguimiento(
     """Listar todos los seguimientos con semáforo calculado."""
     query = db.query(ComplianceTracking)
 
-    if estado:
+    # Los valores temporales (VENCIDO, etc.) se filtran por semáforo en el loop;
+    # solo los estados de decisión se filtran en SQL.
+    if estado and estado not in SEMAFORO_VALUES:
         query = query.filter(ComplianceTracking.estado == estado)
 
     records = query.order_by(ComplianceTracking.created_at.desc()).all()
@@ -144,24 +198,53 @@ def api_list_seguimiento(
     items = []
     for r in records:
         item = _record_to_dict(r, cases.get(r.case_id))
-        # Filtro por urgencia (semáforo)
-        if urgencia and item["semaforo"] != urgencia:
+        # Filtro por estado temporal (VENCIDO/URGENTE/...): vía semáforo, para
+        # que coincida con las cards del resumen (que también usan semáforo).
+        if estado in SEMAFORO_VALUES and item["semaforo"] != estado:
             continue
+        # Filtro por urgencia. Tres tipos de filtro según semántica:
+        #   - tipo_plazo (CONDICIONAL/PERMANENTE/SIN_PLAZO): atributo de la orden.
+        #   - estado     (EN_PROCESO/CUMPLIDO/NO_APLICA/IMPUGNADO): dimensión cumplimiento.
+        #   - semáforo   (VENCIDO/URGENTE/POR_VENCER/EN_PLAZO): dimensión temporal.
+        if urgencia:
+            if urgencia in ("CONDICIONAL", "PERMANENTE", "SIN_PLAZO"):
+                if r.tipo_plazo != urgencia:
+                    continue
+            elif urgencia == "IMPUGNADO":
+                if not (r.estado == "IMPUGNADO" or r.impugnado == "SI"):
+                    continue
+            elif urgencia in ("EN_PROCESO", "CUMPLIDO", "NO_APLICA"):
+                if r.estado != urgencia:
+                    continue
+            else:
+                if item["semaforo"] != urgencia:
+                    continue
         items.append(item)
 
     # Ordenar: VENCIDO primero, luego URGENTE, POR_VENCER, EN_PLAZO, CUMPLIDO
-    orden = {"VENCIDO": 0, "URGENTE": 1, "POR_VENCER": 2, "EN_PLAZO": 3, "SIN_PLAZO": 4, "IMPUGNADO": 5, "CUMPLIDO": 6}
+    orden = {
+        "VENCIDO": 0, "URGENTE": 1, "POR_VENCER": 2, "EN_PROCESO": 3,
+        "EN_PLAZO": 4, "CONDICIONAL": 5, "PERMANENTE": 6, "SIN_PLAZO": 7,
+        "IMPUGNADO": 8, "CUMPLIDO": 9, "NO_APLICA": 10,
+    }
     items.sort(key=lambda x: orden.get(x["semaforo"], 99))
 
-    # Resumen
+    # Resumen — usar la misma lógica que el filtro para coherencia (sin importar
+    # urgencia actual). Re-iteramos sobre TODOS los records para conteo global.
+    all_records = db.query(ComplianceTracking).all()
     resumen = {
-        "total": len(items),
-        "vencidos": sum(1 for i in items if i["semaforo"] == "VENCIDO"),
-        "urgentes": sum(1 for i in items if i["semaforo"] == "URGENTE"),
-        "por_vencer": sum(1 for i in items if i["semaforo"] == "POR_VENCER"),
-        "en_plazo": sum(1 for i in items if i["semaforo"] == "EN_PLAZO"),
-        "cumplidos": sum(1 for i in items if i["semaforo"] == "CUMPLIDO"),
-        "impugnados": sum(1 for i in items if i["semaforo"] == "IMPUGNADO"),
+        "total": len(all_records),
+        "vencidos":    sum(1 for r in all_records if _calcular_semaforo(r) == "VENCIDO"),
+        "urgentes":    sum(1 for r in all_records if _calcular_semaforo(r) == "URGENTE"),
+        "por_vencer":  sum(1 for r in all_records if _calcular_semaforo(r) == "POR_VENCER"),
+        "en_plazo":    sum(1 for r in all_records if _calcular_semaforo(r) == "EN_PLAZO"),
+        "en_proceso":  sum(1 for r in all_records if r.estado == "EN_PROCESO"),
+        "cumplidos":   sum(1 for r in all_records if r.estado == "CUMPLIDO"),
+        "impugnados":  sum(1 for r in all_records if r.estado == "IMPUGNADO" or r.impugnado == "SI"),
+        "condicional": sum(1 for r in all_records if r.tipo_plazo == "CONDICIONAL"),
+        "permanente":  sum(1 for r in all_records if r.tipo_plazo == "PERMANENTE"),
+        "sin_plazo":   sum(1 for r in all_records if r.tipo_plazo == "SIN_PLAZO"),
+        "no_aplica":   sum(1 for r in all_records if r.estado == "NO_APLICA"),
     }
 
     return {"items": items, "resumen": resumen}
@@ -212,7 +295,17 @@ def api_get_seguimiento(record_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{record_id}")
 def api_update_seguimiento(record_id: int, body: dict, db: Session = Depends(get_db)):
-    """Actualizar un seguimiento (estado, notas, fecha cumplimiento, etc.)."""
+    """Actualizar un seguimiento (estado, notas, fecha cumplimiento, etc.).
+
+    Emite eventos al audit_log para todos los cambios significativos:
+    - Cambio de estado → COMPLIANCE_STATE_CHANGED
+    - Nota agregada → COMPLIANCE_NOTE_ADDED (solo el delta, no la nota completa)
+    - Otros campos → FIELD_MODIFIED genérico
+    """
+    from backend.services.audit_service import (
+        audit_event, EVT_COMPLIANCE_STATE, EVT_COMPLIANCE_NOTE, EVT_FIELD_MODIFIED,
+    )
+
     record = db.query(ComplianceTracking).filter(ComplianceTracking.id == record_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
@@ -222,11 +315,84 @@ def api_update_seguimiento(record_id: int, body: dict, db: Session = Depends(get
         "fecha_limite", "plazo_dias", "responsable", "orden_judicial",
         "impugnado", "efecto_impugnacion", "requiere_cumplimiento",
     ]
+
+    # Capturar estado anterior para detectar cambios
+    snapshot = {f: getattr(record, f) for f in updatable}
+
     for field in updatable:
         if field in body:
             setattr(record, field, body[field])
 
     record.updated_at = datetime.utcnow()
+    db.flush()  # asegurar que record tiene los valores nuevos sin commitear aún
+
+    # Construir contexto del evento
+    ordinal = record.ordinal_nombre or ""
+    instancia = record.instancia or ""
+    ord_label = f"{ordinal}/{instancia}".strip("/")
+
+    # Detectar cambio de estado (evento principal)
+    if "estado" in body and snapshot["estado"] != record.estado:
+        desc = f"Estado cambiado {snapshot['estado']} → {record.estado}"
+        if ord_label:
+            desc += f" ({ord_label})"
+        audit_event(
+            db,
+            case_id=record.case_id,
+            action=EVT_COMPLIANCE_STATE,
+            actor="wilson",  # TODO: en multiusuario, leer del token
+            entity_type="compliance",
+            entity_id=record.id,
+            field_name="estado",
+            old_value=snapshot["estado"],
+            new_value=record.estado,
+            description=desc,
+            meta={"ordinal_nombre": ordinal, "instancia": instancia},
+            commit=False,
+        )
+
+    # Detectar nota agregada (el campo creció)
+    if "notas" in body and (snapshot["notas"] or "") != (record.notas or ""):
+        old_n = snapshot["notas"] or ""
+        new_n = record.notas or ""
+        if new_n.startswith(old_n) and len(new_n) > len(old_n):
+            # Es un append: extraer solo el delta
+            delta = new_n[len(old_n):].strip()
+        else:
+            delta = new_n
+        audit_event(
+            db,
+            case_id=record.case_id,
+            action=EVT_COMPLIANCE_NOTE,
+            actor="wilson",
+            entity_type="compliance",
+            entity_id=record.id,
+            field_name="notas",
+            description=f"Nota agregada{f' ({ord_label})' if ord_label else ''}",
+            meta={"delta": delta[:500], "ordinal_nombre": ordinal, "instancia": instancia},
+            commit=False,
+        )
+
+    # Otros campos (fecha_cumplimiento, plazo_dias, etc.) → un evento genérico
+    for field in updatable:
+        if field in ("estado", "notas"):
+            continue  # ya manejados arriba
+        if field in body and snapshot[field] != getattr(record, field):
+            audit_event(
+                db,
+                case_id=record.case_id,
+                action=EVT_FIELD_MODIFIED,
+                actor="wilson",
+                entity_type="compliance",
+                entity_id=record.id,
+                field_name=field,
+                old_value=snapshot[field],
+                new_value=getattr(record, field),
+                description=f"{field}: {snapshot[field]} → {getattr(record, field)}",
+                meta={"ordinal_nombre": ordinal, "instancia": instancia},
+                commit=False,
+            )
+
     db.commit()
 
     case = db.query(Case).filter(Case.id == record.case_id).first()
@@ -244,6 +410,10 @@ def api_scan_fallos(db: Session = Depends(get_db)):
         Case.sentido_fallo_1st.notilike("%niega%"),
     ).all()
 
+    # Clave compuesta para evitar duplicados con la extracción v2 (que crea
+    # múltiples filas por case, una por orden discreta). El /scan solo crea
+    # un placeholder por case_id+instancia (sin ordinal_nombre); si el case
+    # ya tiene CUALQUIER fila en compliance_tracking, no crear placeholder.
     existing_case_ids = {r.case_id for r in db.query(ComplianceTracking.case_id).all()}
 
     created = 0
@@ -283,7 +453,21 @@ def api_scan_fallos(db: Session = Depends(get_db)):
 
 @router.post("/{record_id}/extract-order")
 def api_extract_order(record_id: int, db: Session = Depends(get_db)):
-    """Usar IA para extraer la orden judicial y plazo de la sentencia del caso."""
+    """Extraer la orden judicial y plazo de la sentencia del caso.
+
+    Estrategia híbrida (2026-05-19):
+      1. **Regex first**: `seguimiento_extractor.extract_plazo_cumplimiento` lee head+tail
+         del PDF y captura plazos estructurados (cuarenta y ocho (48) horas, 10 días,
+         mes calendario, etc.). 100% accuracy validado en gold standard de 18 fallos.
+         Si la 2da solo CONFIRMA, hace fallback automático a la sentencia 1ra.
+      2. **LLM fallback**: si regex no extrae (plazos no estándar, redacción atípica),
+         llama Qwen 3-4B local con prompt minimalista.
+    """
+    import os
+    from pathlib import Path
+    from backend.database.models import Document
+    from backend.services.seguimiento_extractor import extract_plazo_cumplimiento
+
     record = db.query(ComplianceTracking).filter(ComplianceTracking.id == record_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
@@ -292,17 +476,72 @@ def api_extract_order(record_id: int, db: Session = Depends(get_db)):
     if not case:
         raise HTTPException(status_code=404, detail="Caso no encontrado")
 
-    # Buscar documentos de sentencia
-    from backend.database.models import Document
+    # Buscar documentos de sentencia (PDF en disco)
     sentencias = db.query(Document).filter(
         Document.case_id == case.id,
         or_(
-            Document.doc_type == "SENTENCIA",
+            Document.doc_type.ilike("%SENTENCIA%"),
+            Document.doc_type.ilike("%FALLO%"),
             Document.filename.ilike("%sentencia%"),
             Document.filename.ilike("%fallo%"),
+            Document.filename.ilike("%confirma%"),
         ),
-    ).all()
+        Document.filename.ilike("%.pdf"),
+    ).order_by(Document.id).all()
 
+    pdfs_disponibles = [d.file_path for d in sentencias if d.file_path and os.path.exists(d.file_path)]
+
+    # — Etapa 1: Regex (preferir PDF según dónde vive la ORDEN) —
+    # Regla jurídica (fix 2026-05-19): la orden vive en la sentencia de 1ra
+    # instancia SALVO que la 2da REVOQUE o MODIFIQUE. Una 2da que solo CONFIRMA no
+    # repite la orden → leer la 1ra (antes preferíamos la 2da y se alucinaba/perdía).
+    s2 = (case.sentido_fallo_2nd or "").upper()
+    prefer_2da = "REVOCA" in s2 or "MODIFICA" in s2
+    def score_2da(p): return ("segunda" in p.lower() or "2da" in p.lower() or "confirma" in p.lower(), "primera" not in p.lower())
+    def score_1ra(p): return ("primera" in p.lower() or "primer" in p.lower() or "1ra" in p.lower(), "segunda" not in p.lower())
+    pdfs_disponibles.sort(key=score_2da if prefer_2da else score_1ra, reverse=True)
+
+    if pdfs_disponibles:
+        main = pdfs_disponibles[0]
+        fallback = pdfs_disponibles[1:]
+        try:
+            regex_result = extract_plazo_cumplimiento(
+                main,
+                sentido_fallo_1st=case.sentido_fallo_1st,
+                sentido_fallo_2nd=case.sentido_fallo_2nd,
+                fallback_paths=fallback,
+            )
+        except Exception:
+            regex_result = None
+        if regex_result:
+            base_fecha = record.fecha_notificacion or record.fecha_fallo
+            fecha_limite = None
+            if base_fecha:
+                try:
+                    parts = base_fecha.split("/")
+                    base = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
+                    fecha_limite = (base + timedelta(days=regex_result.plazo_dias)).strftime("%d/%m/%Y")
+                except Exception:
+                    pass
+            record.plazo_dias = regex_result.plazo_dias
+            record.orden_judicial = f"[{regex_result.ordinal}] {regex_result.destinatario}: {regex_result.plazo_raw}"
+            if not record.responsable:
+                record.responsable = regex_result.destinatario[:200]
+            if fecha_limite:
+                record.fecha_limite = fecha_limite
+            record.extraido_por_ia = f"REGEX:{regex_result.source}"
+            record.updated_at = datetime.utcnow()
+            db.commit()
+            return {
+                "plazo_dias": regex_result.plazo_dias,
+                "orden_judicial": record.orden_judicial,
+                "responsable": record.responsable,
+                "fecha_limite": fecha_limite,
+                "source": f"regex ({regex_result.source})",
+                "ordinal": regex_result.ordinal,
+            }
+
+    # — Etapa 2: LLM fallback (cuando regex no encontró nada) —
     if not sentencias:
         return {"error": "No se encontraron documentos de sentencia en este caso"}
 
