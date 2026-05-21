@@ -45,7 +45,13 @@ from backend.email.rad_utils import normalize_rad23
 
 EXPORTS = Path(__file__).resolve().parents[1] / "data" / "exports"
 
-ENUM_FALLO_1ST = {"CONCEDE", "NIEGA", "IMPROCEDENTE", "DESISTIDO", "TRAMITE", "RECHAZA"}
+# Enum 1ra alineado con backend.v9.field_extractor.SENTIDO_FALLO_VOCAB (2026-05-20):
+# CARENCIA_OBJETO/HECHO_SUPERADO (la vulneración cesó), DESISTIMIENTO (desistimiento
+# aceptado, art.26 D2591/91) y CONCEDE_PARCIAL son sentidos válidos que produce v9.
+# Se conservan DESISTIDO/TRAMITE/RECHAZA por tolerancia a valores legacy.
+ENUM_FALLO_1ST = {"CONCEDE", "CONCEDE_PARCIAL", "NIEGA", "IMPROCEDENTE", "DESISTIMIENTO",
+                  "CARENCIA_OBJETO", "HECHO_SUPERADO",
+                  "DESISTIDO", "TRAMITE", "RECHAZA"}
 ENUM_FALLO_2ND = {"CONFIRMA", "REVOCA", "MODIFICA", "INHIBE", "NULIDAD", "DECLARA_NULIDAD"}
 DATE_RE = re.compile(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})")
 
