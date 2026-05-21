@@ -20,7 +20,9 @@ from backend.cognition.folder_renamer import (
     clean_accionante,
     is_likely_real_name,
     needs_rename,
+    normalize_homoglyphs,
     rename_folder_if_needed,
+    sanitize_for_fs,
 )
 
 
@@ -165,6 +167,44 @@ class TestIsLikelyRealName:
         assert not is_likely_real_name("PRETENDE QUE SE ORDENE")
 
 
+# ---------- normalize_homoglyphs (homóglifos cirílicos, caso c325) ----------
+
+class TestNormalizeHomoglyphs:
+    def test_cyrillic_to_latin(self):
+        # 'CAMACHО MOTТА' con О (U+041E) y Т (U+0422) cirílicos
+        dirty = "ELVIA LUCIA CAMACHО MOTТA"
+        assert normalize_homoglyphs(dirty) == "ELVIA LUCIA CAMACHO MOTTA"
+
+    def test_no_op_on_clean_latin(self):
+        clean = "JUAN PEREZ GOMEZ"
+        assert normalize_homoglyphs(clean) == clean
+
+    def test_empty(self):
+        assert normalize_homoglyphs("") == ""
+        assert normalize_homoglyphs(None) is None
+
+    def test_sanitize_for_fs_latinizes(self):
+        assert sanitize_for_fs("CAMACHО MOTТA") == "CAMACHO MOTTA"
+
+    def test_clean_accionante_latinizes(self):
+        assert clean_accionante("ELVIA LUCIA CAMACHО MOTТA") == "ELVIA LUCIA CAMACHO MOTTA"
+
+    def test_build_target_name_with_cyrillic(self, db):
+        c = Case(
+            folder_name="2026-68538 SIN ACCIONANTE",
+            folder_path="/tmp/x/2026-68538 SIN ACCIONANTE",
+            processing_status="REVISION",
+            accionante="ELVIA LUCIA CAMACHО MOTТA",
+        )
+        db.add(c)
+        db.commit()
+        new_name, is_clean = build_target_name(c)
+        assert is_clean is True
+        assert new_name == "2026-68538 ELVIA LUCIA CAMACHO MOTTA"
+        # sin caracteres no-ASCII residuales
+        assert all(ord(ch) < 128 for ch in new_name)
+
+
 # ---------- build_target_name ----------
 
 class TestBuildTargetName:
@@ -219,6 +259,26 @@ class TestRenameFolderIfNeeded:
         assert result["action"] == "renamed"
         assert "\n" not in c.folder_name
         assert c.folder_name == "2026-00122 SOL MILENA PEREZ DELGADO"
+
+    def test_sin_accionante_renamed_when_accionante_known(self, db, tmp_path):
+        # Bug central (Fix A): la ingesta crea "<rad> SIN_ACCIONANTE"; al descubrir
+        # el accionante, la carpeta debe renombrarse a "<rad> <ACCIONANTE>".
+        old_name = "2026-00167 SIN ACCIONANTE"
+        old_dir = tmp_path / old_name
+        old_dir.mkdir()
+        c = Case(
+            folder_name=old_name,
+            folder_path=str(old_dir),
+            processing_status="PENDIENTE",
+            accionante="JOSE FERNANDO BADILLO ORTIZ",
+        )
+        db.add(c)
+        db.commit()
+        result = rename_folder_if_needed(db, c, base_dir=tmp_path)
+        assert result["action"] == "renamed"
+        assert c.folder_name == "2026-00167 JOSE FERNANDO BADILLO ORTIZ"
+        assert (tmp_path / "2026-00167 JOSE FERNANDO BADILLO ORTIZ").is_dir()
+        assert not old_dir.exists()
 
     def test_idempotent(self, db, tmp_path):
         c = Case(

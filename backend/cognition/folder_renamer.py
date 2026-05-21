@@ -28,6 +28,26 @@ from backend.database.models import Case
 logger = logging.getLogger("tutelas.folder_renamer")
 
 
+# Homóglifos cirílicos → latín. El OCR/LLM confunde letras cirílicas con sus
+# gemelas latinas (О↔O, Т↔T, А↔A, …) y las persiste en `accionante`, produciendo
+# nombres con scripts mezclados (visto en c325 "CAMACHО MOTТА"). Ningún nombre
+# colombiano real lleva cirílico → normalizar siempre es seguro.
+CYRILLIC_TO_LATIN = {
+    'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H', 'К': 'K', 'М': 'M',
+    'О': 'O', 'Р': 'P', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'І': 'I', 'Ј': 'J',
+    'Ѕ': 'S', 'Ё': 'E', 'Я': 'R',
+    'а': 'a', 'е': 'e', 'о': 'o', 'с': 'c', 'р': 'p', 'х': 'x', 'у': 'y',
+    'к': 'k', 'м': 'm', 'н': 'h', 'т': 't', 'в': 'b', 'і': 'i', 'ј': 'j',
+}
+
+
+def normalize_homoglyphs(s: str) -> str:
+    """Reemplaza homóglifos cirílicos por su gemela latina. No-op si no hay."""
+    if not s:
+        return s
+    return ''.join(CYRILLIC_TO_LATIN.get(ch, ch) for ch in s)
+
+
 # Caracteres no permitidos en filesystem
 INVALID_FS_CHARS = re.compile(r'[<>:"/\\|?*\n\r\t]')
 
@@ -138,6 +158,7 @@ def clean_accionante(s: str) -> str:
     """
     if not s:
         return ""
+    s = normalize_homoglyphs(s)
     parts = re.split(r"[\n\r\t]+", s)
     first = next((p.strip() for p in parts if p.strip()), "")
     first = _apply_trailing_cuts(first)
@@ -210,9 +231,10 @@ def is_likely_real_name(s: str) -> bool:
 
 
 def sanitize_for_fs(s: str, max_len: int = 60) -> str:
-    """Limpia string para filename."""
+    """Limpia string para filename (incluye normalización de homóglifos)."""
     if not s:
         return ""
+    s = normalize_homoglyphs(s)
     s = INVALID_FS_CHARS.sub(" ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s[:max_len]

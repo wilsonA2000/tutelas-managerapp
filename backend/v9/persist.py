@@ -24,6 +24,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from backend.v9.types import ExtractedFields, FieldSource
+from backend.cognition.folder_renamer import normalize_homoglyphs
 
 logger = logging.getLogger("tutelas.v9.persist")
 
@@ -179,6 +180,11 @@ def persist(
         col = _CASE_FIELD_MAP.get(v9_key)
         if not col:
             continue
+        # Normaliza homóglifos cirílicos (О→O, Т→T, …) en cualquier valor de texto
+        # antes de persistir. El OCR/LLM los introduce y ensucian campos de identidad
+        # como `accionante` (visto en c325). Latinizar siempre es seguro.
+        if isinstance(value, str):
+            value = normalize_homoglyphs(value)
         # F7: rechazar fechas cuyo año cae fuera de la ventana del rad (fecha citada mal
         # tomada como fallo/respuesta). No se persiste — deja el campo vacío.
         if _date_out_of_range(v9_key, value, rad_year):
