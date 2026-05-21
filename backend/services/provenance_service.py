@@ -94,19 +94,28 @@ def list_packages_in_case(db: Session, case_id: int) -> list[dict[str, Any]]:
     Retorna solo los emails que tienen al menos 1 Document vinculado,
     ordenados por fecha de recepcion descendente.
     """
-    # Emails del caso que tienen al menos 1 documento hijo
+    # DOC-CÉNTRICO (v9): un email "pertenece" a este caso si tiene ≥1 documento EN ESTE
+    # CASO, sin importar el `Email.case_id` (lo fija el matcher y puede estar desfasado del
+    # placement por contenido de la v9; además un email puede abarcar varios casos). Antes
+    # filtraba por Email.case_id → la pestaña Correos salía vacía cuando los docs estaban
+    # bien (por contenido) pero el email apuntaba a otro caso.
+    email_ids = [
+        row[0] for row in db.query(Document.email_id)
+        .filter(Document.case_id == case_id, Document.email_id.isnot(None))
+        .distinct().all()
+    ]
     emails = (
         db.query(Email)
-        .filter(Email.case_id == case_id)
+        .filter(Email.id.in_(email_ids))
         .order_by(Email.date_received.desc().nullslast())
         .all()
-    )
+    ) if email_ids else []
 
     packages = []
     for em in emails:
         docs = (
             db.query(Document)
-            .filter(Document.email_id == em.id)
+            .filter(Document.email_id == em.id, Document.case_id == case_id)
             .order_by(Document.id)
             .all()
         )
