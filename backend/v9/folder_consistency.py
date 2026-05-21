@@ -71,6 +71,8 @@ def check_folder_consistency(db: Session, case_id: int) -> dict:
                 "detalle": d.verificacion_detalle or "",
             })
             continue  # ya marcado; no duplicar con conflación
+        if v == "OK":
+            continue  # confirmado que pertenece (verificación o decisión humana) → no flaggear
         # conflación cross-juzgado (lo que la verificación por rad corto no ve)
         if crad:
             orad = _own_rad(d.filename, d.extracted_text)
