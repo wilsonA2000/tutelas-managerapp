@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -25,6 +26,41 @@ from sqlalchemy.orm import Session
 from backend.v9.types import ExtractedFields, FieldSource
 
 logger = logging.getLogger("tutelas.v9.persist")
+
+
+# F7 (2026-05-21): cota de año por campo fecha, relativa al año del rad (= año de radicación
+# de la tutela). Ninguna actuación procesal antecede a la radicación (lo más bajo es +0).
+# Mata el bug recurrente del extractor que toma fechas CITADAS (Decreto 2002, sentencia
+# 2024 en un caso 2026, etc.) como fecha de fallo/respuesta → fecha_fallo < ingreso, año off.
+_DATE_YEAR_BOUNDS: dict[str, tuple[int, int]] = {
+    "fecha_ingreso":               (0, 1),
+    "fecha_fallo_1st":             (0, 1),
+    "fecha_respuesta":             (0, 1),
+    "fecha_fallo_2nd":             (0, 2),
+    "fecha_apertura_incidente":    (0, 3),
+    "fecha_apertura_incidente_2":  (0, 3),
+    "fecha_apertura_incidente_3":  (0, 3),
+}
+
+
+def _rad_year(case) -> Optional[int]:
+    """Año de radicación (díg. 12-16 del rad23)."""
+    d = re.sub(r"\D", "", getattr(case, "radicado_23_digitos", None) or "")
+    if len(d) >= 16 and d[12:16].isdigit():
+        return int(d[12:16])
+    return None
+
+
+def _date_out_of_range(v9_key: str, value: str, rad_year: Optional[int]) -> bool:
+    """True si `value` (DD/MM/YYYY) cae fuera de [rad_year+lo, rad_year+hi] del campo."""
+    if rad_year is None or v9_key not in _DATE_YEAR_BOUNDS:
+        return False
+    m = re.search(r"\b(20\d{2})\b", value or "")
+    if not m:
+        return False
+    y = int(m.group(1))
+    lo, hi = _DATE_YEAR_BOUNDS[v9_key]
+    return not (rad_year + lo <= y <= rad_year + hi)
 
 
 # Mapeo ExtractedFields key → Case ORM column.
@@ -135,11 +171,22 @@ def persist(
 
     changes: dict[str, dict] = {}
     sticky_conflicts: list[dict] = []  # rads ajenos detectados que NO se aplican
+    rejected_dates: list[dict] = []    # F7: fechas fuera del año del rad ±N
+    rad_year = _rad_year(case)
     for v9_key, value in fields.values.items():
         if not value:
             continue
         col = _CASE_FIELD_MAP.get(v9_key)
         if not col:
+            continue
+        # F7: rechazar fechas cuyo año cae fuera de la ventana del rad (fecha citada mal
+        # tomada como fallo/respuesta). No se persiste — deja el campo vacío.
+        if _date_out_of_range(v9_key, value, rad_year):
+            rejected_dates.append({"field": v9_key, "value": value, "rad_year": rad_year})
+            logger.warning(
+                "Case %d: %s=%r rechazado por F7 (fuera del año del rad %s)",
+                case_id, v9_key, value, rad_year,
+            )
             continue
         current = getattr(case, col, None)
         # Respeta valor manual previo
@@ -216,6 +263,7 @@ def persist(
             "dry_run": True,
             "changes": changes,
             "sticky_conflicts": sticky_conflicts,
+            "rejected_dates": rejected_dates,
             "completitud": fields.completitud(),
         }
 
@@ -248,5 +296,6 @@ def persist(
         "dry_run": False,
         "changes": changes,
         "sticky_conflicts": sticky_conflicts,
+        "rejected_dates": rejected_dates,
         "completitud": fields.completitud(),
     }
