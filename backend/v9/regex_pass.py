@@ -24,6 +24,136 @@ from typing import Optional
 
 from backend.v9.types import ExtractedFields, FieldSource
 from backend.v9.doc_io import DocText
+from backend.v9.catalog_resolve import resolve_abogado
+
+import unicodedata as _ud
+
+# ============================================================
+# HELPERS DE PERTENENCIA AL CASE (validar que un doc trata del accionante)
+# ============================================================
+# Usado para filtrar docs RESPUESTA "prestados" a una carpeta (insumos de otras
+# tutelas que el operador metió por error). También importado por field_extractor.
+
+_ACCIONANTE_STOP = {
+    "DE", "DEL", "LA", "LAS", "LOS", "EL", "Y", "O", "EN", "POR", "PARA", "CON",
+    "PERSONERIA", "MUNICIPAL", "MUNICIPIO", "DEPARTAMENTAL", "DEPARTAMENTO",
+    "REPRESENTACION", "REPRESENTANTE", "ACCIONANTE", "TUTELANTE", "DEFENSOR",
+    "DEFENSORIA", "PUEBLO", "AGENCIA", "OFICIOSO", "OFICIOSA", "FAMILIA",
+}
+
+
+def _strip_accents_upper(s: str) -> str:
+    norm = _ud.normalize("NFD", s.upper())
+    return "".join(c for c in norm if _ud.category(c) != "Mn")
+
+
+def accionante_tokens(accionante: Optional[str]) -> set[str]:
+    """Tokens significativos del accionante (≥4 letras, sin stopwords, sin tildes)."""
+    if not accionante:
+        return set()
+    norm = _strip_accents_upper(accionante)
+    norm = re.sub(r"[^A-Z\s]", " ", norm)
+    return {t for t in norm.split() if len(t) >= 4 and t not in _ACCIONANTE_STOP}
+
+
+def doc_mentions_accionante(tokens: set[str], doc_text: str) -> bool:
+    """≥2 tokens significativos del accionante deben aparecer en el doc. Si el
+    accionante tiene <2 tokens significativos (p.ej. "PERSONERIA MUNICIPAL"),
+    exige ≥1. Devuelve False si tokens está vacío o doc_text es vacío."""
+    if not tokens or not doc_text:
+        return False
+    norm = _strip_accents_upper(doc_text)
+    hits = sum(1 for t in tokens if t in norm)
+    needed = 2 if len(tokens) >= 2 else 1
+    return hits >= needed
+
+
+def _rad_corto_from_23(rad23: Optional[str]) -> Optional[str]:
+    """Del rad de 23 dígitos extrae el formato corto "YYYY-#####" usando los
+    dígitos 12-15 (año) y 16-20 (secuencial). Sin separadores intermedios."""
+    if not rad23:
+        return None
+    digits = re.sub(r"\D", "", rad23)
+    if len(digits) < 21:
+        return None
+    return f"{digits[12:16]}-{digits[16:21]}"
+
+
+def _rad_in_text(rad: str, norm_text: str) -> bool:
+    """Busca un radicado en un texto normalizado (mayúsculas, sin tildes).
+    Tolera separadores entre los dígitos pero exige boundaries antes/después
+    para evitar colisiones por substring (un rad corto "2026-00037" no debe
+    matchear si los 9 dígitos aparecen dentro de otro número más largo)."""
+    digits = re.sub(r"\D", "", rad or "")
+    if not digits or not norm_text:
+        return False
+    # Permitir hasta 3 separadores no-dígito entre dígitos consecutivos,
+    # boundary = no-dígito (o inicio/fin) a cada lado.
+    pat = r"(?<!\d)" + r"\D{0,3}".join(digits) + r"(?!\d)"
+    return re.search(pat, norm_text) is not None
+
+
+def doc_belongs_to_case(
+    accionante_tok: set[str],
+    radicados: set[str],
+    doc_text: str,
+    doc_filename: str = "",
+) -> bool:
+    """Decide si un doc trata del case actual. Pasa si:
+      (a) menciona ≥2 tokens significativos del accionante, O
+      (b) cita el rad23 o el rad_forest del case (estos son globalmente únicos), O
+      (c) cita un rad corto del case ("YYYY-#####") Y además:
+            - el rad corto aparece también en el filename (señal operativa fuerte:
+              el operador nombró el archivo con ese rad), O
+            - al menos 1 token del accionante aparece en el texto (desambigua
+              dos tutelas distintas con el mismo rad corto en juzgados diferentes).
+    Cubre contestaciones SED genéricas que solo citan el radicado, sin dejar
+    pasar docs prestados de otras tutelas que comparten rad corto.
+    Si no hay ni accionante ni radicados, devuelve True (no se puede filtrar)."""
+    if not accionante_tok and not radicados:
+        return True
+    if accionante_tok and doc_mentions_accionante(accionante_tok, doc_text):
+        return True
+    if not radicados:
+        return False
+    norm_text = _strip_accents_upper(doc_text or "")
+    norm_filename = _strip_accents_upper(doc_filename or "")
+    norm_haystack = norm_filename + "\n" + norm_text
+    # (b) rad globalmente único en haystack
+    for rad in radicados:
+        if not rad:
+            continue
+        digits = re.sub(r"\D", "", rad)
+        # rad23 = 21+ dígitos · rad_forest SED = 10-11 dígitos · rad corto = 9 dígitos
+        if len(digits) >= 10 and _rad_in_text(rad, norm_haystack):
+            return True
+    # (c) rad corto con desambiguación
+    acc_any_hit = bool(
+        accionante_tok and any(t in norm_text for t in accionante_tok)
+    )
+    for rad in radicados:
+        if not rad:
+            continue
+        digits = re.sub(r"\D", "", rad)
+        if len(digits) != 9:  # rad corto: YYYY + 5 dígitos
+            continue
+        in_filename = _rad_in_text(rad, norm_filename)
+        in_text = _rad_in_text(rad, norm_text)
+        if in_filename:
+            return True
+        if in_text and acc_any_hit:
+            return True
+    return False
+
+
+def _rad_corto_from_folder(folder_name: Optional[str]) -> Optional[str]:
+    """Del folder_name del case extrae el rad corto "YYYY-#####"."""
+    if not folder_name:
+        return None
+    m = re.match(r"\s*(\d{4})\s*[-/\s]\s*(\d{3,5})", folder_name)
+    if not m:
+        return None
+    return f"{m.group(1)}-{m.group(2).zfill(5)}"
 
 logger = logging.getLogger("tutelas.v9.regex_pass")
 
@@ -533,7 +663,7 @@ _DOC_PRIORITY = {
     "fecha_fallo_1st": ["SENTENCIA", "OTRO"],
     "sentido_fallo_2nd": ["SENTENCIA", "IMPUGNACION", "OTRO"],
     "fecha_fallo_2nd": ["SENTENCIA", "IMPUGNACION", "OTRO"],
-    "abogado_responsable": ["RESPUESTA", "OTRO"],
+    "abogado_responsable": ["RESPUESTA"],
     "fecha_apertura_incidente": ["INCIDENTE", "OTRO"],
 }
 
@@ -585,7 +715,14 @@ def _derive_accionante_from_folder(folder_name: Optional[str]) -> Optional[str]:
     return None
 
 
-def run(docs: list[DocText], fields: ExtractedFields, folder_name: Optional[str] = None) -> ExtractedFields:
+def run(
+    docs: list[DocText],
+    fields: ExtractedFields,
+    folder_name: Optional[str] = None,
+    *,
+    case_accionante: Optional[str] = None,
+    case_radicados: Optional[set[str]] = None,
+) -> ExtractedFields:
     """Aplica todos los regex del library a los docs y llena los campos vacíos.
 
     Política: una vez que un campo tiene valor, no se reescribe (set() lo
@@ -668,12 +805,44 @@ def run(docs: list[DocText], fields: ExtractedFields, folder_name: Optional[str]
     if fields.is_empty("impugnacion"):
         fields.set("impugnacion", "NO", FieldSource.REGEX)
 
-    # ----- Abogado responsable (footer DOCX de respuesta) -----
-    for d in _docs_in_order(docs, "abogado_responsable"):
-        if fields.is_empty("abogado_responsable"):
+    # ----- Abogado responsable (fallback si field_extractor_pass no llenó) -----
+    # Regla cerrada (feedback Wilson 2026-05-18, mem feedback-abogado-responsable-fuente):
+    #   (1) Universo restringido a docs doc_type == "RESPUESTA".
+    #   (2) El firmante debe resolver a uno de los 17 abogados oficiales (catalogo,
+    #       conf >= 0.85). Si no, NO escribir nada.
+    #   (3) El doc debe pertenecer al case: accionante (≥2 tokens) O radicado en
+    #       texto/filename con boundaries. Se usa SIEMPRE el accionante/radicados
+    #       pasados EXPLÍCITAMENTE por el pipeline (case_accionante / case_radicados),
+    #       NO `fields.values` — porque la extracción de accionante puede estar
+    #       contaminada por docs prestados a la carpeta y envenenar el filtro.
+    if fields.is_empty("abogado_responsable"):
+        acc_tokens_local = accionante_tokens(case_accionante)
+        rads_local = set(case_radicados) if case_radicados else set()
+        # Si el caller no proveyó radicados, derivar al menos del folder_name
+        if not rads_local and folder_name:
+            rc = _rad_corto_from_folder(folder_name)
+            if rc:
+                rads_local.add(rc)
+        for d in docs:
+            if not d.ok or _doctype(d) != "RESPUESTA":
+                continue
+            if not fields.is_empty("abogado_responsable"):
+                break
+            # Regla (3): si el pipeline pasó accionante/rads, filtrar; si no
+            # (test sintético sin DB), no filtrar por pertenencia.
+            if (acc_tokens_local or rads_local) and not doc_belongs_to_case(
+                acc_tokens_local, rads_local, d.text, d.filename
+            ):
+                continue
             v = _extract_abogado_footer(d.text)
-            if v:
-                fields.set("abogado_responsable", v, FieldSource.REGEX)
+            if not v:
+                continue
+            canonical, conf = resolve_abogado(v)
+            if not canonical or conf < 0.85:
+                continue
+            fields.set("abogado_responsable", v, FieldSource.REGEX)
+            fields.abogado_canonical = canonical
+            fields.abogado_canonical_confidence = conf
 
     # ----- Fallback accionante desde folder_name si regex no encontró -----
     if fields.is_empty("accionante") and folder_name:

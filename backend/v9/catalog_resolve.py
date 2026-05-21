@@ -176,6 +176,22 @@ def run(fields: ExtractedFields) -> ExtractedFields:
         fields.abogado_canonical = canonical
         fields.abogado_canonical_confidence = conf
 
+    # Derivado: abogado_incidente_N = abogado_responsable cuando incidente_N=SI.
+    # Convención interna SED (feedback Wilson 2026-05-18): el mismo abogado lleva
+    # el incidente, no hay reasignación. responsable_desacato (jurídico) sigue
+    # siendo el funcionario sancionable; abogado_incidente_N es la columna
+    # operativa con quién opera la defensa.
+    if raw_lawyer:
+        from backend.v9.types import FieldSource
+        for inc_key, ab_inc_key in (
+            ("incidente", "abogado_incidente"),
+            ("incidente_2", "abogado_incidente_2"),
+            ("incidente_3", "abogado_incidente_3"),
+        ):
+            if fields.values.get(inc_key) == "SI" and not fields.values.get(ab_inc_key):
+                fields.values[ab_inc_key] = raw_lawyer
+                fields.sources[ab_inc_key] = FieldSource.CATALOG
+
     raw_oficina = fields.values.get("oficina_responsable", "")
     dep_code, dep_conf = resolve_dependencia(raw_oficina)
     if dep_code:

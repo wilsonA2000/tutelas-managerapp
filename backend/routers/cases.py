@@ -55,6 +55,8 @@ def api_cases_table(db: Session = Depends(get_db)):
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
         Case.folder_name != SHELL_FOLDER,
         Case.processing_status != "DUPLICATE_MERGED",
+        # Comunicaciones / carpetas libres no van al cuadro de tutelas.
+        Case.tipo_actuacion != "COMUNICACION",
     ).order_by(Case.id.desc()).all()
     items = []
     for c in cases:
@@ -96,6 +98,57 @@ def api_get_case(case_id: int, db: Session = Depends(get_db)):
     if not result:
         raise HTTPException(status_code=404, detail="Caso no encontrado")
     return result
+
+
+@router.get("/{case_id}/audit")
+def api_get_case_audit(
+    case_id: int,
+    entity_type: str = "",
+    action_prefix: str = "",
+    limit: int = 500,
+    db: Session = Depends(get_db),
+):
+    """Historial completo del expediente (modal 🕐).
+
+    Devuelve lista de eventos ordenados por timestamp DESC.
+
+    Filtros opcionales:
+      - entity_type: case|document|email|compliance|field
+      - action_prefix: filtra por prefijo del action (ej. 'DOC_' para todos los
+        eventos de documentos, 'COMPLIANCE_' para los de compliance, etc.).
+    """
+    import json as _json
+    from backend.database.models import AuditLog
+
+    q = db.query(AuditLog).filter(AuditLog.case_id == case_id)
+    if entity_type:
+        q = q.filter(AuditLog.entity_type == entity_type)
+    if action_prefix:
+        q = q.filter(AuditLog.action.like(f"{action_prefix}%"))
+    rows = q.order_by(AuditLog.timestamp.desc()).limit(limit).all()
+
+    items = []
+    for r in rows:
+        meta = None
+        if r.meta_json:
+            try:
+                meta = _json.loads(r.meta_json)
+            except Exception:
+                meta = {"raw": r.meta_json}
+        items.append({
+            "id": r.id,
+            "ts": r.timestamp.isoformat() if r.timestamp else None,
+            "action": r.action,
+            "actor": r.source,
+            "entity_type": r.entity_type,
+            "entity_id": r.entity_id,
+            "field_name": r.field_name,
+            "old_value": r.old_value,
+            "new_value": r.new_value,
+            "description": r.description,
+            "meta": meta,
+        })
+    return {"items": items, "total": len(items)}
 
 
 @router.get("/{case_id}/acumulacion")
@@ -178,6 +231,135 @@ def api_get_case_email_packages(case_id: int, db: Session = Depends(get_db)):
 # protección) se deriva de `observaciones` y se muestra como badge en la ficha y el listado.
 
 
+@router.get("/{source_id}/compare/{target_id}")
+def api_compare_cases(source_id: int, target_id: int, db: Session = Depends(get_db)):
+    """Compara dos cases campo-a-campo. Pensado para el flujo de reconciliación tras
+    un traslado de documentos: si el case origen queda vacío y tiene info exclusiva
+    que el destino no tiene, la UI puede ofrecer migrar antes de eliminar.
+
+    Devuelve señales de similitud (mismo rad corto, mismo accionante, etc.), campos
+    exclusivos del origen, campos donde difieren, e indica si el origen es elegible
+    para borrado (0 docs y 0 emails)."""
+    from backend.services.case_similarity import compare_cases
+    result = compare_cases(db, source_id, target_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/{source_id}/merge-into/{target_id}")
+def api_merge_cases(source_id: int, target_id: int, payload: dict, db: Session = Depends(get_db)):
+    """Aplica una migración selectiva de campos desde el case origen al destino.
+
+    Body:
+      {
+        "fields": ["radicado_23_digitos", "fecha_fallo_2nd", ...],   # campos a copiar
+        "merge_observations": true,                                   # fusionar texto en lugar de reemplazar
+        "delete_source": true                                         # eliminar el origen al final (si está vacío)
+      }
+
+    Reglas:
+      - Solo escribe en el destino si el campo está VACÍO (no pisa valores manuales).
+      - "observaciones" se fusiona (source\n---\ntarget), nunca se reemplaza.
+      - El campo migrado queda marcado como `manual` en field_confidences_json.v9_sources
+        para que el motor v9 no lo sobrescriba en futuras extracciones.
+      - El delete del origen solo procede si tiene 0 documents y 0 emails.
+      - Cada operación queda en AuditLog con action=MERGE_FROM_{source_id}.
+    """
+    import json as _json
+    from datetime import datetime as _dt
+    from backend.database.models import AuditLog, Email
+
+    source = db.query(Case).filter(Case.id == source_id).first()
+    target = db.query(Case).filter(Case.id == target_id).first()
+    if not source or not target:
+        raise HTTPException(status_code=404, detail="origen o destino no existe")
+    if source_id == target_id:
+        raise HTTPException(status_code=400, detail="origen y destino son el mismo case")
+
+    fields_req = list((payload or {}).get("fields") or [])
+    merge_obs = bool((payload or {}).get("merge_observations", False))
+    delete_source = bool((payload or {}).get("delete_source", False))
+
+    from backend.services.case_similarity import _COMPARED_FIELDS
+    allowed_fields = {f for f, _ in _COMPARED_FIELDS}
+
+    fc = {}
+    if target.field_confidences_json:
+        try:
+            fc = _json.loads(target.field_confidences_json)
+        except (_json.JSONDecodeError, TypeError):
+            fc = {}
+    v9_sources = fc.get("v9_sources", {})
+
+    migrated: list[dict] = []
+    for f in fields_req:
+        if f not in allowed_fields:
+            continue  # silencioso: campo no migrable
+        s_val = getattr(source, f, None)
+        if not s_val:
+            continue
+        if f == "observaciones" and merge_obs:
+            t_val = (target.observaciones or "").strip()
+            s_val_stripped = (s_val or "").strip()
+            if s_val_stripped and s_val_stripped not in t_val:
+                new_obs = s_val_stripped + ("\n\n---\n" + t_val if t_val else "")
+                db.add(AuditLog(case_id=target_id, field_name="observaciones",
+                                old_value=t_val[:240], new_value=new_obs[:240],
+                                action=f"MERGE_FROM_{source_id}",
+                                source=f"reconciliation_ui case {source_id} → {target_id}"))
+                target.observaciones = new_obs
+                v9_sources["observaciones"] = "manual"
+                migrated.append({"field": f, "action": "merged_text"})
+            continue
+        current = getattr(target, f, None)
+        if current:
+            continue  # NO pisar (política first-writer-wins)
+        setattr(target, f, s_val)
+        db.add(AuditLog(case_id=target_id, field_name=f,
+                        old_value="", new_value=str(s_val)[:240],
+                        action=f"MERGE_FROM_{source_id}",
+                        source=f"reconciliation_ui case {source_id} → {target_id}"))
+        v9_sources[f] = "manual"
+        migrated.append({"field": f, "action": "copied"})
+
+    fc["v9_sources"] = v9_sources
+    target.field_confidences_json = _json.dumps(fc, ensure_ascii=False)
+    target.updated_at = _dt.utcnow()
+
+    deleted = False
+    if delete_source:
+        # Solo borrar si está realmente vacío
+        n_docs = len(source.documents)
+        n_emails = db.query(Email).filter(Email.case_id == source_id).count()
+        if n_docs == 0 and n_emails == 0:
+            db.add(AuditLog(case_id=target_id, field_name="case",
+                            old_value=f"id={source_id} folder={source.folder_name}",
+                            new_value="(deleted after merge)",
+                            action="DELETE_AFTER_MERGE",
+                            source=f"reconciliation_ui case {source_id} → {target_id}"))
+            source_folder = source.folder_path
+            db.delete(source)
+            deleted = True
+            # FS cleanup: borrar carpeta vacía
+            if source_folder:
+                from pathlib import Path
+                p = Path(source_folder)
+                if p.is_dir() and not any(p.iterdir()):
+                    try:
+                        p.rmdir()
+                    except OSError:
+                        pass
+
+    db.commit()
+    return {
+        "source_id": source_id,
+        "target_id": target_id,
+        "migrated": migrated,
+        "source_deleted": deleted,
+    }
+
+
 @router.put("/{case_id}")
 def api_update_case(case_id: int, fields: dict, db: Session = Depends(get_db)):
     result = update_case(db, case_id, fields)
@@ -194,27 +376,93 @@ _FS_INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 def api_create_case(payload: dict, db: Session = Depends(get_db)):
     """Crear un expediente vacío (sin documentos) listo para recibir docs por traslado manual.
 
-    Acepta dos formatos en el campo `radicado_23_digitos` (o alias `radicado_corto`):
-      - Rad23 completo (≥21 dígitos) → caso con rad23 canónico, status=PENDIENTE.
-      - Rad corto YYYY-NNNNN (los juzgados muchas veces no entregan el rad23) → caso
-        con rad23=NULL, status=REVISION, observaciones piden completar el rad23 después.
+    Dos modos según `tipo` (default "TUTELA"):
 
-    Permite resolver el caso "rad_corto homónimo entre juzgados distintos" creando el
-    expediente correcto desde la UI y trasladando el doc en el mismo flujo.
+    - **TUTELA**: requiere `radicado_23_digitos` (o corto YYYY-NNNNN) y `accionante`.
+      folder_name = "<rad_corto> <ACCIONANTE>". `observaciones` opcional (autollena si vacío).
 
-    Body: {"radicado_23_digitos": "68344408900120260002800" | "2026-00028",
-           "accionante": "DARÍANY ...", "juzgado"?: "...", "ciudad"?: "..."}
+    - **COMUNICACION**: para oficios, comunicaciones, archivos que no pertenecen a una tutela.
+      Requiere `folder_name` (texto libre) y `observaciones` (motivo del traslado).
+      `radicado_23_digitos` y `accionante` opcionales. `tipo_actuacion=COMUNICACION` →
+      excluido del cuadro Excel y de KPIs de tutelas.
+
+    Body TUTELA: {"radicado_23_digitos": "...", "accionante": "...", "juzgado"?: "...",
+                  "ciudad"?: "...", "observaciones"?: "..."}
+    Body COMUNICACION: {"tipo": "COMUNICACION", "folder_name": "Oficio Procuraduria 1234",
+                        "observaciones": "Traslado: doc no pertenecía al expediente 2026-00095"}
     """
     from backend.core.settings import settings
     from backend.email.rad_utils import derive_rad_corto_from_rad23, normalize_rad23
     from backend.database.models import AuditLog
 
+    payload = payload or {}
+    tipo = str(payload.get("tipo") or "TUTELA").strip().upper()
+    if tipo not in ("TUTELA", "COMUNICACION"):
+        raise HTTPException(status_code=400, detail="tipo debe ser TUTELA o COMUNICACION")
+
+    observaciones_raw = str(payload.get("observaciones") or "").strip()
+    now = datetime.utcnow()
+
+    if tipo == "COMUNICACION":
+        # Carpeta libre sin radicado — para oficios/comunicaciones que llegaron mal clasificados.
+        folder_raw = str(payload.get("folder_name") or "").strip()
+        if not folder_raw:
+            raise HTTPException(status_code=400, detail="folder_name es requerido para COMUNICACION")
+        if not observaciones_raw:
+            raise HTTPException(status_code=400, detail="observaciones (motivo del traslado) son requeridas para COMUNICACION")
+
+        folder_name = re.sub(r"\s+", " ", _FS_INVALID_CHARS.sub("", folder_raw)).strip().strip(".").strip()
+        folder_name = folder_name[:200]
+        if not folder_name or folder_name == SHELL_FOLDER:
+            raise HTTPException(status_code=400, detail="folder_name resultante inválido (vacío o reservado)")
+
+        clash = db.query(Case).filter(Case.folder_name == folder_name).first()
+        if clash:
+            raise HTTPException(status_code=409, detail=f"Ya existe una carpeta «{folder_name}» (#{clash.id})")
+
+        base_dir = Path(settings.BASE_DIR)
+        folder_path = base_dir / folder_name
+        if folder_path.exists():
+            raise HTTPException(status_code=409, detail=f"Ya existe la carpeta «{folder_name}» en disco")
+        try:
+            folder_path.mkdir(parents=True, exist_ok=False)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"No se pudo crear la carpeta en disco: {e}")
+
+        accionante_raw = str(payload.get("accionante") or "").strip()
+        accionante_opt = re.sub(r"\s+", " ", accionante_raw) if accionante_raw else None
+
+        case = Case(
+            radicado_23_digitos=None,
+            accionante=accionante_opt,
+            juzgado=None,
+            ciudad=None,
+            folder_name=folder_name,
+            folder_path=str(folder_path),
+            processing_status="COMPLETO",  # no hay extracción que esperar
+            tipo_actuacion="COMUNICACION",
+            origen="COMUNICACION",
+            observaciones=observaciones_raw,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(case)
+        db.flush()
+        db.add(AuditLog(
+            case_id=case.id, field_name="case", old_value="",
+            new_value=f"id={case.id} folder={folder_name} tipo=COMUNICACION",
+            action="CREACION_MANUAL", source="usuario",
+        ))
+        db.commit()
+        return get_case(db, case.id)
+
+    # --- tipo == TUTELA ---
     # Aceptamos rad23 o rad_corto en el mismo campo (autodetección por longitud/forma).
-    rad_input = ((payload or {}).get("radicado_23_digitos") or (payload or {}).get("radicado_corto") or "")
+    rad_input = (payload.get("radicado_23_digitos") or payload.get("radicado_corto") or "")
     rad_input = str(rad_input).strip()
-    accionante_raw = (payload or {}).get("accionante", "")
-    juzgado_raw = (payload or {}).get("juzgado", "") or ""
-    ciudad_raw = (payload or {}).get("ciudad", "") or ""
+    accionante_raw = payload.get("accionante", "")
+    juzgado_raw = payload.get("juzgado", "") or ""
+    ciudad_raw = payload.get("ciudad", "") or ""
 
     accionante = re.sub(r"\s+", " ", str(accionante_raw or "")).strip()
     if not accionante:
@@ -271,16 +519,16 @@ def api_create_case(payload: dict, db: Session = Depends(get_db)):
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"No se pudo crear la carpeta en disco: {e}")
 
-    now = datetime.utcnow()
     if rad23:
         status = "PENDIENTE"
-        observaciones = "Expediente creado manualmente desde la UI"
+        default_obs = "Expediente creado manualmente desde la UI"
     else:
         status = "REVISION"
-        observaciones = (
+        default_obs = (
             f"Expediente creado manualmente con radicado corto {rad_corto} — falta el radicado de 23 dígitos. "
             "Completar cuando el juzgado lo proporcione."
         )
+    observaciones = observaciones_raw or default_obs
 
     case = Case(
         radicado_23_digitos=rad23,

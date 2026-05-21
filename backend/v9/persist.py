@@ -54,16 +54,19 @@ _CASE_FIELD_MAP = {
     "incidente": "incidente",
     "fecha_apertura_incidente": "fecha_apertura_incidente",
     "responsable_desacato": "responsable_desacato",
+    "abogado_incidente": "abogado_incidente",
     "decision_incidente": "decision_incidente",
     # Incidente 2
     "incidente_2": "incidente_2",
     "fecha_apertura_incidente_2": "fecha_apertura_incidente_2",
     "responsable_desacato_2": "responsable_desacato_2",
+    "abogado_incidente_2": "abogado_incidente_2",
     "decision_incidente_2": "decision_incidente_2",
     # Incidente 3
     "incidente_3": "incidente_3",
     "fecha_apertura_incidente_3": "fecha_apertura_incidente_3",
     "responsable_desacato_3": "responsable_desacato_3",
+    "abogado_incidente_3": "abogado_incidente_3",
     "decision_incidente_3": "decision_incidente_3",
     # Texto libre
     "observaciones": "observaciones",
@@ -88,6 +91,11 @@ _CASE_FIELD_MAP = {
 STICKY_FIELDS: frozenset[str] = frozenset({
     "radicado_23_digitos",
     "radicado_forest",
+    # 2026-05-18: `accionante` es campo de identidad del case. Si la carpeta tiene
+    # docs prestados (otras tutelas con mismo rad corto), el extractor puede
+    # proponer el accionante equivocado (visto en case 25: rad23 contaminado).
+    # Una vez establecido (manual u extracción inicial), NO pisar por re-extract.
+    "accionante",
 })
 
 
@@ -152,8 +160,16 @@ def persist(
                 case_id, v9_key, value, current,
             )
             continue
-        # Respeta valor existente que no vino de v9 (no pisar v8 todavía)
-        if current and v9_key not in prev_sources:
+        # Una vez que un campo tiene valor (venga de v9, v8 o manual), v9 NO lo
+        # sobrescribe en re-extracciones posteriores. Política de "first-writer
+        # wins": el primer pase v9 escribe el valor; los siguientes pases solo
+        # llenan vacíos. Esto reproduce el contrato `fields.set() rechaza
+        # sobrescrituras` documentado en CLAUDE.md y evita regresiones donde un
+        # texto OCR posterior degrada un campo previamente rico (ej. case 73:
+        # texto del Auto de incidente reemplazando observaciones de IA).
+        # Para forzar refresh: marcar el campo MANUAL=null en v9_sources, o
+        # editar a mano vía UI/UPDATE.
+        if current:
             continue
         if current == value:
             continue

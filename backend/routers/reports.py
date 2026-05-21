@@ -24,6 +24,7 @@ def api_generate_excel(db: Session = Depends(get_db)):
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
         Case.folder_name != "__SIN_RADICADO__",
         Case.processing_status != "DUPLICATE_MERGED",
+        Case.tipo_actuacion != "COMUNICACION",
     ).all()
     if not cases:
         raise HTTPException(status_code=404, detail="No hay casos en la base de datos")
@@ -73,5 +74,6 @@ def api_metrics(db: Session = Depends(get_db)):
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
         Case.folder_name != "__SIN_RADICADO__",
         Case.processing_status != "DUPLICATE_MERGED",
+        Case.tipo_actuacion != "COMUNICACION",
     ).all()
     return calculate_metrics(cases)

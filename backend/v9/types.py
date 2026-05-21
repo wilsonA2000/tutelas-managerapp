@@ -62,15 +62,18 @@ EXCEL_FIELDS: tuple[str, ...] = (
     # Incidente / desacato (1ro, 2do, 3ro — un caso puede tener varios)
     "incidente",                 # SI / NO
     "fecha_apertura_incidente",
-    "responsable_desacato",
+    "responsable_desacato",      # funcionario público sancionable (jurídico)
+    "abogado_incidente",         # abogado SED del incidente (= abogado_responsable)
     "decision_incidente",
     "incidente_2",
     "fecha_apertura_incidente_2",
     "responsable_desacato_2",
+    "abogado_incidente_2",
     "decision_incidente_2",
     "incidente_3",
     "fecha_apertura_incidente_3",
     "responsable_desacato_3",
+    "abogado_incidente_3",
     "decision_incidente_3",
     # Observaciones (texto libre — usualmente edición manual o llenado por Excel)
     "observaciones",

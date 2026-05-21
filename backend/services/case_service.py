@@ -18,17 +18,44 @@ KPI_CACHE_TTL = 60
 
 
 # Señales de "necesita revisión manual" por caso (para el filtro `revision` del listado).
-_REVISION_OPTIONS = {"necesita_revision", "sin_accionante", "sin_radicado", "pocos_docs", "docs_sospechosos", "sin_fallo"}
+_REVISION_OPTIONS = {
+    "necesita_revision", "sin_accionante", "sin_radicado", "pocos_docs",
+    "docs_sospechosos", "sin_fallo",
+    "baja_completitud",      # completitud < MIN_COMPLETITUD_PERCENT
+    "incidente_sin_fecha",   # incidente=SI sin fecha_apertura_incidente
+    "sin_quien_impugno",     # impugnacion=SI sin quien_impugno
+}
+
+# Conteos por flag, cacheados 30s — escanea ~220 casos en Python (igual que list_cases con filtro).
+_REVISION_COUNT_CACHE: dict = {"data": None, "ts": 0.0}
+REVISION_COUNT_CACHE_TTL = 30
 
 
 def _case_review_flags(c: Case) -> dict:
-    """Calcula las señales de revisión de un caso (lazy-loads documents)."""
+    """Calcula las señales de revisión de un caso (lazy-loads documents).
+
+    Las carpetas COMUNICACION (oficios sin radicado) no son tutelas: ninguna de
+    las señales aplica por diseño (no tienen rad/accionante).
+    """
+    if (c.tipo_actuacion or "") == "COMUNICACION":
+        return {k: False for k in (
+            "sin_accionante", "sin_radicado", "pocos_docs", "docs_sospechosos",
+            "sin_fallo", "baja_completitud", "incidente_sin_fecha",
+            "sin_quien_impugno", "necesita_revision",
+        )} | {"_completitud": 100.0, "_n_docs": len(c.documents)}
     n_docs = len(c.documents)
     susp = any((d.verificacion or "") in ("SOSPECHOSO", "NO_PERTENECE") for d in c.documents)
     no_acc = not (c.accionante or "").strip() or "[REVISAR_ACCIONANTE]" in (c.folder_name or "")
     no_rad = not (c.radicado_23_digitos or "").strip()
     compl = _get_case_completitud(c)
     baja = compl < MIN_COMPLETITUD_PERCENT  # <20% del cuadro v9 — el caso casi no tiene datos
+    inc_sin_fecha = (
+        any((getattr(c, f) or "") == "SI" for f in ("incidente", "incidente_2", "incidente_3"))
+        and not (c.fecha_apertura_incidente or "").strip()
+        and not (c.fecha_apertura_incidente_2 or "").strip()
+        and not (c.fecha_apertura_incidente_3 or "").strip()
+    )
+    sin_qi = (c.impugnacion or "") == "SI" and not (c.quien_impugno or "").strip()
     return {
         "sin_accionante": no_acc,
         "sin_radicado": no_rad,
@@ -36,8 +63,10 @@ def _case_review_flags(c: Case) -> dict:
         "docs_sospechosos": susp,
         "sin_fallo": not (c.sentido_fallo_1st or "").strip(),
         "baja_completitud": baja,
-        # "necesita_revision" NO incluye sin_fallo (es normal en tutelas en curso)
-        "necesita_revision": no_acc or no_rad or n_docs <= 1 or susp or baja,
+        "incidente_sin_fecha": inc_sin_fecha,
+        "sin_quien_impugno": sin_qi,
+        # "necesita_revision" agrupa señales accionables (excluye sin_fallo — normal en tutelas en curso)
+        "necesita_revision": no_acc or no_rad or n_docs <= 1 or susp or baja or inc_sin_fecha or sin_qi,
         "_completitud": compl,
         "_n_docs": n_docs,
     }
@@ -260,8 +289,10 @@ def _get_valid_case_ids(db: Session, min_completitud: float = MIN_COMPLETITUD_PE
     Excluye: carpetas PENDIENTE REVISION/IDENTIFICACION, sin accionante+radicado,
     y casos con completitud menor al umbral.
     """
+    # Comunicaciones / carpetas libres no son tutelas: excluidas de KPIs y métricas.
     base_filters = [Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
-                    Case.processing_status != "DUPLICATE_MERGED"]
+                    Case.processing_status != "DUPLICATE_MERGED",
+                    Case.tipo_actuacion != "COMUNICACION"]
     all_cases = db.query(Case).filter(*base_filters).all()
 
     valid_ids = set()
@@ -578,17 +609,75 @@ def get_chart_data(db: Session) -> dict:
     }
 
 
+def get_revision_flag_counts(db: Session) -> dict:
+    """Conteos de cada señal de revisión sobre los casos visibles del listado.
+
+    Escanea ~220 casos en Python (mismo costo que list_cases con filtro de revisión).
+    Cacheado 30 s — se invalida al ritmo natural de sync/extract.
+    """
+    if _REVISION_COUNT_CACHE["data"] and time.time() - _REVISION_COUNT_CACHE["ts"] < REVISION_COUNT_CACHE_TTL:
+        return _REVISION_COUNT_CACHE["data"]
+
+    base_cases = db.query(Case).filter(
+        Case.folder_name.isnot(None),
+        Case.folder_name != "None",
+        Case.folder_name != "",
+        Case.processing_status != "DUPLICATE_MERGED",
+        # COMUNICACION no tiene rad ni accionante por diseño — los flags no aplican.
+        Case.tipo_actuacion != "COMUNICACION",
+    ).all()
+
+    keys = (
+        "necesita_revision", "sin_accionante", "sin_radicado", "pocos_docs",
+        "docs_sospechosos", "baja_completitud", "incidente_sin_fecha",
+        "sin_quien_impugno", "sin_fallo",
+    )
+    counts = {k: 0 for k in keys}
+    for c in base_cases:
+        f = _case_review_flags(c)
+        for k in keys:
+            if f.get(k):
+                counts[k] += 1
+    counts["_total"] = len(base_cases)
+
+    _REVISION_COUNT_CACHE["data"] = counts
+    _REVISION_COUNT_CACHE["ts"] = time.time()
+    return counts
+
+
+# Orden + severidad para que el frontend pinte la fila de chips sin reglas locales.
+# severity ∈ {"critical","high","warn","procedural","info"}.
+_REVISION_FLAG_META: tuple[tuple[str, str, str], ...] = (
+    ("necesita_revision",   "Necesita revisión",   "high"),
+    ("sin_accionante",      "Sin accionante",      "critical"),
+    ("sin_radicado",        "Sin radicado",        "critical"),
+    ("pocos_docs",          "≤1 documento",        "warn"),
+    ("docs_sospechosos",    "Docs sospechosos",    "warn"),
+    ("baja_completitud",    f"Compl. <{int(MIN_COMPLETITUD_PERCENT)}%", "warn"),
+    ("incidente_sin_fecha", "Incidente s/fecha",   "procedural"),
+    ("sin_quien_impugno",   "Impugna s/sujeto",    "procedural"),
+    ("sin_fallo",           "Sin fallo 1ra",       "info"),
+)
+
+
 def get_filter_options(db: Session) -> dict:
     """Obtener opciones para los filtros del frontend."""
     ciudades = sorted([r[0] for r in db.query(Case.ciudad).filter(Case.ciudad.isnot(None), Case.ciudad != "").distinct().all()])
     abogados = sorted([r[0] for r in db.query(Case.abogado_responsable).filter(Case.abogado_responsable.isnot(None), Case.abogado_responsable != "").distinct().all()])
     juzgados = sorted([r[0] for r in db.query(Case.juzgado).filter(Case.juzgado.isnot(None), Case.juzgado != "").distinct().all()])
+    counts = get_revision_flag_counts(db)
 
     return {
         "ciudades": ciudades,
         "abogados": abogados,
         "juzgados": juzgados,
         "estados": ["ACTIVO", "INACTIVO"],
-        "fallos": ["CONCEDE", "NIEGA", "IMPROCEDENTE", "CONCEDE PARCIALMENTE"],
+        "fallos": ["CONCEDE", "NIEGA", "IMPROCEDENTE", "CARENCIA_OBJETO", "HECHO_SUPERADO",
+                   "DESISTIDO", "RECHAZA", "CONCEDE PARCIALMENTE"],
         "processing_status": ["PENDIENTE", "EXTRAYENDO", "REVISION", "COMPLETO"],
+        "revision_flags": [
+            {"value": v, "label": label, "severity": sev, "count": counts.get(v, 0)}
+            for v, label, sev in _REVISION_FLAG_META
+        ],
+        "revision_total": counts.get("_total", 0),
     }

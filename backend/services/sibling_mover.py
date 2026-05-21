@@ -20,7 +20,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.database.models import AuditLog, Case, Document
+from backend.database.models import AuditLog, Case, Document, Email
 from backend.services.provenance_service import get_siblings
 
 logger = logging.getLogger("tutelas.sibling_mover")
@@ -157,6 +157,24 @@ def move_document_or_package(
         db.rollback()
         result["errors"].append(str(e))
         return result
+
+    # En modo paquete, repuntar también el Email al case destino. Sin esto el panel
+    # "Correos" del destino sale vacío porque list_packages_in_case filtra por
+    # Email.case_id (los documents ya están en target, pero el Email seguía en source).
+    if result["package_mode"] and docs_to_move:
+        email = db.query(Email).filter(Email.id == doc.email_id).first()
+        if email and email.case_id != target_case_id:
+            old_email_case_id = email.case_id
+            email.case_id = target_case_id
+            db.add(AuditLog(
+                case_id=target_case_id,
+                field_name="email.case_id",
+                old_value=str(old_email_case_id),
+                new_value=str(target_case_id),
+                action="CLEANUP_MOVE" if reason.startswith("cleanup") else "MANUAL_MOVE",
+                source=f"sibling_mover:{reason} email_id={email.id}",
+            ))
+            logger.info("Email %d repuntado: case %s → %d", email.id, old_email_case_id, target_case_id)
 
     return result
 

@@ -51,17 +51,20 @@ class Case(Base):
     fecha_fallo_2nd = Column(String)
     incidente = Column(String)  # SI / NO
     fecha_apertura_incidente = Column(String)
-    responsable_desacato = Column(String)
+    responsable_desacato = Column(String)   # funcionario público sancionable (jurídico, Dcto 2591/91)
+    abogado_incidente = Column(String)      # abogado SED que opera el incidente (= abogado_responsable)
     decision_incidente = Column(String)
     # --- Segundo incidente de desacato ---
     incidente_2 = Column(String)
     fecha_apertura_incidente_2 = Column(String)
     responsable_desacato_2 = Column(String)
+    abogado_incidente_2 = Column(String)
     decision_incidente_2 = Column(String)
     # --- Tercer incidente de desacato ---
     incidente_3 = Column(String)
     fecha_apertura_incidente_3 = Column(String)
     responsable_desacato_3 = Column(String)
+    abogado_incidente_3 = Column(String)
     decision_incidente_3 = Column(String)
 
     observaciones = Column(Text)
@@ -132,14 +135,17 @@ class Case(Base):
         "INCIDENTE": "incidente",
         "FECHA_APERTURA_INCIDENTE": "fecha_apertura_incidente",
         "RESPONSABLE_DESACATO": "responsable_desacato",
+        "ABOGADO_INCIDENTE": "abogado_incidente",
         "DECISION_INCIDENTE": "decision_incidente",
         "INCIDENTE_2": "incidente_2",
         "FECHA_APERTURA_INCIDENTE_2": "fecha_apertura_incidente_2",
         "RESPONSABLE_DESACATO_2": "responsable_desacato_2",
+        "ABOGADO_INCIDENTE_2": "abogado_incidente_2",
         "DECISION_INCIDENTE_2": "decision_incidente_2",
         "INCIDENTE_3": "incidente_3",
         "FECHA_APERTURA_INCIDENTE_3": "fecha_apertura_incidente_3",
         "RESPONSABLE_DESACATO_3": "responsable_desacato_3",
+        "ABOGADO_INCIDENTE_3": "abogado_incidente_3",
         "DECISION_INCIDENTE_3": "decision_incidente_3",
         "OBSERVACIONES": "observaciones",
         "CATEGORIA_TEMATICA": "categoria_tematica",
@@ -304,7 +310,12 @@ class Email(Base):
 
 
 class AuditLog(Base):
-    """Registro de auditoria de cambios."""
+    """Registro de auditoria de cambios — historia completa del expediente.
+
+    Cada fila representa UN evento sobre un case (creación, modificación,
+    traslado de documento, cambio de estado, etc.). Es la fuente única de
+    verdad para el "Historial del expediente" (modal 🕐).
+    """
     __tablename__ = "audit_log"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -312,9 +323,15 @@ class AuditLog(Base):
     field_name = Column(String)
     old_value = Column(Text)
     new_value = Column(Text)
-    action = Column(String, index=True)  # CREAR / ACTUALIZAR / AI_EXTRAER / EDICION_MANUAL / IMPORT_EMAIL / IMPORT_CSV
-    source = Column(String)  # Quien/que hizo el cambio
+    action = Column(String, index=True)  # event_type — ej. COMPLIANCE_STATE_CHANGED, DOC_ADDED, FIELD_EXTRACTED
+    source = Column(String)              # actor — usuario|sistema|gmail_monitor|ai_deepseek|v9_regex
     timestamp = Column(DateTime, default=datetime.utcnow)
+
+    # v95 — soporte para entidades específicas y UI del modal Historial
+    entity_type = Column(String)         # case|document|email|compliance|field
+    entity_id = Column(Integer)          # id del objeto (ej. compliance_tracking.id)
+    description = Column(Text)           # frase human-readable para UI
+    meta_json = Column(Text)             # contexto adicional (JSON)
 
     case = relationship("Case", back_populates="audit_logs")
 
@@ -353,7 +370,19 @@ class ComplianceTracking(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # v2 (extractor de órdenes — 2026-05-19): una fila representa UNA orden discreta
+    # del fallo, no la sentencia agregada. Cardinalidad 1:N case→orden.
+    ordinal_nombre = Column(String)                     # PRIMERO/SEGUNDO/...
+    tipo_plazo = Column(String)                         # NUMERICO|FECHA|INMEDIATO|PERMANENTE|CONDICIONAL|SIN_PLAZO
+    destinatario_tipo = Column(String)                  # SED_DIRECTA|SED_VINCULADA|TERCERO_SED_VINCULADA|SED_OTRA
+    accion_resumida = Column(Text)                      # Frase imperativa principal
+    condicion = Column(Text)                            # Texto de la condición (tipo_plazo=CONDICIONAL)
+    verbo_orden = Column(String)                        # ORDENAR|CONMINAR|REQUERIR|DISPONER|EXHORTAR|"(IMPLÍCITO)"
+    fecha_especifica = Column(String)                   # DD/MM/YYYY cuando tipo_plazo=FECHA
+    evidencia_doc_id = Column(Integer, ForeignKey("documents.id"))  # Oficio que acredita cumplimiento
+
     case = relationship("Case", backref="compliance_records")
+    evidencia_doc = relationship("Document", foreign_keys=[evidencia_doc_id])
 
 
 class CaseActuacion(Base):

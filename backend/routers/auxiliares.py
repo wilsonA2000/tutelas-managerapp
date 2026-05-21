@@ -110,7 +110,10 @@ def export_control_format(db: Session = Depends(get_db)):
                "FALLO 1RA", "FALLO 2DA", "ESTADO INCIDENTE", "RIESGO"]
     ws.append(headers)
 
-    cases = db.query(Case).filter(Case.processing_status == "COMPLETO").all()
+    cases = db.query(Case).filter(
+        Case.processing_status == "COMPLETO",
+        Case.tipo_actuacion != "COMUNICACION",
+    ).all()
     from backend.alerts.early_warning import score_case
     now = datetime.utcnow()
 
