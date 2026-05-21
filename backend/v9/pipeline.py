@@ -19,6 +19,7 @@ bayesian_assignment, live_consolidator, agent/orchestrator, narrative_builder.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -53,6 +54,17 @@ def _list_case_docs(db: Session, case_id: int) -> tuple[str, list[Path]]:
         if p.exists():
             paths.append(p)
     return folder, paths
+
+
+# Placeholders que la ingesta/monitor generan automáticamente cuando aún no se
+# conoce el accionante. SOLO estos disparan el auto-rename del paso 9 — las notas
+# humanas de revisión (ej. "[REVISAR — JUZGADO 68547 CASO DINY-WILMER]") se respetan.
+_AUTO_PLACEHOLDER_RE = re.compile(r"SIN[_ ]ACCIONANTE|\[PENDIENTE|\[REVISAR_ACCIONANTE\]", re.I)
+
+
+def _folder_is_auto_placeholder(folder_name: str) -> bool:
+    """True si el folder es un placeholder de ingesta (renombrable automáticamente)."""
+    return bool(_AUTO_PLACEHOLDER_RE.search(folder_name or ""))
 
 
 def extract_case(
@@ -182,6 +194,32 @@ def extract_case(
         except Exception as e:  # noqa: BLE001
             warnings.append(f"observaciones_summary: {e}")
         timing["obs_summary"] = int((time.perf_counter() - t) * 1000)
+
+    # 9. Auto-rename de carpeta. La ingesta crea el caso con accionante="" → folder
+    #    "<rad> SIN_ACCIONANTE". Una vez que la extracción pobló `accionante`, la
+    #    carpeta debe seguir la convención "<rad_corto> <ACCIONANTE>". Idempotente:
+    #    no toca carpetas ya limpias. Cierra el bug histórico de folders SIN_ACCIONANTE
+    #    que nunca se renombraban tras descubrir el accionante.
+    #
+    #    GUARD: solo actuamos sobre placeholders generados por la ingesta/monitor
+    #    (SIN_ACCIONANTE, [PENDIENTE, [REVISAR_ACCIONANTE]). NO tocamos folders con
+    #    notas humanas de revisión (ej. "[REVISAR — JUZGADO 68547 CASO DINY-WILMER]"),
+    #    aunque la heurística de needs_rename los marcaría como "sucios". El operador
+    #    pone esas notas a propósito; renombrarlas perdería contexto.
+    if not dry_run:
+        t = time.perf_counter()
+        try:
+            from backend.cognition.folder_renamer import rename_folder_if_needed
+            _case = db.query(Case).filter(Case.id == case_id).first()
+            _fn = (_case.folder_name or "") if _case is not None else ""
+            if _case is not None and _folder_is_auto_placeholder(_fn):
+                ren = rename_folder_if_needed(db, _case)
+                if ren.get("action") == "renamed":
+                    folder_name = ren["new_name"]
+                    warnings.append(f"folder_renamed: {ren['old_name']!r} → {ren['new_name']!r}")
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"folder_rename: {e}")
+        timing["folder_rename"] = int((time.perf_counter() - t) * 1000)
 
     timing["__total"] = int((time.perf_counter() - t0) * 1000)
 
