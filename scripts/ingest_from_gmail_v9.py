@@ -51,6 +51,13 @@ from backend.email.gmail_monitor import (  # noqa: E402
 from backend.v9.doc_librarian import classify, DocType  # noqa: E402
 from backend.v9.regex_pass import _extract_radicado_23  # noqa: E402
 from backend.v9.doc_io import DocText  # noqa: E402
+# F0-A: helpers compartidos con el monitor (fuente única de F1 adopción de shell + F2
+# desambiguación por municipio) para que ambas rutas resuelvan igual.
+from backend.email.case_resolver import (  # noqa: E402
+    adopt_shell as _adopt_shell,
+    match_by_rad_corto as _match_by_rad_corto,
+    extract_juzgado_municipio as _extract_juzgado_municipio,
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("v9.ingest")
@@ -114,47 +121,6 @@ def _ensure_unique_folder_name(db, base_name: str) -> str:
     # Caso patológico (>100 cases con mismo base_name)
     import time
     return f"{base_name}_{int(time.time())}"
-
-
-def _adopt_shell(db, rad23: str, accionante: str) -> Optional[Case]:
-    """F1 (RC-2): adopta un shell (rad23 NULL) con el mismo rad_corto cuando llega el
-    rad23 completo, en vez de crear un caso nuevo (que duplicaría al shell).
-
-    Seguro porque: solo adopta si hay EXACTAMENTE 1 shell con ese rad_corto; y si hay
-    conflación (otros casos con rad23 del mismo rad_corto pero rad21 distinto) exige que
-    el accionante sea compatible (el shell no tiene rad23 → no conozco su juzgado real).
-    """
-    rad_corto = _rad_corto_from_rad23(rad23)
-    if not rad_corto:
-        return None
-    rad21 = rad23[:21]
-    shells = db.query(Case).filter(
-        or_(Case.radicado_23_digitos.is_(None), Case.radicado_23_digitos == ""),
-        Case.folder_name.like(f"{rad_corto} %"),
-    ).all()
-    if len(shells) != 1:
-        return None
-    shell = shells[0]
-    # ¿cluster de conflación? otros casos con rad23 de ESTE rad_corto pero rad21 distinto.
-    others = db.query(Case).filter(
-        Case.folder_name.like(f"{rad_corto} %"),
-        Case.radicado_23_digitos.isnot(None), Case.radicado_23_digitos != "",
-    ).all()
-    conflacion = any(
-        re.sub(r"\D", "", c.radicado_23_digitos or "")[:21] != rad21
-        for c in others if len(re.sub(r"\D", "", c.radicado_23_digitos or "")) >= 21
-    )
-    if conflacion:
-        a = _norm_accionante(accionante)
-        b = _norm_accionante(shell.accionante or "")
-        if not (a and b and a == b):
-            return None  # ambiguo en cluster de conflación → no adoptar
-    # ADOPTAR: fijar rad23 (deja de ser shell). El folder_renamer corregirá el nombre.
-    shell.radicado_23_digitos = rad23
-    if accionante and (not shell.accionante or shell.accionante in ("(sin accionante)", "(sin radicado)", "(tutela origen no ingestada)")):
-        shell.accionante = accionante
-    db.flush()
-    return shell
 
 
 def _ensure_case(db, rad23: str, accionante: str, base_dir: Path) -> tuple[Case, bool]:
@@ -392,83 +358,10 @@ def _juzgado_code_from_rad23(rad23: str) -> Optional[str]:
     return rad23[5:12]
 
 
-# F2 (RC-3): el municipio del JUZGADO desambigua respuestas SED entre homónimos year:seq.
-from backend.agent.extractors.municipios_santander import (  # noqa: E402
-    MUNICIPIOS_SANTANDER, _strip_accents as _muni_strip,
-)
-
-_RE_JUZ_MUNI = re.compile(
-    r"(?i)juzgado\b[^\n]{0,75}?\bde\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+){0,3})"
-)
-
-
-def _extract_juzgado_municipio(text: str) -> Optional[str]:
-    """Extrae el municipio del despacho de un 'JUZGADO ... DE <MUNICIPIO>'.
-    Valida contra los 87 municipios de Santander (probando 1-3 palabras: 'PUENTE NACIONAL',
-    'SAN GIL'). Devuelve el nombre normalizado (sin acentos, MAYÚS) o None."""
-    if not text:
-        return None
-    for m in _RE_JUZ_MUNI.finditer(text[:3000]):
-        words = _muni_strip(m.group(1)).split()
-        for n in range(min(3, len(words)), 0, -1):
-            name = " ".join(words[:n])
-            if name in MUNICIPIOS_SANTANDER:
-                return name
-    return None
-
-
-def _case_municipio(c: Case) -> Optional[str]:
-    """Municipio del juzgado de un Case: del campo `juzgado`, fallback a `ciudad`."""
-    return _extract_juzgado_municipio(c.juzgado or "") or (
-        _muni_strip(c.ciudad) if c.ciudad and _muni_strip(c.ciudad) in MUNICIPIOS_SANTANDER else None
-    )
-
-
 # === Funciones de match contra DB ===
 
 def _match_by_rad21(db, rad21: str) -> Optional[Case]:
     return db.query(Case).filter(Case.radicado_23_digitos.like(f"{rad21}%")).first()
-
-
-def _match_by_rad_corto(
-    db, rad_corto: str, juzgado_code: Optional[str] = None, accionante: str = "",
-    municipio: Optional[str] = None,
-) -> tuple[Optional[Case], str]:
-    """Busca Case por rad_corto en folder_name. Si hay >1 (homónimos year:seq de
-    juzgados distintos), desambigua por municipio del juzgado (F2), código de juzgado,
-    o nombre del accionante. Si NO se puede desambiguar → devuelve (None, ...) en vez de
-    agarrar el primero (conflar dos expedientes distintos es peor que crear un shell).
-
-    Returns: (case|None, method)
-    """
-    cases = db.query(Case).filter(Case.folder_name.like(f"{rad_corto} %")).all()
-    if not cases:
-        return None, "no_match"
-    if len(cases) == 1:
-        return cases[0], "rad_corto_unique"
-    # F2 (RC-3): desambiguar por MUNICIPIO del juzgado (clave para respuestas SED que solo
-    # traen rad_corto + nombran el juzgado, p.ej. "...DE PUENTE NACIONAL" → c334).
-    if municipio:
-        hits = [c for c in cases if _case_municipio(c) == municipio]
-        if len(hits) == 1:
-            return hits[0], "rad_corto+municipio"
-    # Múltiples → desambiguar. 1º por código de juzgado (díg. 6-12 del rad23).
-    if juzgado_code:
-        jz_hits = [c for c in cases if c.radicado_23_digitos and len(c.radicado_23_digitos) >= 12
-                   and c.radicado_23_digitos[5:12] == juzgado_code]
-        if len(jz_hits) == 1:
-            return jz_hits[0], "rad_corto+juzgado"
-    # 2º por similaridad del nombre del accionante (solo entre los homónimos).
-    if accionante and len(accionante) >= 6:
-        import difflib as _dl
-        a = accionante.upper().strip()
-        scored = sorted(cases, key=lambda c: _dl.SequenceMatcher(None, a, (c.accionante or "").upper()).ratio(), reverse=True)
-        r1 = _dl.SequenceMatcher(None, a, (scored[0].accionante or "").upper()).ratio()
-        r2 = _dl.SequenceMatcher(None, a, (scored[1].accionante or "").upper()).ratio() if len(scored) > 1 else 0.0
-        if r1 >= 0.80 and r1 - r2 >= 0.15:
-            return scored[0], "rad_corto+accionante"
-    # No se pudo desambiguar → no adivinar (la cascada seguirá a personería/nombre/shell).
-    return None, "rad_corto_ambiguous_unresolved"
 
 
 def _match_by_cedula(db, cedula: str) -> Optional[Case]:

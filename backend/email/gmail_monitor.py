@@ -22,6 +22,12 @@ from googleapiclient.discovery import build
 from backend.config import BASE_DIR
 from backend.database.models import Email, Case, Document, AuditLog
 from backend.database.seed import classify_document
+# F0-A: helpers compartidos con el script de ingesta (misma lógica F1/F2 en ambas rutas).
+from backend.email.case_resolver import (
+    adopt_shell as _resolver_adopt_shell,
+    match_by_rad_corto as _resolver_match_rad_corto,
+    extract_juzgado_municipio as _resolver_juz_muni,
+)
 
 logger = logging.getLogger("tutelas.gmail")
 
@@ -1115,6 +1121,27 @@ def check_inbox(db: Session) -> list[dict]:
                     else:
                         # Fallback a matcher secuencial v5.3 si cache no está listo (cold start)
                         case = match_to_case(db, radicado_data, accionante)
+
+                # F0-A: antes de crear caso nuevo, aplicar F2 (desambiguar respuesta SED por
+                # municipio del juzgado) + F1 (adoptar shell sin rad23) — misma lógica que el
+                # script de ingesta, para que las dos rutas NO creen casos que compiten (RC-1).
+                if accion not in ("SALIENTE", "AMBIGUO") and not case:
+                    _rad23 = radicado_data.get("radicado_23", "") or ""
+                    _rc_raw = radicado_data.get("radicado_corto", "") or ""
+                    _m = re.match(r"(20\d{2})\D?0*(\d{1,5})", _rc_raw)
+                    _rc = f"{_m.group(1)}-{_m.group(2).zfill(5)}" if _m else None
+                    if _rc:
+                        _muni = _resolver_juz_muni(f"{subject} {(body or '')[:3000]}")
+                        _c2, _mth = _resolver_match_rad_corto(
+                            db, _rc, accionante=accionante or "", municipio=_muni)
+                        if _c2:
+                            case = _c2
+                            logger.info(f"F2: respuesta matcheada a caso {_c2.id} por {_mth}")
+                    if not case and len(re.sub(r"\D", "", _rad23)) >= 21:
+                        _sh = _resolver_adopt_shell(db, _rad23, accionante or "")
+                        if _sh:
+                            case = _sh
+                            logger.info(f"F1: shell {_sh.id} adoptado (rad23 {_rad23})")
 
                 # Si no se encontró caso y no es SALIENTE/AMBIGUO → crear nuevo
                 if accion not in ("SALIENTE", "AMBIGUO") and not case:
