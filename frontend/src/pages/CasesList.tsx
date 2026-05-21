@@ -22,8 +22,38 @@ const REVISION_FLAG_LABEL: Record<string, string> = {
   docs_sospechosos: 'docs sosp.',
   sin_fallo: 'sin fallo',
   baja_completitud: 'baja compl.',
+  incidente_sin_fecha: 'incidente s/fecha',
+  sin_quien_impugno: 'impugna s/sujeto',
   necesita_revision: 'revisar',
 }
+
+// Severidad → clases tailwind. Mantengo paleta consistente entre el filtro
+// y los chips inline de la columna "Revisión".
+const SEVERITY_STYLES: Record<string, { active: string; idle: string; chip: string }> = {
+  critical:   { active: 'bg-rose-600 text-white border-rose-700 shadow-sm',
+                idle:   'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100',
+                chip:   'bg-rose-50 text-rose-700 border-rose-200' },
+  high:       { active: 'bg-orange-600 text-white border-orange-700 shadow-sm',
+                idle:   'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100',
+                chip:   'bg-orange-50 text-orange-700 border-orange-200' },
+  warn:       { active: 'bg-amber-500 text-white border-amber-600 shadow-sm',
+                idle:   'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100',
+                chip:   'bg-amber-50 text-amber-700 border-amber-200' },
+  procedural: { active: 'bg-violet-600 text-white border-violet-700 shadow-sm',
+                idle:   'bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100',
+                chip:   'bg-violet-50 text-violet-700 border-violet-200' },
+  info:       { active: 'bg-slate-700 text-white border-slate-800 shadow-sm',
+                idle:   'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100',
+                chip:   'bg-slate-50 text-slate-700 border-slate-200' },
+}
+const REVISION_SEVERITY: Record<string, string> = {
+  sin_accionante: 'critical', sin_radicado: 'critical',
+  pocos_docs: 'warn', docs_sospechosos: 'warn', baja_completitud: 'warn',
+  incidente_sin_fecha: 'procedural', sin_quien_impugno: 'procedural',
+  sin_fallo: 'info', necesita_revision: 'high',
+}
+
+interface RevisionFlag { value: string; label: string; severity: string; count: number }
 
 export default function CasesList() {
   const navigate = useNavigate()
@@ -116,20 +146,48 @@ export default function CasesList() {
               className="pl-8"
             />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          {/* Chips de revisión: estado en vivo de las carpetas con conteos.
+              Reemplaza el viejo dropdown (que solo exponía 2 de 9 categorías). */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground mr-1">Estado de carpetas:</span>
+            <button
+              type="button"
+              onClick={() => handleFilter('revision', '')}
+              className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-md border transition-colors ${
+                revision === ''
+                  ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                  : 'bg-background text-foreground border-input hover:bg-muted'
+              }`}
+              title="Sin filtro de revisión — todas las carpetas"
+            >
+              Todas
+              <span className="font-mono tabular-nums opacity-80">{filterOptions.revision_total ?? 0}</span>
+            </button>
+            {(filterOptions.revision_flags as RevisionFlag[] | undefined ?? [])
+              .filter((f) => f.count > 0)
+              .map((f) => {
+                const sev = SEVERITY_STYLES[f.severity] ?? SEVERITY_STYLES.info
+                const active = revision === f.value
+                return (
+                  <button
+                    key={f.value}
+                    type="button"
+                    onClick={() => handleFilter('revision', active ? '' : f.value)}
+                    className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-md border transition-colors ${active ? sev.active : sev.idle}`}
+                    title={`Filtrar carpetas con: ${f.label.toLowerCase()} (${f.count})`}
+                  >
+                    {f.label}
+                    <span className={`font-mono tabular-nums ${active ? 'opacity-90' : 'opacity-80'}`}>{f.count}</span>
+                  </button>
+                )
+              })}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Filter size={13} />
               <span className="text-xs font-medium">Filtros:</span>
             </div>
-            <select value={revision} onChange={(e) => handleFilter('revision', e.target.value)} className="text-sm border border-input rounded-lg px-2.5 py-1.5 bg-background focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 text-foreground" title="Surface los casos que necesitan revisión manual antes de extraer">
-              <option value="">Todos (revisión)</option>
-              <option value="necesita_revision">🔴 Necesita revisión (peor primero)</option>
-              <option value="sin_accionante">Sin accionante</option>
-              <option value="sin_radicado">Sin radicado</option>
-              <option value="pocos_docs">Carpeta vacía / ≤1 documento</option>
-              <option value="docs_sospechosos">Docs sospechosos</option>
-              <option value="sin_fallo">Sin fallo 1ra registrado</option>
-            </select>
             <select value={estado} onChange={(e) => handleFilter('estado', e.target.value)} className="text-sm border border-input rounded-lg px-2.5 py-1.5 bg-background focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 text-foreground">
               <option value="">Todos los estados</option>
               <option value="ACTIVO">Activo</option>
@@ -209,6 +267,13 @@ export default function CasesList() {
                           </TableCell>
                           <TableCell className="max-w-[200px]">
                             <span className="font-mono text-xs text-primary font-medium truncate block" title={c.folder_name}>
+                              {c.tipo_actuacion === 'COMUNICACION' && (
+                                <span
+                                  className="mr-1 inline-flex items-center gap-0.5 text-[9px] font-semibold px-1 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 align-middle"
+                                  title="Comunicación / carpeta libre sin radicado — no aparece en el cuadro Excel"
+                                  onClick={(e) => e.stopPropagation()}
+                                >📨 COM</span>
+                              )}
                               {c.folder_name}
                             </span>
                           </TableCell>
@@ -262,11 +327,20 @@ export default function CasesList() {
                                   {c._completitud_pct ?? 0}%
                                 </span>
                                 <span className="text-[10px] text-muted-foreground">· {c._n_docs ?? 0} doc{c._n_docs === 1 ? '' : 's'}</span>
-                                {Object.keys(c._review ?? {}).map((k: string) => (
-                                  <span key={k} className="text-[9px] px-1 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">
-                                    {REVISION_FLAG_LABEL[k] ?? k}
-                                  </span>
-                                ))}
+                                {Object.keys(c._review ?? {}).map((k: string) => {
+                                  const sev = SEVERITY_STYLES[REVISION_SEVERITY[k] ?? 'info'] ?? SEVERITY_STYLES.info
+                                  const active = revision === k
+                                  return (
+                                    <button
+                                      key={k}
+                                      onClick={(e) => { e.stopPropagation(); handleFilter('revision', active ? '' : k) }}
+                                      className={`text-[9px] px-1 py-0.5 rounded border transition-colors ${active ? sev.active : sev.chip + ' hover:brightness-95'}`}
+                                      title={`Filtrar por ${REVISION_FLAG_LABEL[k] ?? k}`}
+                                    >
+                                      {REVISION_FLAG_LABEL[k] ?? k}
+                                    </button>
+                                  )
+                                })}
                               </div>
                             </TableCell>
                           ) : (

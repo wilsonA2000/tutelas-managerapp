@@ -13,7 +13,7 @@ export default function PageShell({ children, className }: PageShellProps) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.15 }}
-      className={cn('p-6 space-y-6', className)}
+      className={cn('flex-1 min-h-0 overflow-y-auto p-6 space-y-6', className)}
     >
       {children}
     </motion.div>
