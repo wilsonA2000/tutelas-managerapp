@@ -12,7 +12,43 @@ export const getCases = (params: Record<string, string | number>) =>
 export const getCase = (id: number) =>
   api.get(`/cases/${id}`).then(r => r.data);
 
-export const createCase = (payload: { radicado_23_digitos: string; accionante: string; juzgado?: string; ciudad?: string }) =>
+export type AuditEvent = {
+  id: number
+  ts: string | null
+  action: string
+  actor: string | null
+  entity_type: string | null
+  entity_id: number | null
+  field_name: string | null
+  old_value: string | null
+  new_value: string | null
+  description: string | null
+  meta: Record<string, unknown> | null
+}
+
+export const getCaseAudit = (
+  caseId: number,
+  params: { entity_type?: string; action_prefix?: string; limit?: number } = {},
+) =>
+  api.get(`/cases/${caseId}/audit`, { params }).then(r => r.data as { items: AuditEvent[]; total: number });
+
+export type CreateCasePayload =
+  | {
+      tipo?: 'TUTELA'
+      radicado_23_digitos: string
+      accionante: string
+      juzgado?: string
+      ciudad?: string
+      observaciones?: string
+    }
+  | {
+      tipo: 'COMUNICACION'
+      folder_name: string
+      observaciones: string
+      accionante?: string
+    }
+
+export const createCase = (payload: CreateCasePayload) =>
   api.post('/cases', payload).then(r => r.data);
 
 export const updateCase = (id: number, fields: Record<string, string>) =>
@@ -35,6 +71,25 @@ export const getFilterOptions = () =>
 
 export const getCasesTable = () =>
   api.get('/cases/table').then(r => r.data);
+
+// Reconciliación tras traslado: comparar dos cases y, opcionalmente, fusionar.
+export interface CaseCompareField { field: string; label: string; value: string; suggested_action?: 'copy' | 'merge_text'; target_existing?: string }
+export interface CaseCompareDiffer { field: string; label: string; source_value: string; target_value: string }
+export interface CaseCompareResult {
+  source: { id: number; folder_name: string; n_docs: number; n_emails: number }
+  target: { id: number; folder_name: string; n_docs: number }
+  similarity_signals: Array<{ kind: string; value: string; label: string }>
+  exclusive_in_source: CaseCompareField[]
+  differs: CaseCompareDiffer[]
+  identical: Array<{ field: string; label: string; value: string }>
+  source_can_be_deleted: boolean
+}
+
+export const compareCases = (sourceId: number, targetId: number): Promise<CaseCompareResult> =>
+  api.get(`/cases/${sourceId}/compare/${targetId}`).then(r => r.data);
+
+export const mergeCases = (sourceId: number, targetId: number, payload: { fields: string[]; merge_observations: boolean; delete_source: boolean }) =>
+  api.post(`/cases/${sourceId}/merge-into/${targetId}`, payload).then(r => r.data);
 
 // Dashboard
 export const getKPIs = () =>
@@ -67,11 +122,14 @@ export const getDocumentPreviewUrl = (id: number) =>
   `/api/documents/${id}/preview`;
 
 // Extraction
-export const extractSingle = (caseId: number) =>
-  api.post(`/extraction/single/${caseId}`, {}, { timeout: 180000 }).then(r => r.data);
+export const extractSingle = (caseId: number, force: boolean = false) =>
+  api.post(`/extraction/single/${caseId}?force=${force}`, {}, { timeout: 180000 }).then(r => r.data);
 
-export const extractBatch = (caseIds?: number[], classifyDocs: boolean = false) =>
-  api.post('/extraction/batch', { case_ids: caseIds, classify_docs: classifyDocs }, { timeout: 10000 }).then(r => r.data);
+export const getFolderConsistency = (caseId: number) =>
+  api.get(`/extraction/folder-consistency/${caseId}`).then(r => r.data);
+
+export const extractBatch = (caseIds?: number[], classifyDocs: boolean = false, force: boolean = false) =>
+  api.post('/extraction/batch', { case_ids: caseIds, classify_docs: classifyDocs, force }, { timeout: 10000 }).then(r => r.data);
 
 export const getReviewQueue = () =>
   api.get('/extraction/review').then(r => r.data);
@@ -203,8 +261,8 @@ export const dismissAlert = (id: number) =>
   api.post(`/alerts/${id}/dismiss`).then(r => r.data);
 
 // Agent Extraction v3
-export const agentExtract = (caseId: number, classify: boolean = false) =>
-  api.post(`/extraction/agent/${caseId}?classify=${classify}`, {}, { timeout: 300000 }).then(r => r.data);
+export const agentExtract = (caseId: number, classify: boolean = false, force: boolean = false) =>
+  api.post(`/extraction/agent/${caseId}?classify=${classify}&force=${force}`, {}, { timeout: 300000 }).then(r => r.data);
 
 // Intelligence
 export const getIntelFavorability = () =>

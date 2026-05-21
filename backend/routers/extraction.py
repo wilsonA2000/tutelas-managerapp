@@ -21,6 +21,28 @@ import backend.main as _main
 class BatchRequest(BaseModel):
     case_ids: list[int] | None = None
     classify_docs: bool = False
+    force: bool = False
+
+
+def _guard_folder_consistency(db: Session, case_id: int, force: bool) -> None:
+    """Rechaza la extracción si la carpeta tiene documentos sin depurar. Primero depurar,
+    luego extraer (extraer una carpeta sucia contamina los campos). `force=True` la omite."""
+    if force:
+        return
+    from fastapi import HTTPException
+    from backend.v9.folder_consistency import check_folder_consistency
+    cons = check_folder_consistency(db, case_id)
+    if not cons["clean"]:
+        raise HTTPException(status_code=409, detail={
+            "error": "carpeta_inconsistente",
+            "message": (
+                f"La carpeta tiene {cons['n_issues']} documento(s) sin depurar "
+                "(no pertenecen / sospechosos / conflación de radicado). Resuélvelos antes "
+                "de extraer para no contaminar los campos. Reintenta con force=true si estás seguro."
+            ),
+            "n_issues": cons["n_issues"],
+            "issues": cons["issues"],
+        })
 
 
 # Campos que se incluyen en la respuesta de extracción
@@ -266,14 +288,27 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
         _elapsed_stop.set()
 
 
+@router.get("/folder-consistency/{case_id}")
+def api_folder_consistency(case_id: int, db: Session = Depends(get_db)):
+    """Pre-chequeo de consistencia de carpeta para la UI: lista documentos sin depurar
+    (no pertenecen / sospechosos / conflación cross-juzgado). El frontend lo llama ANTES
+    de ofrecer "Extraer" — si no está limpia, bloquea y manda a depurar primero."""
+    from backend.v9.folder_consistency import check_folder_consistency
+    return check_folder_consistency(db, case_id)
+
+
 @router.post("/single/{case_id}")
-def api_extract_single(case_id: int, db: Session = Depends(get_db)):
+def api_extract_single(case_id: int, force: bool = False, db: Session = Depends(get_db)):
     """Extraer un caso individual con el pipeline v9 (síncrono).
 
     (Modernización Fase 7.3) Usa `backend.v9.pipeline.extract_case` en vez del motor v8.
     `persist.py` solo RELLENA campos vacíos — nunca sobrescribe valores ya extraídos ni
     los editados a mano —, así que pulsar "Extraer" es seguro: puede añadir datos, jamás
     pisar el cuadro v9. El motor v8 (`unified_cognitive` / `cognition/*`) ya no se usa aquí.
+
+    Gate de consistencia: si la carpeta tiene documentos sin depurar (NO_PERTENECE /
+    SOSPECHOSO / PENDIENTE_OCR / conflación cross-juzgado) se rechaza con HTTP 409 —
+    extraer una carpeta sucia contamina los campos. Pasar `force=true` para omitir.
     """
     import time
     from backend.v9.pipeline import extract_case
@@ -282,6 +317,8 @@ def api_extract_single(case_id: int, db: Session = Depends(get_db)):
     if not case:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Caso no encontrado")
+
+    _guard_folder_consistency(db, case_id, force)
 
     if _main.extraction_in_progress:
         return {"status": "running", "message": "Ya hay una extraccion en progreso"}
@@ -343,15 +380,35 @@ def api_extract_batch(req: BatchRequest):
     if not case_ids:
         return {"status": "empty", "message": "No hay casos pendientes"}
 
+    # Gate de consistencia: no extraer carpetas sin depurar (contamina los campos).
+    skipped: list[int] = []
+    if not req.force:
+        from backend.v9.folder_consistency import check_folder_consistency
+        db = SessionLocal()
+        try:
+            clean_ids = []
+            for cid in case_ids:
+                if check_folder_consistency(db, cid)["clean"]:
+                    clean_ids.append(cid)
+                else:
+                    skipped.append(cid)
+            case_ids = clean_ids
+        finally:
+            db.close()
+
+    if not case_ids:
+        return {"status": "empty", "message": f"Ninguna carpeta está depurada ({len(skipped)} con inconsistencias). Resuélvelas o usa force.", "skipped": skipped}
+
     thread = threading.Thread(target=_run_extraction_cases, args=(case_ids, req.classify_docs), daemon=True)
     thread.start()
     classify_msg = " + clasificacion de documentos" if req.classify_docs else ""
-    return {"status": "started", "message": f"Extraccion de {len(case_ids)} casos iniciada ({MAX_WORKERS} en paralelo{classify_msg})"}
+    skip_msg = f" — {len(skipped)} omitidas por inconsistencias (depurar primero)" if skipped else ""
+    return {"status": "started", "message": f"Extraccion de {len(case_ids)} casos iniciada ({MAX_WORKERS} en paralelo{classify_msg}){skip_msg}", "skipped": skipped}
 
 
 
 @router.post("/agent/{case_id}")
-def api_agent_extract(case_id: int, classify: bool = False, db: Session = Depends(get_db)):
+def api_agent_extract(case_id: int, classify: bool = False, force: bool = False, db: Session = Depends(get_db)):
     """(Modernización Fase 7.3) Alias de "Extraer un caso" sobre el pipeline v9.
 
     El antiguo "Agente IA v3" (multi-modelo, multi-paso) ya no se usa — generaba ruido.
@@ -367,6 +424,8 @@ def api_agent_extract(case_id: int, classify: bool = False, db: Session = Depend
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
         raise HTTPException(status_code=404, detail="Caso no encontrado")
+
+    _guard_folder_consistency(db, case_id, force)
 
     start = time.time()
     try:

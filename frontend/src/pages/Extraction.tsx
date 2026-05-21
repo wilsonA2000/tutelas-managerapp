@@ -112,8 +112,21 @@ export default function Extraction() {
     else if (data.status === 'error') toast.error(data.message || 'Error en extraccion')
   }
 
-  const singleMutation = useMutation({ mutationFn: (id: number) => extractSingle(id), onSuccess: handleExtractionSuccess, onError: () => toast.error('Error al iniciar extraccion') })
-  const agentMutation = useMutation({ mutationFn: ({ id, classify }: { id: number; classify: boolean }) => agentExtract(id, classify), onSuccess: handleExtractionSuccess, onError: () => toast.error('Error al iniciar extraccion con agente') })
+  // Gate de consistencia: el backend rechaza con 409 si la carpeta no está depurada.
+  // Mostramos qué documentos la ensucian y ofrecemos forzar (o ir a depurar primero).
+  function handleExtractError(err: any, retryForce: () => void) {
+    const detail = err?.response?.data?.detail
+    if (err?.response?.status === 409 && detail?.error === 'carpeta_inconsistente') {
+      const tipos = Array.from(new Set((detail.issues || []).map((i: any) => i.tipo))).join(', ')
+      toast.error(`Carpeta sin depurar: ${detail.n_issues} doc(s) [${tipos}]. Depurá primero (mover los que no pertenecen) y reintentá.`, { duration: 7000 })
+      if (window.confirm(`${detail.message}\n\n¿Extraer de todos modos (force)? Los campos pueden quedar contaminados.`)) retryForce()
+      return
+    }
+    toast.error('Error al iniciar extraccion')
+  }
+
+  const singleMutation = useMutation({ mutationFn: ({ id, force }: { id: number; force?: boolean }) => extractSingle(id, force), onSuccess: handleExtractionSuccess, onError: (e, vars) => handleExtractError(e, () => singleMutation.mutate({ id: vars.id, force: true })) })
+  const agentMutation = useMutation({ mutationFn: ({ id, classify, force }: { id: number; classify: boolean; force?: boolean }) => agentExtract(id, classify, force), onSuccess: handleExtractionSuccess, onError: (e, vars) => handleExtractError(e, () => agentMutation.mutate({ id: vars.id, classify: vars.classify, force: true })) })
   const dismissOneMut = useMutation({ mutationFn: dismissMismatchedDoc, onSuccess: () => { qc.invalidateQueries({ queryKey: ['mismatched-docs'] }); toast.success('Alerta resuelta') } })
   const dismissAllMut = useMutation({ mutationFn: dismissAllMismatchedDocs, onSuccess: (data) => { qc.invalidateQueries({ queryKey: ['mismatched-docs'] }); toast.success(data.message) } })
 
@@ -390,7 +403,7 @@ export default function Extraction() {
               onClick={() => {
                 if (!selectedCaseId) return
                 if (extractionMode === 'agent') agentMutation.mutate({ id: selectedCaseId as number, classify: classifyDocs })
-                else singleMutation.mutate(selectedCaseId as number)
+                else singleMutation.mutate({ id: selectedCaseId as number })
               }}
               disabled={isLoading || !selectedCaseId}
               className={cn('w-full', extractionMode === 'agent' && 'bg-emerald-600 hover:bg-emerald-700')}
@@ -698,7 +711,7 @@ export default function Extraction() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
-                        <Button variant="ghost" size="xs" onClick={() => { const id = c.case_id || (c as unknown as {id: number}).id; if (id) singleMutation.mutate(id); else toast.error('ID de caso no encontrado') }} disabled={isLoading} className="text-primary">Extraer</Button>
+                        <Button variant="ghost" size="xs" onClick={() => { const id = c.case_id || (c as unknown as {id: number}).id; if (id) singleMutation.mutate({ id }); else toast.error('ID de caso no encontrado') }} disabled={isLoading} className="text-primary">Extraer</Button>
                         <Button variant="ghost" size="icon-xs" onClick={() => navigate(`/cases/${c.case_id}`)}><ChevronRight size={14} /></Button>
                       </div>
                     </TableCell>
