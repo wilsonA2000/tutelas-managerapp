@@ -38,6 +38,10 @@ FOREST_KEYWORD_PATTERN = re.compile(
 # Patrón genérico: cualquier número de 7-11 dígitos (fallback)
 FOREST_GENERIC_PATTERN = re.compile(r'\b(\d{7,11})\b')
 
+# NUEVO formato FOREST Gobernación (2026+, único): tipo-año-dependencia-consecutivo con
+# guiones, p.ej. "2-2026-104200-001763" (prefijo 'Gober', siempre en el cuerpo del correo).
+FOREST_NUEVO_PATTERN = re.compile(r'\b(\d-20\d{2}-\d{4,7}-\d{3,7})\b')
+
 
 @dataclass
 class ForestResult:
@@ -80,6 +84,17 @@ def extract_forest_from_sources(
         ForestResult con el FOREST encontrado, o None si no se encontró.
     """
     case_emails = case_emails or []
+
+    # FUENTE 0 (prioridad máxima): nuevo formato FOREST con guiones, en cualquier fuente.
+    for doc_info in doc_texts:
+        m = FOREST_NUEVO_PATTERN.search(doc_info.get("text", "") or "")
+        if m:
+            return ForestResult(value=m.group(1), source=f"nuevo_formato/{doc_info.get('filename','')}", confidence=95)
+    for em in case_emails:
+        body = getattr(em, "body_preview", "") or getattr(em, "body", "") or ""
+        m = FOREST_NUEVO_PATTERN.search(body)
+        if m:
+            return ForestResult(value=m.group(1), source="nuevo_formato/email_db", confidence=95)
 
     # FUENTE 1: Gmail PDFs guardados como documentos en la carpeta
     result = _extract_from_gmail_pdfs(doc_texts)
