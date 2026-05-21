@@ -2214,7 +2214,8 @@ _RE_DESIST_ACEPTADO = re.compile(
     r"(?:acept\w+|admit\w+|aprob\w+|reconoc\w+)\s+(?:el\s+|al\s+|del\s+|l[ao]\s+)?desistimiento"
     # "tener por desistida la acción/tutela": exige que sea de la ACCIÓN (no del incidente)
     # y NO condicional ("so pena de tener por desistido el incidente" — caso 40 falso+).
-    r"|(?<!pena de )\btener\s+por\s+desistid[ao]\s+(?:el\s+|la\s+|los\s+)?(?:acci[óo]n|tutela|solicitud|amparo)"
+    # permite palabras intermedias ("la PRESENTE acción") pero NO 'incidente' (evita falso+)
+    r"|(?<!pena de )\btener\s+por\s+desistid[ao]\s+(?:(?!incidente)[a-záéíóúñ]+\s+){0,3}?(?:acci[óo]n|tutela|solicitud|amparo)"
     r"|desistimiento[^.\n]{0,40}(?:archív|d[ae]r\s+por\s+terminad)",
     re.I,
 )
