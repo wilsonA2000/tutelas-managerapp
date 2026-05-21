@@ -162,7 +162,9 @@ logger = logging.getLogger("tutelas.v9.regex_pass")
 # CLASIFICACIÓN LIGERA DE DOCS POR KEYWORDS (sin IA)
 # ============================================================
 
-_KW_AUTO_ADMISORIO = re.compile(r"(?i)(auto\s*avoca|auto\s*admite|admite\s*tutela|avoca\s*conocimiento)")
+_KW_AUTO_ADMISORIO = re.compile(
+    r"(?i)(auto\s*avoca|auto\s*admite|admite\s*tutela|avoca\s*conocimiento|"
+    r"admit\w*\s+(?:la\s+)?(?:presente\s+)?acci[oó]n\s+(?:constitucional\s+)?de\s+tutela)")
 _KW_SENTENCIA = re.compile(r"(?i)(sentencia|fallo\s+de\s+tutela|por\s+tales\s+razones|resuelve\s*[:\.])")
 _KW_IMPUGNACION = re.compile(r"(?i)(impugnaci[oó]n|impugna\s+(la\s+)?sentencia|recurso\s+de\s+impugnaci[oó]n)")
 _KW_INCIDENTE = re.compile(r"(?i)(incidente\s+de\s+desacato|abrir\s+incidente|aper(t|c)ura.*incidente)")
@@ -180,16 +182,18 @@ def _doctype(d: DocText) -> str:
     text = d.text[:3000]
 
     # ----- Prioridad 1: filename con señal fuerte -----
+    # Email primero: un archivo "Email_..." es un correo aunque su asunto mencione
+    # "AUTO_ADMITE", "INCIDENTE", "SENTENCIA", etc. (es la notificación, no el doc).
+    if "email" in fn or "gmail" in fn or fn.endswith(".md"):
+        return "EMAIL"
     if "incidente" in fn or "desacato" in fn:
         return "INCIDENTE"
-    if "auto" in fn and ("admis" in fn or "avoca" in fn):
+    if "auto" in fn and ("admi" in fn or "avoca" in fn):  # admite, admisorio, admision
         return "AUTO_ADMISORIO"
     if "sentencia" in fn or ("fallo" in fn and "tutela" not in fn):
         return "SENTENCIA"
     if "impugna" in fn:
         return "IMPUGNACION"
-    if "email" in fn or "gmail" in fn:
-        return "EMAIL"
     if "respuesta" in fn or "contesta" in fn:
         return "RESPUESTA"
 
@@ -795,13 +799,24 @@ def run(
     for fecha_field in ("fecha_ingreso", "fecha_fallo_1st"):
         for d in _docs_in_order(docs, fecha_field):
             if fields.is_empty(fecha_field):
+                # fecha_fallo_1st SOLO de SENTENCIA: el dateline "Ciudad, DD de mes de
+                # AAAA" también aparece en el AUTO_ADMISORIO y la demanda; tomarlo de ahí
+                # inventa un fallo en tutelas recién admitidas (bug c478/c479).
+                # field_extractor_pass es la autoridad real (valida que exista sentencia).
+                if fecha_field == "fecha_fallo_1st" and _doctype(d) != "SENTENCIA":
+                    continue
                 v = _extract_fecha(d.text, fecha_field)
                 if v:
                     fields.set(fecha_field, v, FieldSource.REGEX)
 
     # ----- Sentido fallo + flags (impugnación / incidente) -----
     for d, t in classified:
-        if t in {"SENTENCIA", "OTRO"} and fields.is_empty("sentido_fallo_1st"):
+        # sentido_fallo_1st SOLO de SENTENCIA. La DEMANDA_TUTELA (categoría "OTRO") dice
+        # "solicito que se CONCEDA el amparo" y el AUTO trae "concédase la medida
+        # provisional" → leer "OTRO" inventaba CONCEDE en casos sin fallo (bug c478/c479).
+        # field_extractor_pass (extract_sentido_fallo_1ra_for_case) es la autoridad: lee
+        # la dispositiva real de SENTENCIA_1RA/DESCONOCIDO y devuelve None si no hay.
+        if t == "SENTENCIA" and fields.is_empty("sentido_fallo_1st"):
             v = _extract_sentido_fallo(d.text)
             if v:
                 fields.set("sentido_fallo_1st", v, FieldSource.REGEX)
