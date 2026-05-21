@@ -649,6 +649,7 @@ def download_attachments(
 
     guardados = []
     ignorados = []
+    deduped = 0  # F3: adjuntos válidos que ya estaban en el caso (reenvío)
 
     for att in att_parts:
         filename = re.sub(r"[\r\n]+", " ", att["filename"]).strip()
@@ -672,6 +673,7 @@ def download_attachments(
             if dup:
                 logger.info("F4 dedup: adjunto %s ya existe en caso %s (sha %s) — omitido",
                             filename, case.id, file_hash[:10])
+                deduped += 1
                 continue
 
         save_path = save_dir / filename
@@ -693,6 +695,14 @@ def download_attachments(
                 email_id=email_id,
                 email_message_id=email_message_id or msg_id,
             ))
+
+    # F3: reenvío que no aportó adjuntos nuevos (todos byte-idénticos ya en el caso).
+    # Se marca el Email (no se borra: conserva provenance). NO se colapsa por subject.
+    if email_id and deduped > 0 and not guardados:
+        try:
+            db.query(Email).filter(Email.id == email_id).update({"status": "REENVIO_SIN_NUEVOS"})
+        except Exception:
+            pass
 
     return guardados, ignorados
 

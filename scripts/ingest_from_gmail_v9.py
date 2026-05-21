@@ -713,6 +713,7 @@ def process_email(service, msg_summary: dict, db, base_dir: Path,
         stats.documents_added += 1
 
     # ----- Mover adjuntos del staging al folder del case + crear Documents -----
+    new_attachments = dup_attachments = 0  # F3: distinguir reenvío sin contenido nuevo
     for sp, data, text, rad, cls in attachment_classifications:
         target = folder_path / sp.name
         counter = 1
@@ -746,6 +747,7 @@ def process_email(service, msg_summary: dict, db, base_dir: Path,
         # F4: dedup byte-idéntico dentro del caso (evita el "split" de adjuntos repetidos).
         file_hash = _sha256_bytes(data)
         if db.query(Document).filter(Document.case_id == case.id, Document.file_hash == file_hash).first():
+            dup_attachments += 1
             continue
 
         if not db.query(Document).filter(Document.case_id == case.id, Document.filename == target.name).first():
@@ -759,6 +761,14 @@ def process_email(service, msg_summary: dict, db, base_dir: Path,
                 incidente_radicado=incidente_rad_corto,
             ))
             stats.documents_added += 1
+            new_attachments += 1
+
+    # F3: si el correo traía adjuntos pero TODOS estaban ya en el caso (byte-idénticos) y
+    # ninguno era nuevo, es un REENVÍO que no aporta contenido. Se marca (no se borra:
+    # conserva provenance). NO se colapsa por subject — subjects genéricos ("NOTIFICA
+    # ACTUACION PROCESAL") corresponden a actuaciones DISTINTAS.
+    if dup_attachments > 0 and new_attachments == 0:
+        email_obj.status = "REENVIO_SIN_NUEVOS"
 
     # Limpiar staging
     if not dry_run:
