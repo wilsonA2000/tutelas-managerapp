@@ -43,7 +43,7 @@ IGNORE_SENDERS = {
     # v6.0.1: newsletters de proveedores IA (rescatamos de falsos positivos en histórico)
     "info@cerebras.net", "noreply@cerebras.net",
     "no-reply@openai.com", "noreply@openai.com",
-    "noreply@anthropic.com", "no-reply@anthropic.com",
+    "noreply@anthropic.com", "no-reply@anthropic.com", "claude.com",
     "noreply@deepseek.com",
     "noreply@huggingface.co",
     # LinkedIn / social / marketing genérico
@@ -240,8 +240,15 @@ def extract_radicado(text: str) -> dict:
 def extract_forest(body: str, attachment_names: list[str]) -> str:
     """Extraer número FOREST del body del correo.
     FOREST válido SOLO proviene de tutelas@santander.gov.co.
-    Returns: número FOREST (10-13 dígitos) o '' si no se encuentra."""
-    from backend.agent.forest_extractor import FOREST_PATTERN, FOREST_BLACKLIST
+    Returns: número FOREST (10-13 dígitos o formato nuevo con guiones) o '' si no se encuentra."""
+    from backend.agent.forest_extractor import (
+        FOREST_PATTERN, FOREST_NUEVO_PATTERN, FOREST_BLACKLIST,
+    )
+
+    # Prioridad: nuevo formato Gobernación con guiones (p.ej. "2-2026-104200-001912").
+    mn = FOREST_NUEVO_PATTERN.search(body or "")
+    if mn and mn.group(1) not in FOREST_BLACKLIST:
+        return mn.group(1)
 
     m = FOREST_PATTERN.search(body or "")
     if m and m.group(1) not in FOREST_BLACKLIST:

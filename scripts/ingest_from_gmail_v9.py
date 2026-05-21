@@ -638,6 +638,10 @@ def process_email(service, msg_summary: dict, db, base_dir: Path,
         stats.cases_reused += 1
     if match_method == "orphan":
         stats.emails_no_rad23 += 1
+    if was_created or match_method == "orphan":
+        print(f"  >>> {'NUEVO' if was_created else 'ORPHAN'} [{match_method}] "
+              f"rad={dominant_rad or '-'} case={getattr(case,'folder_name','?')} "
+              f"subj={subject[:60]!r}")
 
     # Tracking del método de match para diagnóstico
     if not hasattr(stats, 'match_methods'):
