@@ -49,7 +49,7 @@ COVERAGE_BASELINE: dict[str, int] = {
     "asunto": 397,
     "pretensiones": 246,
     "oficina_responsable": 389,
-    "abogado_responsable": 193,
+    "abogado_responsable": 175,  # 2026-05-18: regla cerrada — solo cuenta si resuelve a uno de los 17 oficiales
     "estado": 397,
     "fecha_respuesta": 204,
     "sentido_fallo_1st": 270,
@@ -62,7 +62,7 @@ COVERAGE_BASELINE: dict[str, int] = {
     "fecha_fallo_2nd": 28,
     "incidente": 397,
     "fecha_apertura_incidente": 63,
-    "responsable_desacato": 31,
+    "responsable_desacato": 21,  # 2026-05-18: limpieza basura (10 vaciados); pendiente extractor del auto del juez para 53 cases
     "decision_incidente": 71,
 }
 
@@ -236,7 +236,7 @@ def check_consistency(cases: list[Case], r: Report) -> None:
                 "categoria_tematica ∈ vocab")
     vocab_check("derecho_vulnerado", set(DERECHO_VOCAB) | {"SIN_DETERMINAR"},
                 "derecho_vulnerado tags ∈ vocab", split_sep=" - ")
-    vocab_check("tipo_actuacion", {"TUTELA", "INCIDENTE", "IMPUGNACION"}, "tipo_actuacion ∈ vocab")
+    vocab_check("tipo_actuacion", {"TUTELA", "INCIDENTE", "IMPUGNACION", "COMUNICACION"}, "tipo_actuacion ∈ vocab")
 
 
 def check_no_clobber(db, cases: list[Case], r: Report, sample_n: int) -> None:
