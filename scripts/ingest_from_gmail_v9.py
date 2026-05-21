@@ -46,7 +46,7 @@ from backend.database.models import Case, Document, Email  # noqa: E402
 from backend.email.gmail_monitor import (  # noqa: E402
     _get_gmail_service, _extract_body_complete, _find_attachment_parts,
     VALID_EXTENSIONS, extract_accionante, extract_forest,
-    _normalize_typos, _should_ignore,
+    _normalize_typos, _should_ignore, _sha256_bytes,
 )
 from backend.v9.doc_librarian import classify, DocType  # noqa: E402
 from backend.v9.regex_pass import _extract_radicado_23  # noqa: E402
@@ -116,6 +116,47 @@ def _ensure_unique_folder_name(db, base_name: str) -> str:
     return f"{base_name}_{int(time.time())}"
 
 
+def _adopt_shell(db, rad23: str, accionante: str) -> Optional[Case]:
+    """F1 (RC-2): adopta un shell (rad23 NULL) con el mismo rad_corto cuando llega el
+    rad23 completo, en vez de crear un caso nuevo (que duplicaría al shell).
+
+    Seguro porque: solo adopta si hay EXACTAMENTE 1 shell con ese rad_corto; y si hay
+    conflación (otros casos con rad23 del mismo rad_corto pero rad21 distinto) exige que
+    el accionante sea compatible (el shell no tiene rad23 → no conozco su juzgado real).
+    """
+    rad_corto = _rad_corto_from_rad23(rad23)
+    if not rad_corto:
+        return None
+    rad21 = rad23[:21]
+    shells = db.query(Case).filter(
+        or_(Case.radicado_23_digitos.is_(None), Case.radicado_23_digitos == ""),
+        Case.folder_name.like(f"{rad_corto} %"),
+    ).all()
+    if len(shells) != 1:
+        return None
+    shell = shells[0]
+    # ¿cluster de conflación? otros casos con rad23 de ESTE rad_corto pero rad21 distinto.
+    others = db.query(Case).filter(
+        Case.folder_name.like(f"{rad_corto} %"),
+        Case.radicado_23_digitos.isnot(None), Case.radicado_23_digitos != "",
+    ).all()
+    conflacion = any(
+        re.sub(r"\D", "", c.radicado_23_digitos or "")[:21] != rad21
+        for c in others if len(re.sub(r"\D", "", c.radicado_23_digitos or "")) >= 21
+    )
+    if conflacion:
+        a = _norm_accionante(accionante)
+        b = _norm_accionante(shell.accionante or "")
+        if not (a and b and a == b):
+            return None  # ambiguo en cluster de conflación → no adoptar
+    # ADOPTAR: fijar rad23 (deja de ser shell). El folder_renamer corregirá el nombre.
+    shell.radicado_23_digitos = rad23
+    if accionante and (not shell.accionante or shell.accionante in ("(sin accionante)", "(sin radicado)", "(tutela origen no ingestada)")):
+        shell.accionante = accionante
+    db.flush()
+    return shell
+
+
 def _ensure_case(db, rad23: str, accionante: str, base_dir: Path) -> tuple[Case, bool]:
     """Busca Case por rad21 (rad23 sin sufijo de recurso). Si no existe, crea uno nuevo.
 
@@ -127,6 +168,11 @@ def _ensure_case(db, rad23: str, accionante: str, base_dir: Path) -> tuple[Case,
     existing = db.query(Case).filter(Case.radicado_23_digitos.like(f"{rad21}%")).first()
     if existing:
         return existing, False
+
+    # F1 (RC-2): adoptar un shell sin rad23 con el mismo rad_corto antes de crear nuevo.
+    shell = _adopt_shell(db, rad23, accionante)
+    if shell:
+        return shell, False
 
     rad_corto = _rad_corto_from_rad23(rad23)
     accionante_norm = _norm_accionante(accionante)
@@ -346,6 +392,38 @@ def _juzgado_code_from_rad23(rad23: str) -> Optional[str]:
     return rad23[5:12]
 
 
+# F2 (RC-3): el municipio del JUZGADO desambigua respuestas SED entre homónimos year:seq.
+from backend.agent.extractors.municipios_santander import (  # noqa: E402
+    MUNICIPIOS_SANTANDER, _strip_accents as _muni_strip,
+)
+
+_RE_JUZ_MUNI = re.compile(
+    r"(?i)juzgado\b[^\n]{0,75}?\bde\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+){0,3})"
+)
+
+
+def _extract_juzgado_municipio(text: str) -> Optional[str]:
+    """Extrae el municipio del despacho de un 'JUZGADO ... DE <MUNICIPIO>'.
+    Valida contra los 87 municipios de Santander (probando 1-3 palabras: 'PUENTE NACIONAL',
+    'SAN GIL'). Devuelve el nombre normalizado (sin acentos, MAYÚS) o None."""
+    if not text:
+        return None
+    for m in _RE_JUZ_MUNI.finditer(text[:3000]):
+        words = _muni_strip(m.group(1)).split()
+        for n in range(min(3, len(words)), 0, -1):
+            name = " ".join(words[:n])
+            if name in MUNICIPIOS_SANTANDER:
+                return name
+    return None
+
+
+def _case_municipio(c: Case) -> Optional[str]:
+    """Municipio del juzgado de un Case: del campo `juzgado`, fallback a `ciudad`."""
+    return _extract_juzgado_municipio(c.juzgado or "") or (
+        _muni_strip(c.ciudad) if c.ciudad and _muni_strip(c.ciudad) in MUNICIPIOS_SANTANDER else None
+    )
+
+
 # === Funciones de match contra DB ===
 
 def _match_by_rad21(db, rad21: str) -> Optional[Case]:
@@ -354,11 +432,12 @@ def _match_by_rad21(db, rad21: str) -> Optional[Case]:
 
 def _match_by_rad_corto(
     db, rad_corto: str, juzgado_code: Optional[str] = None, accionante: str = "",
+    municipio: Optional[str] = None,
 ) -> tuple[Optional[Case], str]:
     """Busca Case por rad_corto en folder_name. Si hay >1 (homónimos year:seq de
-    juzgados distintos), desambigua por juzgado_code o por nombre del accionante. Si
-    NO se puede desambiguar → devuelve (None, ...) en vez de agarrar el primero
-    (conflar dos expedientes distintos es peor que dejar que la cascada cree un shell).
+    juzgados distintos), desambigua por municipio del juzgado (F2), código de juzgado,
+    o nombre del accionante. Si NO se puede desambiguar → devuelve (None, ...) en vez de
+    agarrar el primero (conflar dos expedientes distintos es peor que crear un shell).
 
     Returns: (case|None, method)
     """
@@ -367,6 +446,12 @@ def _match_by_rad_corto(
         return None, "no_match"
     if len(cases) == 1:
         return cases[0], "rad_corto_unique"
+    # F2 (RC-3): desambiguar por MUNICIPIO del juzgado (clave para respuestas SED que solo
+    # traen rad_corto + nombran el juzgado, p.ej. "...DE PUENTE NACIONAL" → c334).
+    if municipio:
+        hits = [c for c in cases if _case_municipio(c) == municipio]
+        if len(hits) == 1:
+            return hits[0], "rad_corto+municipio"
     # Múltiples → desambiguar. 1º por código de juzgado (díg. 6-12 del rad23).
     if juzgado_code:
         jz_hits = [c for c in cases if c.radicado_23_digitos and len(c.radicado_23_digitos) >= 12
@@ -505,7 +590,9 @@ def find_case_cascade(
     #    del accionante; si no se puede, NO se agarra el primero (sigue la cascada).
     rad_corto = _extract_rad_corto_relajado(subject) or _extract_rad_corto_relajado(body[:1500] if body else "")
     if rad_corto:
-        case, method = _match_by_rad_corto(db, rad_corto, juzgado_code=None, accionante=accionante_extracted)
+        muni = _extract_juzgado_municipio(text)  # municipio del juzgado nombrado en el correo
+        case, method = _match_by_rad_corto(
+            db, rad_corto, juzgado_code=None, accionante=accionante_extracted, municipio=muni)
         if case:
             return case, f"rad_corto:{method}", False
 
@@ -725,6 +812,7 @@ def process_email(service, msg_summary: dict, db, base_dir: Path,
         db.add(Document(
             case_id=case.id, filename=md_filename, file_path=str(md_path),
             doc_type="EMAIL_JUDICIAL", file_size=len(md_content),
+            file_hash=_sha256_bytes(md_content.encode("utf-8")),
             email_id=email_obj.id, email_message_id=msg_id_header,
             verificacion="OK",
             incidente_radicado=incidente_rad_corto,
@@ -762,10 +850,16 @@ def process_email(service, msg_summary: dict, db, base_dir: Path,
 
         doc_type_value = cls.doc_type.value if cls else "DESCONOCIDO"
 
+        # F4: dedup byte-idéntico dentro del caso (evita el "split" de adjuntos repetidos).
+        file_hash = _sha256_bytes(data)
+        if db.query(Document).filter(Document.case_id == case.id, Document.file_hash == file_hash).first():
+            continue
+
         if not db.query(Document).filter(Document.case_id == case.id, Document.filename == target.name).first():
             db.add(Document(
                 case_id=case.id, filename=target.name, file_path=str(target),
                 doc_type=doc_type_value, file_size=len(data),
+                file_hash=file_hash,
                 email_id=email_obj.id, email_message_id=msg_id_header,
                 verificacion=verif,
                 extracted_text=(text[:30000] if text else ""),

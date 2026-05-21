@@ -56,7 +56,7 @@ COVERAGE_BASELINE: dict[str, int] = {
     "fecha_fallo_1st": 216,
     "impugnacion": 397,
     "quien_impugno": 43,
-    "forest_impugnacion": 33,
+    "forest_impugnacion": 32,  # 33→32: merge dup c33→c70 (misma tutela, ambos tenían FOREST impugn; el de c33 quedó como nota). 2026-05-21
     "juzgado_2nd": 78,
     "sentido_fallo_2nd": 18,
     "fecha_fallo_2nd": 28,

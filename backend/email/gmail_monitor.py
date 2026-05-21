@@ -5,6 +5,7 @@ Flujo: Email → Clasificar tipo → Extraer radicado → Match/Crear caso → D
 """
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -292,11 +293,31 @@ def extract_accionante(subject: str, body: str) -> str:
         texts_to_scan.append(body[:5000])
 
     # F6 v5.0: tokens que marcan fin del nombre del accionante (no son parte del nombre)
+    # F5 (2026-05-21): + saludos/cierres de correo, ACCIONADA(S)/SECR/VINCULAD*, etc.
+    # que se colaban como "nombre" (p.ej. "...CARREÑO NIÑO CORDIAL SALUDO",
+    # "...GALVIS VELÁSQUEZ ACCIONADAS SECR").
     STOP_TOKENS = {
-        "ACCIONADO", "ACCIONADOS", "ACCIONANTE", "CC", "C.C", "DEMANDADO",
-        "IDENTIFICADO", "IDENTIFICADA", "MAYOR", "ACTUANDO", "VS",
-        "CONTRA", "EN", "REPRESENTACION", "REPRESENTACIÓN", "NOMBRE",
+        "ACCIONADO", "ACCIONADOS", "ACCIONADA", "ACCIONADAS", "ACCIONANTE",
+        "CC", "C.C", "DEMANDADO", "IDENTIFICADO", "IDENTIFICADA", "MAYOR",
+        "ACTUANDO", "VS", "CONTRA", "EN", "REPRESENTACION", "REPRESENTACIÓN",
+        "NOMBRE", "VINCULADO", "VINCULADOS", "VINCULADA", "SECR", "SECRETARIA",
+        "SECRETARÍA", "IMPUGNA", "RESPUESTA",
+        # saludos / cierres de correo
+        "CORDIAL", "SALUDO", "SALUDOS", "ATENTAMENTE", "CORDIALMENTE", "GRACIAS",
+        "BUENOS", "BUENAS", "BUEN", "ADJUNTO", "ADJUNTOS", "FAVOR", "AGRADEZCO",
+        "QUEDO", "ATENTO", "ATENTA", "REMITO", "ENVIO", "ENVÍO", "ANEXO", "ANEXOS",
+        "CONFORME", "REMITIMOS", "REMITE", "SEÑORES", "SEÑOR", "SEÑORA",
     }
+
+    def _is_garbage_token(tok: str) -> bool:
+        """Token que NO es parte de un nombre real: email pegado, código, número.
+        Nombres reales raramente superan ~15 letras por palabra."""
+        t = tok.strip(".,:;")
+        if "@" in t or any(ch.isdigit() for ch in t):
+            return True
+        if len(t) > 16:  # 'KARENLORENAREYESARROYO' = email/concatenación sin espacios
+            return True
+        return False
 
     # FIX 8 — usar helpers compartidos del cognitive layer para consistencia
     # con folder_renamer/cognitive_fill (mismas reglas en monitor e ingesta).
@@ -313,7 +334,13 @@ def extract_accionante(subject: str, body: str) -> str:
                 tokens = name.split()
                 trimmed = []
                 for tok in tokens:
-                    if tok.upper().strip(".,:;") in STOP_TOKENS:
+                    tu = tok.upper().strip(".,:;")
+                    if tu in STOP_TOKENS:
+                        break
+                    if _is_garbage_token(tok):
+                        break
+                    # email pegado = concatenación de los nombres ya vistos ('JUANPEREZ')
+                    if trimmed and tu == "".join(w.upper() for w in trimmed):
                         break
                     trimmed.append(tok)
                 if trimmed:
@@ -597,6 +624,11 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
 # 12-14. FUNCIONES DE DESCARGA Y GUARDADO
 # ═══════════════════════════════════════════════════════════
 
+def _sha256_bytes(data: bytes) -> str:
+    """sha256 hex de bytes — clave de dedup byte-idéntico (F4, 2026-05-21)."""
+    return hashlib.sha256(data).hexdigest()
+
+
 def download_attachments(
     service, msg_id: str, case: Case | None, db: Session,
     email_id: int | None = None, email_message_id: str | None = None,
@@ -624,6 +656,18 @@ def download_attachments(
         ).execute()
         file_data = base64.urlsafe_b64decode(att_data["data"])
 
+        # F4: dedup byte-idéntico DENTRO del mismo caso. Si ya existe un Document con
+        # este sha256 en este caso (reenvío/re-adjunto), no duplicar archivo ni fila.
+        file_hash = _sha256_bytes(file_data)
+        if case:
+            dup = db.query(Document).filter(
+                Document.case_id == case.id, Document.file_hash == file_hash,
+            ).first()
+            if dup:
+                logger.info("F4 dedup: adjunto %s ya existe en caso %s (sha %s) — omitido",
+                            filename, case.id, file_hash[:10])
+                continue
+
         save_path = save_dir / filename
         counter = 1
         while save_path.exists():
@@ -639,6 +683,7 @@ def download_attachments(
             db.add(Document(
                 case_id=case.id, filename=save_path.name, file_path=str(save_path),
                 doc_type=classify_document(save_path.name), file_size=len(file_data),
+                file_hash=file_hash,
                 email_id=email_id,
                 email_message_id=email_message_id or msg_id,
             ))
@@ -719,6 +764,7 @@ def save_email_md(save_dir: Path, metadata: dict, body: str, adjuntos: list,
                     verificacion="OK",
                     verificacion_detalle="Email del caso (generado automaticamente)",
                     file_size=len(content.encode("utf-8")),
+                    file_hash=_sha256_bytes(content.encode("utf-8")),
                     # v4.8 Provenance: el .md es parte del paquete del email origen
                     email_id=email_id,
                     email_message_id=email_message_id,
