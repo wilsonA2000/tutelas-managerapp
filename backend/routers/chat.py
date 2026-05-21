@@ -438,8 +438,11 @@ def _top_accionados(db: Session, msg: str) -> ChatResponse:
         Case.accionados.isnot(None), Case.accionados != ""
     ).group_by(Case.accionados).order_by(func.count(Case.id).desc()).limit(10).all()
     if not rows:
+        # Intent bien clasificado por regex; "sin datos" es una respuesta válida, no baja
+        # la confianza de la clasificación (antes 0.5 → fallaba el test de routing cuando la
+        # DB no tenía accionados poblados).
         return ChatResponse(intent="top_accionados", answer="Sin datos.",
-                            template_used="top_accionados", confidence=0.5)
+                            template_used="top_accionados", confidence=0.85)
     body = "\n".join(f"  {i+1:>2}. {(a or '')[:65]:<65} — {n}" for i, (a, n) in enumerate(rows))
     return ChatResponse(intent="top_accionados", answer=f"🏢 **Top accionados**:\n\n{body}",
                         data={"top": [{"accionado": a, "count": n} for a, n in rows]},

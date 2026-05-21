@@ -100,13 +100,14 @@ class TestB3_AntiContaminationBlock:
         assert "RADICADO OFICIAL" in block
         assert "2026-00057" in block
         assert "68-001-40-88-003-2026-00057-00" in block
-        # Que recuerde usar oficial, no folder
-        assert "USA SIEMPRE" in block.upper() or "usa siempre" in block.lower()
+        # Que instruya NO usar radicados ajenos / solo extraer de ESTE caso.
+        assert "no uses radicados ajenos" in block.lower()
+        assert "solo extrae info de este caso" in block.lower()
 
     def test_falls_back_to_folder_when_no_rad23(self):
         from backend.extraction.ai_extractor import _build_anti_contamination_block
-        block = _build_anti_contamination_block(folder_name="2026-00095 JUAN PEREZ")
-        assert "CARPETA DEL CASO: 2026-00095 JUAN PEREZ" in block
+        block = _build_anti_contamination_block(folder_name="2026-00095 JUAN PEREZ", radicado_oficial="")
+        assert "NOMBRE DE CARPETA" in block and "2026-00095 JUAN PEREZ" in block
         assert "RADICADO OFICIAL" not in block
 
 
