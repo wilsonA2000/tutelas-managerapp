@@ -338,6 +338,11 @@ _FOREST_ES = re.compile(r"(?i)el\s+n[úu]mero\s+de\s+radicado\s+es\s*[:\.]?\s*(\
 _FOREST_DOCX_HEADER = re.compile(r"(?i)RADICACI[ÓO]N\s*#?\s*[:\.]?\s*(\d{8,13})")
 # Keyword FOREST/Forest seguido de número
 _FOREST_KEYWORD = re.compile(r"(?i)(?:FOREST|forest)\s*(?:N[°o]\.?\s*)?:?\s*(\d{7,13})")
+# NUEVO formato FOREST Gobernación (2026+, formato único con guiones):
+# tipo-año-dependencia-consecutivo, p.ej. "2-2026-104200-001763". Reemplaza al viejo de
+# solo dígitos. Es muy distintivo (un dígito + guion + año + dependencia + consecutivo) →
+# patrón directo seguro: ni rad23 ni rad corto tienen esta forma.
+_FOREST_NUEVO = re.compile(r"\b(\d-20\d{2}-\d{4,7}-\d{3,7})\b")
 
 
 def _extract_forest(text: str) -> Optional[str]:
@@ -354,6 +359,13 @@ def _extract_forest(text: str) -> Optional[str]:
     """
     if not text:
         return None
+    # NUEVO formato (2026+, único): "Gober ... 2-2026-104200-001763". Va SIEMPRE en el cuerpo
+    # del correo (.md). Tiene prioridad sobre el viejo de solo dígitos. Si hay un marcador
+    # "Gober" cerca, mejor, pero el patrón ya es distintivo por sí solo.
+    m = _FOREST_NUEVO.search(text)
+    if m:
+        return m.group(1)
+
     try:
         from backend.agent.forest_extractor import FOREST_BLACKLIST as _EXTRA_BLACKLIST
     except ImportError:
