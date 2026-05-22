@@ -19,16 +19,19 @@ echo "════════════════════════�
 echo "  RED DE SEGURIDAD — $(date '+%Y-%m-%d %H:%M:%S')"
 echo "════════════════════════════════════════════════════════════════"
 
-echo; echo ">>> [1/4] Tests standalone v9 (sin DB)"
+echo; echo ">>> [1/5] Tests standalone v9 (sin DB)"
 if "$PY" scripts/v9_test_standalone.py; then echo "    OK"; else echo "    FAIL"; fail=1; fi
 
-echo; echo ">>> [2/4] Tests sobre la DB de producción (cobertura/cotas/consistencia/no-clobber)"
+echo; echo ">>> [2/5] Tests sobre la DB de producción (cobertura/cotas/consistencia/no-clobber)"
 if V9_DISABLE_LLM=true "$PY" scripts/v9_test_db.py; then echo "    OK"; else echo "    FAIL"; fail=1; fi
 
-echo; echo ">>> [3/4] Smoke del backend (endpoints que usa el frontend)"
+echo; echo ">>> [3/5] Escaneo de conflación cross-juzgado (carpetas mezcladas por rad corto)"
+if PYTHONPATH=. "$PY" scripts/scan_conflacion.py --strict; then echo "    OK"; else echo "    FAIL"; fail=1; fi
+
+echo; echo ">>> [4/5] Smoke del backend (endpoints que usa el frontend)"
 if "$PY" scripts/smoke_backend.py; then echo "    OK"; else echo "    FAIL"; fail=1; fi
 
-echo; echo ">>> [4/4] Smoke del frontend (Playwright — navega las rutas + endpoint del asistente)"
+echo; echo ">>> [5/5] Smoke del frontend (Playwright — navega las rutas + endpoint del asistente)"
 if [ -d "$HOME/.cache/ms-playwright" ] && ls "$HOME"/.cache/ms-playwright/chromium-* >/dev/null 2>&1; then
   if (cd frontend && node ../scripts/smoke_frontend.mjs); then echo "    OK"; else echo "    FAIL"; fail=1; fi
 else

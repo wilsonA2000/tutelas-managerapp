@@ -51,6 +51,38 @@ def _recurso(rad: str) -> str:
 # verificaciones que bloquean extracción hasta resolverse
 _DIRTY_VERIF = {"NO_PERTENECE", "SOSPECHOSO", "PENDIENTE_OCR"}
 
+# Señales de remisión por competencia / reparto: una tutela que cambia de juzgado
+# (y por ende de rad) por competencia NO es contaminación — es la MISMA tutela con
+# un rad anterior. Ej.: 2026-00122 (Bucaramanga) → remitida → 2026-00137 (Floridablanca).
+_REPARTO_RE = re.compile(
+    r"(REMIT\w*\s+(?:LA\s+)?ACCI[ÓO]N|POR\s+COMPETENCIA|ACTA\s+(?:DE\s+)?REPARTO|"
+    r"REMITE\s+POR\s+FALTA\s+DE\s+COMPETENCIA|REPARTO\s+N[°º])",
+    re.I,
+)
+
+
+def _is_reparto_doc(filename: str | None, text: str | None) -> bool:
+    """True si el doc es/contiene una remisión por competencia o acta de reparto
+    (vincula legítimamente dos radicados de la MISMA tutela en juzgados distintos)."""
+    blob = (filename or "") + " " + (text or "")[:3000]
+    return bool(_REPARTO_RE.search(blob))
+
+
+def _expected_juzgado(crad: str | None, own_rads: list[str]) -> tuple[str | None, str]:
+    """Identidad esperada del caso: el juzgado (12 díg) del rad23 del caso si existe;
+    si no (rad23 NULL — 16% de los casos), el juzgado MAYORITARIO entre los rads
+    propios de los docs. Devuelve (juzgado_esperado, fuente)."""
+    if crad:
+        return _juzgado(crad), "case_rad23"
+    if own_rads:
+        from collections import Counter
+        juzgados = Counter(_juzgado(r) for r in own_rads)
+        maj, n = juzgados.most_common(1)[0]
+        # solo confiable si hay consenso (≥2 docs o único)
+        if n >= 2 or len(juzgados) == 1:
+            return maj, "mayoria_docs"
+    return None, "indeterminable"
+
 
 def check_folder_consistency(db: Session, case_id: int) -> dict:
     """Returns {clean: bool, n_issues: int, issues: [...]}.
@@ -61,9 +93,14 @@ def check_folder_consistency(db: Session, case_id: int) -> dict:
 
     crad = (case.radicado_23_digitos or "").strip()
     crad = crad if len(crad) == 23 else None
-    issues: list[dict] = []
+    docs = db.query(Document).filter(Document.case_id == case_id).all()
 
-    for d in db.query(Document).filter(Document.case_id == case_id).all():
+    # rad propio de cada doc (para identidad esperada y para el chequeo)
+    own = {d.id: _own_rad(d.filename, d.extracted_text) for d in docs}
+    exp_juzgado, exp_src = _expected_juzgado(crad, [r for r in own.values() if r])
+
+    issues: list[dict] = []
+    for d in docs:
         v = (d.verificacion or "").upper()
         if v in _DIRTY_VERIF:
             issues.append({
@@ -74,18 +111,23 @@ def check_folder_consistency(db: Session, case_id: int) -> dict:
         if v == "OK":
             continue  # confirmado que pertenece (verificación o decisión humana) → no flaggear
         # conflación cross-juzgado (lo que la verificación por rad corto no ve)
-        if crad:
-            orad = _own_rad(d.filename, d.extracted_text)
-            if orad and orad != crad and _juzgado(orad) != _juzgado(crad):
-                # excluir escalamiento legítimo a 2da (recurso -01 vs -00, juzgado superior)
-                if _recurso(orad) == "01" and _recurso(crad) == "00":
-                    continue
-                misma_rc = orad[12:21] == crad[12:21]
-                issues.append({
-                    "doc_id": d.id, "filename": d.filename,
-                    "tipo": "CONFLACION" if misma_rc else "RAD_AJENO",
-                    "detalle": f"radicado propio {orad} (juzgado {orad[:5]}) ≠ caso {crad} (juzgado {crad[:5]})",
-                    "doc_rad": orad,
-                })
+        if not exp_juzgado:
+            continue  # identidad del caso indeterminable → no se puede chequear
+        orad = own[d.id]
+        if orad and _juzgado(orad) != exp_juzgado:
+            # excluir escalamiento legítimo a 2da (recurso -01 vs -00)
+            if crad and _recurso(orad) == "01" and _recurso(crad) == "00":
+                continue
+            # excluir remisión por competencia (misma tutela, rad anterior en otro juzgado)
+            if _is_reparto_doc(d.filename, d.extracted_text):
+                continue
+            misma_rc = crad is not None and orad[12:21] == crad[12:21]
+            ref = crad or f"juzgado mayoritario {exp_juzgado}"
+            issues.append({
+                "doc_id": d.id, "filename": d.filename,
+                "tipo": "CONFLACION" if misma_rc else "RAD_AJENO",
+                "detalle": f"radicado propio {orad} (juzgado {orad[:5]}) ≠ {ref} [identidad: {exp_src}]",
+                "doc_rad": orad,
+            })
 
     return {"clean": len(issues) == 0, "n_issues": len(issues), "issues": issues}
