@@ -156,6 +156,19 @@ def list_cases(
     }
 
 
+def _audit_ts_key(ts):
+    """Clave de orden robusta para audit_logs con timestamps mixtos.
+
+    Algunos audit_logs tienen timestamp tz-aware y otros tz-naive (datos
+    históricos). Comparar ambos revienta con 'can't compare offset-naive and
+    offset-aware datetimes'. Normalizamos todo a naive (descartando tzinfo) y
+    usamos datetime.min (naive) como fallback → siempre comparable.
+    """
+    if ts is None:
+        return datetime.min
+    return ts.replace(tzinfo=None) if ts.tzinfo is not None else ts
+
+
 def get_case(db: Session, case_id: int) -> dict | None:
     """Obtener un caso con todos sus documentos."""
     case = db.query(Case).filter(Case.id == case_id).first()
@@ -174,7 +187,7 @@ def get_case(db: Session, case_id: int) -> dict | None:
             "source": a.source,
             "timestamp": a.timestamp.isoformat() if a.timestamp else None,
         }
-        for a in sorted(case.audit_logs, key=lambda x: x.timestamp or datetime.min, reverse=True)[:50]
+        for a in sorted(case.audit_logs, key=lambda x: _audit_ts_key(x.timestamp), reverse=True)[:50]
     ]
     return data
 
