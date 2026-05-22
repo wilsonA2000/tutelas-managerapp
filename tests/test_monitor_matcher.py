@@ -303,6 +303,35 @@ class TestThreadingResolver:
 # ─────────────────────────────────────────────────────────────
 
 
+class TestConflictGuard:
+    """#3.4: guard de conflicto de radicado en el scoring."""
+
+    def test_rad23_no_se_degrada_pese_a_forest_de_otro_caso(self, db, cache):
+        """Un auto-match por rad23 (autoritativo) NO se degrada aunque el email
+        traiga un forest que apunta a OTRO caso. El rad23 manda."""
+        s = EmailSignals(
+            rad23="68-001-40-09-027-2026-00100-00",  # → caso 100
+            forest="20260020000",                      # → caso 200
+            sender="tutelas@santander.gov.co",
+        )
+        r = score_case_match(db, cache, s)
+        assert r.case_id == 100
+        assert r.confidence == "HIGH"
+        assert "rad_conflict_downgrade" not in r.breakdown
+
+    def test_thread_parent_no_se_degrada(self, db, cache):
+        """Un match por thread (conversación) es autoritativo: aunque el rad del
+        email apunte a otro caso, no se degrada (es una respuesta del hilo)."""
+        s = EmailSignals(
+            thread_parent_case_id=100,
+            rad_corto="2026-00200",  # apunta a caso 200, distinto
+        )
+        r = score_case_match(db, cache, s)
+        assert r.case_id == 100
+        assert r.confidence == "HIGH"
+        assert "rad_conflict_downgrade" not in r.breakdown
+
+
 class TestMatchResult:
     def test_to_signals_json_valido(self, db, cache):
         s = EmailSignals(rad23="68-001-40-09-027-2026-00100-00")
@@ -356,3 +385,16 @@ class TestResolveRadicado:
         from backend.email.gmail_monitor import resolve_radicado
         r = resolve_radicado("RV: saludos", "sin radicado alguno")
         assert r["radicado_corto"] == "" and r["radicado_23"] == ""
+
+    def test_ignora_linea_caso_del_md(self):
+        """extract_radicado ignora la anotación **Caso:** (self-referencial) y
+        toma el rad del cuerpo real del email (#3.3)."""
+        from backend.email.gmail_monitor import extract_radicado
+        md = (
+            "# RESPUESTA TUTELA\n\n"
+            "**De:** juzgado@x\n"
+            "**Caso:** 2026-00080 YENNIFER\n"   # anotación del sistema (otro caso)
+            "\n---\n\n"
+            "Notificación del fallo de tutela 2026-00053 del accionante Edgar."
+        )
+        assert extract_radicado(md)["radicado_corto"] == "2026-00053"

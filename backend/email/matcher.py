@@ -218,6 +218,25 @@ def score_case_match(
     else:
         confidence = "LOW"
 
+    # ── 4.5 Guard de conflicto de radicado (#3.4) ──
+    # Si el email trae un rad EXPLÍCITO que identifica un caso DISTINTO del
+    # ganador, y el ganador NO ganó por una señal autoritativa (rad23 exacto o
+    # thread de conversación), NO auto-asignar: degradar a MEDIUM para revisión.
+    # Previene que forest/CC/nombre de OTRO caso le ganen al rad del subject
+    # (conflación silenciosa). Solo afecta auto-matches (HIGH); degradar a MEDIUM
+    # es seguro (el email queda para revisión, nunca se asigna al caso equivocado).
+    if confidence == "HIGH" and (signals.rad23 or signals.rad_corto):
+        rad_case = hits.get("rad23") or hits.get("rad_corto")
+        won_authoritative = "rad23" in winner["signals"] or "thread_parent" in winner["signals"]
+        if rad_case and rad_case != winner_id and not won_authoritative:
+            confidence = "MEDIUM"
+            winner["signals"]["rad_conflict_downgrade"] = f"rad->{rad_case}!=ganador{winner_id}"
+            logger.warning(
+                "Guard conflicto rad (#3.4): el rad del email apunta al caso %s pero "
+                "ganó %s por señales no-autoritativas %s → MEDIUM (revisión)",
+                rad_case, winner_id, list(winner["signals"].keys()),
+            )
+
     alternatives = [(cid, data["score"]) for cid, data in ranked[1:4]]
 
     return MatchResult(

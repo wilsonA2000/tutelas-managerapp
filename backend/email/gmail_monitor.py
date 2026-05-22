@@ -168,6 +168,13 @@ def extract_radicado(text: str) -> dict:
     )
     result = {"radicado_23": "", "radicado_corto": ""}
 
+    # Ignorar la línea de anotación "**Caso:** <folder_name>" que save_email_md
+    # escribe en los .md: contiene el rad del caso de destino → si se re-extrae el
+    # .md (doc EMAIL_MD), ese rad es auto-referencial y contaminaría la extracción
+    # si el .md estuviera traspapelado. No es contenido del email original.
+    if text and "**Caso:**" in text:
+        text = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("**Caso:**"))
+
     # Patrón 1: Radicado completo 23 dígitos (estricto primero, laxo como fallback)
     m = RAD_23_CONTINUOUS.pattern.search(text)
     if not m:
@@ -1163,6 +1170,7 @@ def check_inbox(db: Session) -> list[dict]:
                 match_score = 0
                 match_confidence = "NONE"
                 match_signals_json = None
+                match_route = None  # ruta de asignación (auditabilidad #3.5)
                 created_new = False
                 accion = "CASO_EXISTENTE"
 
@@ -1188,6 +1196,8 @@ def check_inbox(db: Session) -> list[dict]:
                     else:
                         # Fallback a matcher secuencial v5.3 si cache no está listo (cold start)
                         case = match_to_case(db, radicado_data, accionante)
+                        if case:
+                            match_route = "cold_start_sequential"
 
                 # F0-A: antes de crear caso nuevo, aplicar F2 (desambiguar respuesta SED por
                 # municipio del juzgado) + F1 (adoptar shell sin rad23) — misma lógica que el
@@ -1203,11 +1213,13 @@ def check_inbox(db: Session) -> list[dict]:
                             db, _rc, accionante=accionante or "", municipio=_muni)
                         if _c2:
                             case = _c2
+                            match_route = f"F2:{_mth}"
                             logger.info(f"F2: respuesta matcheada a caso {_c2.id} por {_mth}")
                     if not case and len(re.sub(r"\D", "", _rad23)) >= 21:
                         _sh = _resolver_adopt_shell(db, _rad23, accionante or "")
                         if _sh:
                             case = _sh
+                            match_route = "F1_adopt_shell"
                             logger.info(f"F1: shell {_sh.id} adoptado (rad23 {_rad23})")
 
                 # Si no se encontró caso y no es SALIENTE/AMBIGUO → crear nuevo
@@ -1216,6 +1228,7 @@ def check_inbox(db: Session) -> list[dict]:
                     if case:
                         created_new = True
                         accion = "CASO_NUEVO"
+                        match_route = "create_new"
                         # Refrescar cache con el nuevo caso
                         try:
                             get_cache().refresh_one(db, case.id)
@@ -1227,6 +1240,25 @@ def check_inbox(db: Session) -> list[dict]:
                 # disponible al crear los hijos (adjuntos + .md). Esto garantiza
                 # que todos los docs del mismo email queden vinculados y viajen
                 # juntos al reasignar entre casos.
+                # Auditabilidad (#3.5): si se asignó/creó un caso por una ruta
+                # determinista que NO pasó por el scoring (F1/F2/cold-start/create_new),
+                # registrar igual las señales que llevaron a la decisión. Backstop
+                # único → ninguna asignación queda con match_signals_json=None,
+                # incl. rutas futuras (se atrapan acá, no por-rama).
+                if case and match_signals_json is None:
+                    match_signals_json = json.dumps({
+                        "score": match_score,
+                        "confidence": match_confidence,
+                        "breakdown": {
+                            "route": match_route or accion,
+                            "rad23": radicado_data.get("radicado_23", ""),
+                            "rad_corto": radicado_data.get("radicado_corto", ""),
+                            "forest": forest,
+                            "accionante": accionante,
+                        },
+                        "alternatives": [],
+                    }, ensure_ascii=False)
+
                 _email_status = "ASIGNADO" if case else ("AMBIGUO" if accion == "AMBIGUO" else "PENDIENTE")
                 email_record = Email(
                     message_id=message_id, subject=subject, sender=sender,
