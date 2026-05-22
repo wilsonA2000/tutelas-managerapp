@@ -5,6 +5,25 @@ const api = axios.create({
   timeout: 120000,
 });
 
+// Adjunta el JWT a NIVEL DE MÓDULO (no en un useEffect de React), leyendo
+// localStorage en cada request. Elimina la carrera de arranque: los pollers
+// hijos (Dashboard, alertas) se montan y disparan ANTES de que corra el
+// useEffect de AuthContext → sin esto, el primer burst de requests salía sin
+// Authorization → 401 en cada carga de página. AuthContext mantiene su propio
+// interceptor para el refresh-on-401 (la redundancia es inofensiva).
+api.interceptors.request.use((config) => {
+  try {
+    const stored = localStorage.getItem('tutelas_auth'); // STORAGE_KEY en AuthContext
+    if (stored) {
+      const { token } = JSON.parse(stored);
+      if (token && !config.url?.includes('/auth/login')) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    }
+  } catch { /* localStorage no disponible / JSON inválido → sin header */ }
+  return config;
+});
+
 // Cases
 export const getCases = (params: Record<string, string | number>) =>
   api.get('/cases', { params }).then(r => r.data);

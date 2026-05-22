@@ -98,8 +98,8 @@ const isIgnored = (msg) => IGNORE_CONSOLE.some((re) => re.test(msg));
   try {
     const r = await page.evaluate(async () => {
       try {
-        const tok = JSON.parse(localStorage.getItem('auth') || '{}').token
-          || localStorage.getItem('token') || localStorage.getItem('access_token');
+        // AuthContext guarda el token bajo la clave 'tutelas_auth' como JSON {token}.
+        const tok = JSON.parse(localStorage.getItem('tutelas_auth') || '{}').token || '';
         const res = await fetch('/api/cases/table', { headers: tok ? { Authorization: `Bearer ${tok}` } : {} });
         const j = await res.json();
         const real = (Array.isArray(j) ? j : []).find((x) => x && x.id && x.folder_name !== '__SIN_RADICADO__');
@@ -132,7 +132,7 @@ const isIgnored = (msg) => IGNORE_CONSOLE.some((re) => re.test(msg));
   currentRoute = '(asistente)';
   try {
     const r = await page.evaluate(async () => {
-      const tok = localStorage.getItem('token') || localStorage.getItem('access_token') || '';
+      const tok = JSON.parse(localStorage.getItem('tutelas_auth') || '{}').token || '';
       const res = await fetch('/api/chat/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },

@@ -38,6 +38,49 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Exige JWT Bearer válido en todo `/api/*` salvo la lista blanca pública.
+
+    Reusa `decode_token` (auth/service). Cubre routers Y endpoints definidos
+    directo en `app` (sync, monitor, run-all, ...) — imposible olvidar uno.
+
+    DEBE insertarse ANTES del CORSMiddleware en main.py para que las respuestas
+    401 lleven cabeceras CORS y el refresh-on-401 del frontend funcione.
+    """
+
+    # Endpoints accesibles sin token. /docs, /openapi.json, /redoc quedan
+    # públicos por decisión operativa (solo exponen el esquema, no datos).
+    PUBLIC_PATHS = frozenset({
+        "/api/auth/login",
+        "/api/auth/refresh",
+        "/api/health",
+        "/api/health/normalizer",
+    })
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        # Preflight CORS, rutas no-API (assets, docs) y lista blanca → pasan.
+        if (
+            request.method == "OPTIONS"
+            or not path.startswith("/api/")
+            or path in self.PUBLIC_PATHS
+        ):
+            return await call_next(request)
+
+        from backend.auth.service import decode_token
+
+        header = request.headers.get("Authorization", "")
+        token = header[7:] if header.startswith("Bearer ") else None
+        payload = decode_token(token) if token else None
+        if not payload or payload.get("type") != "access":
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Autenticación requerida"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return await call_next(request)
+
+
 async def global_exception_handler(request: Request, exc: Exception):
     """Captura excepciones no manejadas y retorna JSON estructurado."""
     logger.error(

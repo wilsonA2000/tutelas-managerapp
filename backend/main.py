@@ -261,6 +261,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Auth global: exige JWT en todo /api/* salvo lista blanca. Se añade ANTES del
+# CORS para que CORS (añadido después = más externo) envuelva las respuestas 401
+# y el refresh-on-401 del frontend funcione.
+from backend.core.middleware import RequestIDMiddleware, AuthMiddleware, global_exception_handler
+app.add_middleware(AuthMiddleware)
+
 # CORS para el frontend React (localhost:5173)
 app.add_middleware(
     CORSMiddleware,
@@ -271,7 +277,6 @@ app.add_middleware(
 )
 
 # Middleware
-from backend.core.middleware import RequestIDMiddleware, global_exception_handler
 app.add_middleware(RequestIDMiddleware)
 app.add_exception_handler(Exception, global_exception_handler)
 

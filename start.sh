@@ -22,7 +22,10 @@ fuser -k 5173/tcp 2>/dev/null
 # Iniciar backend
 echo "[1/2] Iniciando backend (FastAPI) en puerto 8000..."
 cd "$DIR"
-"$DIR/venv/bin/python3" -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload &
+# --host 127.0.0.1: la API NO es alcanzable desde otras máquinas de la red local
+# (defensa en profundidad junto al AuthMiddleware). El proxy de Vite (/api →
+# localhost:8000) la alcanza igual porque corre en el mismo host.
+"$DIR/venv/bin/python3" -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload &
 BACKEND_PID=$!
 
 # Iniciar frontend
