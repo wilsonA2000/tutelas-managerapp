@@ -15,8 +15,11 @@ import re
 from sqlalchemy.orm import Session
 from backend.database.models import Case, Document
 
+# lookbehind/lookahead de dígito (no `\b`): así matchea aunque el rad venga pegado a
+# `_` o letras en el filename (p.ej. "Fallo_680013333014-2026-00032-00"), pero NUNCA
+# como subcadena de un número más largo.
 _RAD23 = re.compile(
-    r"\b\d{5}[\s.\-]?\d{2}[\s.\-]?\d{2}[\s.\-]?\d{3}[\s.\-]?\d{4}[\s.\-]?\d{5}[\s.\-]?\d{2}\b"
+    r"(?<!\d)\d{5}[\s.\-]?\d{2}[\s.\-]?\d{2}[\s.\-]?\d{3}[\s.\-]?\d{4}[\s.\-]?\d{5}[\s.\-]?\d{2}(?!\d)"
 )
 
 
@@ -77,8 +80,13 @@ def _expected_juzgado(crad: str | None, own_rads: list[str]) -> tuple[str | None
     if own_rads:
         from collections import Counter
         juzgados = Counter(_juzgado(r) for r in own_rads)
-        maj, n = juzgados.most_common(1)[0]
-        # solo confiable si hay consenso (≥2 docs o único)
+        ranked = juzgados.most_common(2)
+        maj, n = ranked[0]
+        # EMPATE (p.ej. 2 docs de un juzgado y 2 de otro) → ambiguo, NO adivinar:
+        # marcar mal la "otra mitad" sería peor que no chequear.
+        if len(ranked) > 1 and ranked[1][1] == n:
+            return None, "indeterminable_empate"
+        # mayoría estricta requiere consenso (≥2 docs, o un único juzgado presente)
         if n >= 2 or len(juzgados) == 1:
             return maj, "mayoria_docs"
     return None, "indeterminable"
