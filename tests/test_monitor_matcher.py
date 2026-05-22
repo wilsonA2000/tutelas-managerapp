@@ -313,3 +313,46 @@ class TestMatchResult:
         assert parsed["score"] == 70  # v6.0.1
         assert parsed["confidence"] == "HIGH"
         assert "rad23" in parsed["breakdown"]
+
+
+class TestResolveRadicado:
+    """resolve_radicado: jerarquía anti-conflación subject↔body (2026-05-22).
+
+    Bug raíz: el rad ajeno de la cadena reenviada le ganaba al rad del subject.
+    """
+
+    def test_bug_conflacion_0053_0080(self):
+        """El short-rad del subject gana al short-rad ajeno del body (sin rad23)."""
+        from backend.email.gmail_monitor import resolve_radicado
+        r = resolve_radicado(
+            "RESPUESTA ACCIÓN DE TUTELA 2026-0053 DESPUES DE LA NULIDAD",
+            "De: juzgado ref 2026-00080 Yennifer y 2026-00072 y 2026-00172",
+        )
+        assert r["radicado_corto"] == "2026-00053"
+
+    def test_rad23_body_gana_a_short_rad_subject(self):
+        """rad23 del body manda (ID nacional) — corrige typos de año del subject."""
+        from backend.email.gmail_monitor import resolve_radicado
+        r = resolve_radicado(
+            "RESPUESTA REQUERIMIENTO 2026-0066",  # año equivocado en subject
+            "Notificación rad 68266-40-89-001-2025-00066-00 del juzgado",
+        )
+        assert r["radicado_23"] == "68266-40-89-001-2025-00066-00"
+        assert r["radicado_corto"] == "2025-00066"
+
+    def test_rad23_subject_manda(self):
+        from backend.email.gmail_monitor import resolve_radicado
+        # rad23 continuo en el subject gana sobre cualquier rad del body.
+        r = resolve_radicado("Fallo 680014009027202600100", "ref otra tutela 2026-00080")
+        assert r["radicado_23"] == "680014009027202600100"
+        assert r["radicado_corto"] == "2026-00100"
+
+    def test_subject_sin_rad_usa_body(self):
+        from backend.email.gmail_monitor import resolve_radicado
+        r = resolve_radicado("RV: NOTIFICACIÓN JUDICIAL", "Auto admite tutela 2026-00170 del juzgado")
+        assert r["radicado_corto"] == "2026-00170"
+
+    def test_sin_rad_en_ningun_lado(self):
+        from backend.email.gmail_monitor import resolve_radicado
+        r = resolve_radicado("RV: saludos", "sin radicado alguno")
+        assert r["radicado_corto"] == "" and r["radicado_23"] == ""

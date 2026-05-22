@@ -237,6 +237,55 @@ def extract_radicado(text: str) -> dict:
     return result
 
 
+def resolve_radicado(subject: str, body: str) -> dict:
+    """Resuelve el radicado con una jerarquía de confianza explícita, evitando
+    que la sopa de rads de la cadena reenviada contamine la identidad del caso.
+
+    Bug que corrige (2026-05-22, conflación 0053→0080): el email "RESPUESTA
+    TUTELA 2026-0053" (sin rad23) se asignó a 2026-0080 porque al buscar en
+    `subject + body` el short-rad ajeno del body (bundle reenviado) le ganó al
+    rad explícito del subject.
+
+    Jerarquía (validada contra los 1660 emails reales — ver
+    [[project_fix_matcher_subject_rad]]):
+      1. rad23 en el SUBJECT → manda (ID nacional único de 23 díg).
+      2. rad23 en el BODY (bloques, raíz primero) → manda. Es más autoritativo
+         que un short-rad: en los 9 conflictos reales subject↔body el rad23 del
+         body siempre fue el correcto (typos de año en subject, números de
+         oficio espurios, números de sanción).
+      3. SIN rad23 en ningún lado → short-rad del SUBJECT (anti-conflación: el
+         subject es curado y señala el caso; el body trae rads ajenos).
+      4. Subject sin short-rad → short-rad del body (bloques, raíz primero).
+
+    Returns: {'radicado_23': str, 'radicado_corto': str}
+    """
+    subj = extract_radicado(subject or "")
+    # 1. rad23 en el subject.
+    if subj.get("radicado_23"):
+        return subj
+
+    blocks = _split_forwarded_blocks(body) if body else []
+    scan = blocks if blocks else ([body] if body else [])
+
+    # 2. rad23 en el body (raíz primero).
+    for blk in scan:
+        b = extract_radicado(blk)
+        if b.get("radicado_23"):
+            return b
+
+    # 3. Sin rad23 → short-rad del subject manda.
+    if subj.get("radicado_corto"):
+        return subj
+
+    # 4. Subject sin rad → short-rad del body (raíz primero).
+    for blk in scan:
+        b = extract_radicado(blk)
+        if b.get("radicado_corto"):
+            return b
+
+    return {"radicado_23": "", "radicado_corto": ""}
+
+
 def extract_forest(body: str, attachment_names: list[str]) -> str:
     """Extraer número FOREST del body del correo.
     FOREST válido SOLO proviene de tutelas@santander.gov.co.
@@ -1053,9 +1102,10 @@ def check_inbox(db: Session) -> list[dict]:
                 att_names = [a["filename"] for a in att_parts]
 
                 # ── CLASIFICAR ──
-                full_text = f"{subject} {body}"
                 tipo = classify_email_type(subject, sender)
-                radicado_data = extract_radicado(full_text)
+                # Subject-rad prioritario (anti-conflación 0053→0080): el rad del
+                # subject le gana al rad ajeno de la cadena reenviada. Ver resolve_radicado.
+                radicado_data = resolve_radicado(subject, body)
                 forest = extract_forest(body, att_names)
                 radicado_data["forest"] = forest  # v5.0: FOREST como clave de matching
                 accionante = extract_accionante(subject, body)
