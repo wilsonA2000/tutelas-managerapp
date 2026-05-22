@@ -144,9 +144,17 @@ def _call_llm(prompt: str, missing: list[str]) -> Optional[str]:
             {"role": "user", "content": prompt},
         ],
         "max_tokens": 400, "temperature": 0,
-        "response_format": {"type": "json_schema",
-                            "json_schema": {"name": "gap_fill", "schema": _build_schema(missing), "strict": True}},
     }
+    # Constrained decoding. strict json_schema acota duro (enum+maxLength) y es la
+    # config de producción para el 4B. Pero el 30B-A3B (MoE) degenera con strict
+    # cuando se le fuerza a llenar campos `required` sin respuesta (emite Unicode
+    # basura). `V9_LLM_SOFT_JSON=true` usa json_object suave → parseo con
+    # _parse_json_loose. Ver bake-off 2026-05-21.
+    if os.getenv("V9_LLM_SOFT_JSON", "false").lower() == "true":
+        body["response_format"] = {"type": "json_object"}
+    else:
+        body["response_format"] = {"type": "json_schema",
+                                   "json_schema": {"name": "gap_fill", "schema": _build_schema(missing), "strict": True}}
 
     def _post(payload: dict) -> str:
         req = urllib.request.Request(LLM_URL + "/v1/chat/completions",
