@@ -46,6 +46,13 @@ function Button({
   size = "default",
   ...props
 }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+  // Si se pasa `render` (p.ej. <a href>), el elemento renderizado NO es un
+  // <button> nativo → Base UI emite un warning a menos que nativeButton=false.
+  // Lo derivamos aquí (respetando un override explícito) para que cualquier
+  // <Button render={...}> no-button quede correcto sin tener que recordarlo.
+  if (props.render != null && props.nativeButton === undefined) {
+    props = { ...props, nativeButton: false }
+  }
   return (
     <ButtonPrimitive
       data-slot="button"
