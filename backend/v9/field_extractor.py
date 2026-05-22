@@ -2124,6 +2124,7 @@ def extract_oficina_responsable_for_case(db: Session, case: Case) -> tuple[Optio
 SENTIDO_FALLO_VOCAB: tuple[str, ...] = (
     "CONCEDE", "CONCEDE_PARCIAL", "NIEGA", "IMPROCEDENTE", "HECHO_SUPERADO", "CARENCIA_OBJETO",
     "DESISTIMIENTO",  # desistimiento aceptado por el juez (art. 26 D2591/91): termina sin fallo de fondo
+    "NULIDAD",  # 2da instancia decreta nulidad de lo actuado y devuelve a 1ra → reabre el proceso
 )
 
 # La parte resolutiva del fallo: lo que sigue a "RESUELVE:" / "RESUELVO:" (max ~2500 chars).
@@ -2931,6 +2932,9 @@ def extract_estado_for_case(db: Session, case: Case) -> str:
         return "ACTIVO"  # sin fallo de 1ra (en curso, o no archivado → tratar como pendiente)
     impug = (getattr(case, "impugnacion", "") or "").upper()
     sentido2 = getattr(case, "sentido_fallo_2nd", None)
+    # Nota: NULIDAD de 2da NO se deriva a ACTIVO automáticamente — reabre el proceso pero
+    # el rehacer puede haber concluido ya (cf. c5/c136 cerrados vs c240 en curso). Quien
+    # tenga un rehacer pendiente se marca processing_status=REVISION para revisión humana.
     if impug == "SI" and not sentido2:
         return "ACTIVO"  # impugnación interpuesta, 2da aún sin fallo
     for n in ("", "_2", "_3"):
