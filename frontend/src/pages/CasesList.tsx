@@ -25,6 +25,7 @@ const REVISION_FLAG_LABEL: Record<string, string> = {
   incidente_sin_fecha: 'incidente s/fecha',
   sin_quien_impugno: 'impugna s/sujeto',
   necesita_revision: 'revisar',
+  sin_extraer: 'sin extraer',
 }
 
 // Severidad → clases tailwind. Mantengo paleta consistente entre el filtro
@@ -50,7 +51,7 @@ const REVISION_SEVERITY: Record<string, string> = {
   sin_accionante: 'critical', sin_radicado: 'critical',
   pocos_docs: 'warn', docs_sospechosos: 'warn', baja_completitud: 'warn',
   incidente_sin_fecha: 'procedural', sin_quien_impugno: 'procedural',
-  sin_fallo: 'info', necesita_revision: 'high',
+  sin_fallo: 'info', necesita_revision: 'high', sin_extraer: 'warn',
 }
 
 interface RevisionFlag { value: string; label: string; severity: string; count: number }
@@ -315,7 +316,17 @@ export default function CasesList() {
                             <span className="text-muted-foreground text-xs">{c.CIUDAD || '—'}</span>
                           </TableCell>
                           <TableCell>
-                            {c.ESTADO ? <StatusBadge type="estado" value={c.ESTADO} /> : <span className="text-muted-foreground text-xs">—</span>}
+                            <div className="flex flex-col items-start gap-0.5">
+                              {c.ESTADO ? <StatusBadge type="estado" value={c.ESTADO} /> : <span className="text-muted-foreground text-xs">—</span>}
+                              {c.tipo_actuacion !== 'COMUNICACION' && (
+                                <span
+                                  className={`text-[9px] font-semibold px-1 py-0.5 rounded border ${c.extraido ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}
+                                  title={c.extraido ? 'El pipeline v9 extrajo este caso' : 'Sin extraer (el pipeline v9 no corrió sobre este caso)'}
+                                >
+                                  {c.extraido ? '✓ extraído' : 'sin extraer'}
+                                </span>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell>
                             {c.SENTIDO_FALLO_1ST ? <StatusBadge type="fallo" value={c.SENTIDO_FALLO_1ST} /> : <span className="text-muted-foreground text-xs">—</span>}

@@ -24,6 +24,7 @@ _REVISION_OPTIONS = {
     "baja_completitud",      # completitud < MIN_COMPLETITUD_PERCENT
     "incidente_sin_fecha",   # incidente=SI sin fecha_apertura_incidente
     "sin_quien_impugno",     # impugnacion=SI sin quien_impugno
+    "sin_extraer",           # field_confidences_json vacío → el pipeline v9 no corrió
 }
 
 # Conteos por flag, cacheados 30s — escanea ~220 casos en Python (igual que list_cases con filtro).
@@ -41,7 +42,7 @@ def _case_review_flags(c: Case) -> dict:
         return {k: False for k in (
             "sin_accionante", "sin_radicado", "pocos_docs", "docs_sospechosos",
             "sin_fallo", "baja_completitud", "incidente_sin_fecha",
-            "sin_quien_impugno", "necesita_revision",
+            "sin_quien_impugno", "necesita_revision", "sin_extraer",
         )} | {"_completitud": 100.0, "_n_docs": len(c.documents)}
     n_docs = len(c.documents)
     susp = any((d.verificacion or "") in ("SOSPECHOSO", "NO_PERTENECE") for d in c.documents)
@@ -65,6 +66,9 @@ def _case_review_flags(c: Case) -> dict:
         "baja_completitud": baja,
         "incidente_sin_fecha": inc_sin_fecha,
         "sin_quien_impugno": sin_qi,
+        # sin_extraer: ni corrió el pipeline v9 (field_confidences) NI está suficientemente
+        # diligenciado a mano (completitud ≥ EXTRAIDO_MIN_COMPLETITUD). NO entra en necesita_revision.
+        "sin_extraer": not _case_extraido(c, compl),
         # "necesita_revision" agrupa señales accionables (excluye sin_fallo — normal en tutelas en curso)
         "necesita_revision": no_acc or no_rad or n_docs <= 1 or susp or baja or inc_sin_fecha or sin_qi,
         "_completitud": compl,
@@ -124,7 +128,11 @@ def list_cases(
         # camino rápido (sin filtro de revisión): paginar en SQL, orden id desc
         total = query.count()
         cases = query.order_by(Case.id.desc()).offset((page - 1) * per_page).limit(per_page).all()
-        items = [c.to_dict() for c in cases]
+        items = []
+        for c in cases:
+            d = c.to_dict()
+            d["extraido"] = _case_extraido(c)  # refinado: pipeline v9 O completitud suficiente
+            items.append(d)
     else:
         # filtro de revisión: requiere mirar documentos/completitud → filtrar y paginar en Python
         all_cases = query.all()
@@ -142,6 +150,7 @@ def list_cases(
             _chip_hide.add("sin_fallo")      # ruido (normal en tutelas en curso) salvo si es el filtro activo
         for c, f in page_slice:
             d = c.to_dict()
+            d["extraido"] = not f.get("sin_extraer", False)  # consistente con el flag
             d["_review"] = {k: v for k, v in f.items() if not k.startswith("_") and v and k not in _chip_hide}
             d["_completitud_pct"] = round(f["_completitud"])
             d["_n_docs"] = f["_n_docs"]
@@ -294,6 +303,25 @@ def _get_case_completitud(case: Case) -> float:
     """Calcular completitud de un caso individual (sobre los campos del cuadro v9)."""
     filled = sum(1 for attr in _CUADRO_FIELDS if str(getattr(case, attr, "") or "").strip())
     return round(filled / len(_CUADRO_FIELDS) * 100, 1)
+
+
+# Umbral de completitud a partir del cual un caso curado a mano (sin field_confidences)
+# se considera "extraído/diligenciado" para el indicador. Ver distribución 2026-05-24:
+# el grueso de los curados está en 40-60% → 50% deja como "sin extraer" solo los
+# genuinamente poco poblados (~58 casos). Ajustable.
+EXTRAIDO_MIN_COMPLETITUD = 50.0
+
+
+def _case_extraido(case: Case, compl: float | None = None) -> bool:
+    """¿El caso está extraído/diligenciado? True si corrió el pipeline v9
+    (field_confidences_json poblado) O si está suficientemente completo a mano
+    (completitud ≥ EXTRAIDO_MIN_COMPLETITUD). `compl` opcional para no recomputar."""
+    _fc = (case.field_confidences_json or "").strip()
+    if _fc and _fc not in ("{}", "null"):
+        return True
+    if compl is None:
+        compl = _get_case_completitud(case)
+    return compl >= EXTRAIDO_MIN_COMPLETITUD
 
 
 def _get_valid_case_ids(db: Session, min_completitud: float = MIN_COMPLETITUD_PERCENT):
@@ -643,7 +671,7 @@ def get_revision_flag_counts(db: Session) -> dict:
     keys = (
         "necesita_revision", "sin_accionante", "sin_radicado", "pocos_docs",
         "docs_sospechosos", "baja_completitud", "incidente_sin_fecha",
-        "sin_quien_impugno", "sin_fallo",
+        "sin_quien_impugno", "sin_fallo", "sin_extraer",
     )
     counts = {k: 0 for k in keys}
     for c in base_cases:
@@ -670,6 +698,7 @@ _REVISION_FLAG_META: tuple[tuple[str, str, str], ...] = (
     ("incidente_sin_fecha", "Incidente s/fecha",   "procedural"),
     ("sin_quien_impugno",   "Impugna s/sujeto",    "procedural"),
     ("sin_fallo",           "Sin fallo 1ra",       "info"),
+    ("sin_extraer",         "Sin extraer",         "warn"),
 )
 
 

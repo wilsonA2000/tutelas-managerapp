@@ -167,6 +167,11 @@ class Case(Base):
             "folder_name": self.folder_name,
             "folder_path": self.folder_path,
             "processing_status": self.processing_status,
+            # extraido: ¿corrió el pipeline v9 sobre el caso? (field_confidences_json poblado).
+            # Indicador "extraído sí/no" para el frontend. Ojo: curación 100% manual sin
+            # field_confidences marca extraido=False (el pipeline no corrió, aunque tenga datos).
+            "extraido": bool((self.field_confidences_json or "").strip()
+                             and (self.field_confidences_json or "").strip() not in ("{}", "null")),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             # Acumulación procesal (Dec 2591/91 art. 13 + Dec 1834/2015 tutelas masivas)
