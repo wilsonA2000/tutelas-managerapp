@@ -796,30 +796,27 @@ def run(
     # fecha_ingreso y fecha_fallo_1st usan el reorder por tipo de doc.
     # fecha_apertura_incidente se maneja después en el bloque de incidentes 1/2/3
     # para garantizar orden cronológico correcto entre slots.
-    for fecha_field in ("fecha_ingreso", "fecha_fallo_1st"):
+    # fecha_fallo_1st NO se extrae aquí: el guard `_doctype(d)=="SENTENCIA"` lo derrota
+    # la misma mala clasificación que sentido_fallo (un doc con "RESUELVE:" se marca
+    # "SENTENCIA" aunque sea un auto/escrito) → inventaba fecha de fallo en recién
+    # admitidas. Autoridad ÚNICA: field_extractor_pass.extract_fecha_fallo_1ra_for_case
+    # (valida que exista sentencia 1ra real).
+    for fecha_field in ("fecha_ingreso",):
         for d in _docs_in_order(docs, fecha_field):
             if fields.is_empty(fecha_field):
-                # fecha_fallo_1st SOLO de SENTENCIA: el dateline "Ciudad, DD de mes de
-                # AAAA" también aparece en el AUTO_ADMISORIO y la demanda; tomarlo de ahí
-                # inventa un fallo en tutelas recién admitidas (bug c478/c479).
-                # field_extractor_pass es la autoridad real (valida que exista sentencia).
-                if fecha_field == "fecha_fallo_1st" and _doctype(d) != "SENTENCIA":
-                    continue
                 v = _extract_fecha(d.text, fecha_field)
                 if v:
                     fields.set(fecha_field, v, FieldSource.REGEX)
 
     # ----- Sentido fallo + flags (impugnación / incidente) -----
     for d, t in classified:
-        # sentido_fallo_1st SOLO de SENTENCIA. La DEMANDA_TUTELA (categoría "OTRO") dice
-        # "solicito que se CONCEDA el amparo" y el AUTO trae "concédase la medida
-        # provisional" → leer "OTRO" inventaba CONCEDE en casos sin fallo (bug c478/c479).
-        # field_extractor_pass (extract_sentido_fallo_1ra_for_case) es la autoridad: lee
-        # la dispositiva real de SENTENCIA_1RA/DESCONOCIDO y devuelve None si no hay.
-        if t == "SENTENCIA" and fields.is_empty("sentido_fallo_1st"):
-            v = _extract_sentido_fallo(d.text)
-            if v:
-                fields.set("sentido_fallo_1st", v, FieldSource.REGEX)
+        # sentido_fallo_1st: NO se extrae aquí. `_doctype` clasifica por keyword y
+        # marca "SENTENCIA" cualquier doc con "RESUELVE:" — incluido un ESCRITO DE TUTELA
+        # que cita un precedente o redacta su pretensión como dispositiva ("solicito que se
+        # RESUELVA: PRIMERO TUTELAR...") → inventaba CONCEDE en casos recién admitidos sin
+        # fallo (bug c226/c478/c479: el guard `t=="SENTENCIA"` lo derrota la mala clasif.).
+        # Autoridad ÚNICA: field_extractor_pass.extract_sentido_fallo_1ra_for_case, que usa
+        # el doc_type REAL de la DB (SENTENCIA_1RA) y devuelve None si no hay fallo.
 
         if fields.is_empty("impugnacion"):
             v = _extract_impugnacion_flag(d.text, t)
