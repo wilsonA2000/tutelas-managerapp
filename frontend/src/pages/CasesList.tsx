@@ -226,33 +226,28 @@ export default function CasesList() {
           ) : (
             <>
               <div className="overflow-x-auto">
-                <Table>
+                <Table className="w-full table-fixed">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-10">#</TableHead>
-                      <TableHead>Radicado</TableHead>
-                      <TableHead>Accionante</TableHead>
-                      <TableHead className="hidden md:table-cell">Juzgado</TableHead>
-                      <TableHead className="hidden lg:table-cell">Ciudad</TableHead>
-                      <TableHead>Estado</TableHead>
-                      <TableHead>Fallo</TableHead>
-                      {revision
-                        ? <TableHead>Revisión</TableHead>
-                        : <TableHead className="hidden xl:table-cell">Abogado</TableHead>}
+                      <TableHead className="w-10 text-center">#</TableHead>
+                      <TableHead className="w-[38%]">Caso</TableHead>
+                      <TableHead className="hidden lg:table-cell">Juzgado</TableHead>
+                      <TableHead className="w-44">Estado</TableHead>
+                      {revision && <TableHead className="w-[30%]">Revisión</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {casesQ.isLoading ? (
                       Array.from({ length: 8 }).map((_, i) => (
                         <TableRow key={i}>
-                          {Array.from({ length: 8 }).map((_, j) => (
+                          {Array.from({ length: revision ? 5 : 4 }).map((_, j) => (
                             <TableCell key={j}><Skeleton className="h-3 w-3/4" /></TableCell>
                           ))}
                         </TableRow>
                       ))
                     ) : cases.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                        <TableCell colSpan={revision ? 5 : 4} className="text-center py-12 text-muted-foreground">
                           {revision ? 'Ningún caso con esa condición de revisión 🎉' : 'No se encontraron casos'}
                         </TableCell>
                       </TableRow>
@@ -263,57 +258,54 @@ export default function CasesList() {
                           onClick={() => navigate(`/cases/${c.id}`)}
                           className="cursor-pointer hover:bg-primary/5"
                         >
-                          <TableCell className="text-muted-foreground text-xs">
+                          <TableCell className="text-muted-foreground text-xs text-center tabular-nums">
                             {(page - 1) * pageSize + idx + 1}
                           </TableCell>
-                          <TableCell className="max-w-[200px]">
-                            <span className="font-mono text-xs text-primary font-medium truncate block" title={c.folder_name}>
-                              {c.tipo_actuacion === 'COMUNICACION' && (
-                                <span
-                                  className="mr-1 inline-flex items-center gap-0.5 text-[9px] font-semibold px-1 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 align-middle"
-                                  title="Comunicación / carpeta libre sin radicado — no aparece en el cuadro Excel"
-                                  onClick={(e) => e.stopPropagation()}
-                                >📨 COM</span>
-                              )}
-                              {c.folder_name}
-                            </span>
-                          </TableCell>
-                          <TableCell className="max-w-[180px]">
-                            <span className="flex items-center gap-1">
-                              {/Sujeto de especial protecci[oó]n/i.test(c.OBSERVACIONES || '') && (
-                                <span title="Datos sensibles (sujeto de especial protección — manejar con reserva)" className="shrink-0 text-rose-500">
-                                  <Lock size={11} />
-                                </span>
-                              )}
-                              {c.tipo_acumulacion === 'RECTOR' && (
-                                <span
-                                  className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-semibold px-1 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200"
-                                  title={`Expediente rector de acumulación (Dec. 2591/91 art. 13 + Dec. 1834/2015). Tutelas acumuladas a este despacho.`}
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <Link2 size={9} />Rector
-                                </span>
-                              )}
-                              {c.tipo_acumulacion === 'ACUMULADO' && c.acumulado_a_case_id && (
-                                <button
-                                  type="button"
-                                  className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-semibold px-1 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
-                                  title={`Acumulado al expediente #${c.acumulado_a_case_id}. Pretensiones y sentencia se resuelven en el rector.`}
-                                  onClick={(e) => { e.stopPropagation(); navigate(`/cases/${c.acumulado_a_case_id}`) }}
-                                >
-                                  <Link2 size={9} />Acum→#{c.acumulado_a_case_id}
-                                </button>
-                              )}
-                              <span className="text-foreground font-medium text-sm truncate" title={c.ACCIONANTE || ''}>
-                                {c.ACCIONANTE || <span className="text-muted-foreground">—</span>}
+                          <TableCell>
+                            <div className="flex flex-col gap-0.5 min-w-0">
+                              <span className="font-mono text-[10px] text-primary/70 truncate block" title={c.folder_name}>
+                                {c.tipo_actuacion === 'COMUNICACION' && (
+                                  <span
+                                    className="mr-1 inline-flex items-center gap-0.5 text-[9px] font-semibold px-1 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 align-middle"
+                                    title="Comunicación / carpeta libre sin radicado — no aparece en el cuadro Excel"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >📨 COM</span>
+                                )}
+                                {(c.folder_name || '').split(' ')[0] || '—'}
                               </span>
-                            </span>
-                          </TableCell>
-                          <TableCell className="hidden md:table-cell">
-                            <span className="text-muted-foreground text-xs">{c.JUZGADO || '—'}</span>
+                              <span className="flex items-center gap-1 min-w-0">
+                                {/Sujeto de especial protecci[oó]n/i.test(c.OBSERVACIONES || '') && (
+                                  <span title="Datos sensibles (sujeto de especial protección — manejar con reserva)" className="shrink-0 text-rose-500">
+                                    <Lock size={11} />
+                                  </span>
+                                )}
+                                {c.tipo_acumulacion === 'RECTOR' && (
+                                  <span
+                                    className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-semibold px-1 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200"
+                                    title={`Expediente rector de acumulación (Dec. 2591/91 art. 13 + Dec. 1834/2015). Tutelas acumuladas a este despacho.`}
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <Link2 size={9} />Rector
+                                  </span>
+                                )}
+                                {c.tipo_acumulacion === 'ACUMULADO' && c.acumulado_a_case_id && (
+                                  <button
+                                    type="button"
+                                    className="shrink-0 inline-flex items-center gap-0.5 text-[9px] font-semibold px-1 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
+                                    title={`Acumulado al expediente #${c.acumulado_a_case_id}. Pretensiones y sentencia se resuelven en el rector.`}
+                                    onClick={(e) => { e.stopPropagation(); navigate(`/cases/${c.acumulado_a_case_id}`) }}
+                                  >
+                                    <Link2 size={9} />Acum→#{c.acumulado_a_case_id}
+                                  </button>
+                                )}
+                                <span className="text-foreground font-medium text-sm truncate" title={c.ACCIONANTE || ''}>
+                                  {c.ACCIONANTE || <span className="text-muted-foreground">—</span>}
+                                </span>
+                              </span>
+                            </div>
                           </TableCell>
                           <TableCell className="hidden lg:table-cell">
-                            <span className="text-muted-foreground text-xs">{c.CIUDAD || '—'}</span>
+                            <span className="text-muted-foreground text-xs truncate block" title={c.JUZGADO || ''}>{c.JUZGADO || '—'}</span>
                           </TableCell>
                           <TableCell>
                             <div className="flex flex-col items-start gap-0.5">
@@ -328,10 +320,7 @@ export default function CasesList() {
                               )}
                             </div>
                           </TableCell>
-                          <TableCell>
-                            {c.SENTIDO_FALLO_1ST ? <StatusBadge type="fallo" value={c.SENTIDO_FALLO_1ST} /> : <span className="text-muted-foreground text-xs">—</span>}
-                          </TableCell>
-                          {revision ? (
+                          {revision && (
                             <TableCell>
                               <div className="flex flex-wrap items-center gap-1">
                                 <span className={`text-[10px] font-semibold tabular-nums ${(c._completitud_pct ?? 0) < 30 ? 'text-rose-600' : (c._completitud_pct ?? 0) < 50 ? 'text-amber-600' : 'text-muted-foreground'}`}>
@@ -353,10 +342,6 @@ export default function CasesList() {
                                   )
                                 })}
                               </div>
-                            </TableCell>
-                          ) : (
-                            <TableCell className="hidden xl:table-cell">
-                              <span className="text-muted-foreground text-xs">{c.ABOGADO_RESPONSABLE || '—'}</span>
                             </TableCell>
                           )}
                         </TableRow>
