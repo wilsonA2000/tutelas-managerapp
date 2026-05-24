@@ -104,3 +104,6 @@ screenshots/
 data/case_cache.stamp
 screenshots-v6016/
 /venv
+
+# Outputs de medición con PII (valores de campos de casos reales) — nunca subir
+data/quality_baseline_preorquestador.json
