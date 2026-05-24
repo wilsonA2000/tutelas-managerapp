@@ -71,6 +71,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         header = request.headers.get("Authorization", "")
         token = header[7:] if header.startswith("Bearer ") else None
+        # Fallback por query param para recursos que el navegador abre por URL
+        # directa (iframe / <a target=_blank> / window.open NO pueden enviar el
+        # header Authorization): preview de documentos y descargas de reportes.
+        # Acotado a GET (lo único que se abre así) para limitar exposición del
+        # token en logs/historial. Local-only (127.0.0.1) → riesgo bajo.
+        if not token and request.method == "GET":
+            token = request.query_params.get("token")
         payload = decode_token(token) if token else None
         if not payload or payload.get("type") != "access":
             return JSONResponse(

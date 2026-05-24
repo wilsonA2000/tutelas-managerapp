@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Search, Download, ChevronDown, ChevronUp, Check, X, Columns3, Table2, Link2 } from 'lucide-react'
-import { getCasesTable, updateCase, generateExcel } from '../services/api'
+import { getCasesTable, updateCase, generateExcel, withAuthToken } from '../services/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -95,7 +95,7 @@ export default function Cuadro() {
     mutationFn: generateExcel,
     onSuccess: (data) => {
       toast.success('Excel generado')
-      if (data.download_url || data.filename) window.open(data.download_url ?? `/api/reports/excel/download/${data.filename}`, '_blank')
+      if (data.download_url || data.filename) window.open(withAuthToken(data.download_url ?? `/api/reports/excel/download/${data.filename}`), '_blank')
     },
   })
 

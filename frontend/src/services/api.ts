@@ -136,9 +136,25 @@ export const getChatHealth = () => api.get('/chat/health').then(r => r.data);
 export const runReverifySospechosos = (dryRun = true, includeRevisar = false, limit = 0) =>
   api.post('/cleanup/reverify-sospechosos', { dry_run: dryRun, include_revisar: includeRevisar, limit }, { timeout: 600000 }).then(r => r.data);
 
+// Anexa el JWT como query param para URLs que el navegador abre por URL directa
+// (iframe / <a target=_blank> / window.open) — esos NO pasan por el interceptor
+// de axios y por tanto no llevan el header Authorization. El middleware backend
+// acepta ?token= como fallback solo en GET. Lee el mismo localStorage que el
+// interceptor (STORAGE_KEY 'tutelas_auth').
+export const withAuthToken = (url: string): string => {
+  try {
+    const stored = localStorage.getItem('tutelas_auth');
+    if (stored) {
+      const { token } = JSON.parse(stored);
+      if (token) return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+    }
+  } catch { /* sin token disponible → URL sin anexar */ }
+  return url;
+};
+
 // Documents
 export const getDocumentPreviewUrl = (id: number) =>
-  `/api/documents/${id}/preview`;
+  withAuthToken(`/api/documents/${id}/preview`);
 
 // Extraction
 export const extractSingle = (caseId: number, force: boolean = false) =>

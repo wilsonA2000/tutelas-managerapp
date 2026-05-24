@@ -4,7 +4,7 @@ import {
   FileSpreadsheet, Download, RefreshCw, Loader2,
   TrendingUp, CheckCircle, Clock, AlertCircle, ExternalLink,
 } from 'lucide-react'
-import { generateExcel, getExcelList, getMetrics } from '../services/api'
+import { generateExcel, getExcelList, getMetrics, withAuthToken } from '../services/api'
 import PageShell from '@/components/PageShell'
 import PageHeader from '@/components/PageHeader'
 import DataCard from '@/components/DataCard'
@@ -55,7 +55,7 @@ export default function Reports() {
       toast.success('Excel generado exitosamente')
       qc.invalidateQueries({ queryKey: ['excel-list'] })
       if (data?.download_url || data?.filename) {
-        window.open(data.download_url ?? `/api/reports/excel/download/${data.filename}`, '_blank')
+        window.open(withAuthToken(data.download_url ?? `/api/reports/excel/download/${data.filename}`), '_blank')
       }
     },
     onError: () => {
@@ -195,7 +195,7 @@ export default function Reports() {
                       {file.size_kb ? `${file.size_kb} KB` : '—'}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="outline" size="sm" render={<a href={file.url ?? `/api/reports/excel/download/${file.filename}`} target="_blank" rel="noopener noreferrer" />}>
+                      <Button variant="outline" size="sm" render={<a href={withAuthToken(file.url ?? `/api/reports/excel/download/${file.filename}`)} target="_blank" rel="noopener noreferrer" />}>
                           <Download size={13} />
                           Descargar
                       </Button>

@@ -7,7 +7,7 @@ import {
   Paperclip, ChevronLeft, X, User,
   Calendar, ArrowRight, FileText, Package,
 } from 'lucide-react'
-import { getEmails, getEmail, checkInbox, getGmailStats, getEmailPackage } from '../services/api'
+import { getEmails, getEmail, checkInbox, getGmailStats, getEmailPackage, getDocumentPreviewUrl } from '../services/api'
 import { useNavigate } from 'react-router-dom'
 import PageHeader from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
@@ -449,7 +449,7 @@ export default function Emails() {
                             </div>
                           </div>
                           <a
-                            href={`/api/documents/${doc.id}/preview`}
+                            href={getDocumentPreviewUrl(doc.id)}
                             target="_blank"
                             rel="noreferrer"
                             className="text-[10px] text-violet-600 hover:text-violet-800 shrink-0 px-2 py-1 rounded hover:bg-violet-100 transition-colors"
