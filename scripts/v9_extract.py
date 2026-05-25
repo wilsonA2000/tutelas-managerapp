@@ -62,6 +62,7 @@ def main():
     ap.add_argument("--apply", action="store_true", help="Escribir cambios a DB (default: dry_run)")
     ap.add_argument("--verbose", "-v", action="store_true", help="Mostrar todos los campos extraídos")
     ap.add_argument("--json", action="store_true", help="Output JSON en lugar de tabla")
+    ap.add_argument("--llm", action="store_true", help="Habilita fallbacks LLM (derecho/asunto/pretensiones/gap-fill/observaciones)")
     args = ap.parse_args()
 
     if not args.case and not args.all:
@@ -78,7 +79,7 @@ def main():
         results = []
         for cid in case_ids:
             try:
-                r = extract_case(db, cid, dry_run=not args.apply)
+                r = extract_case(db, cid, dry_run=not args.apply, use_llm=args.llm)
                 results.append(r)
                 if not args.json:
                     _print_result(r, verbose=args.verbose)

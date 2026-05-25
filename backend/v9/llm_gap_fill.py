@@ -29,6 +29,9 @@ logger = logging.getLogger("tutelas.v9.llm_gap")
 
 import urllib.request
 LLM_URL = os.getenv("LLM_LOCAL_URL", f"http://127.0.0.1:{os.getenv('LLM_LOCAL_PORT', '8765')}")
+# Externo (DeepSeek) si V9_LLM_API_KEY está seteada → agrega auth + model al payload.
+_LLM_API_KEY = os.getenv("V9_LLM_API_KEY", "")
+_LLM_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "qwen3-4b-iuris")
 
 # Vocabularios cerrados para constrained decoding (json_schema enum). El "" permite
 # al modelo decir "no sé" sin inventar.
@@ -157,9 +160,13 @@ def _call_llm(prompt: str, missing: list[str]) -> Optional[str]:
                                    "json_schema": {"name": "gap_fill", "schema": _build_schema(missing), "strict": True}}
 
     def _post(payload: dict) -> str:
+        headers = {"Content-Type": "application/json"}
+        if _LLM_API_KEY:  # proveedor externo (DeepSeek): requiere model + auth
+            payload = {**payload, "model": _LLM_MODEL}
+            headers["Authorization"] = f"Bearer {_LLM_API_KEY}"
         req = urllib.request.Request(LLM_URL + "/v1/chat/completions",
                                      data=json.dumps(payload).encode(),
-                                     headers={"Content-Type": "application/json"})
+                                     headers=headers)
         raw = urllib.request.urlopen(req, timeout=120).read().decode()
         return json.loads(raw)["choices"][0]["message"]["content"] or ""
 

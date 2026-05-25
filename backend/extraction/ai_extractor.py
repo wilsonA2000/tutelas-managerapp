@@ -33,6 +33,10 @@ _LOCAL_URL = os.getenv("LLM_LOCAL_URL", "http://127.0.0.1:8765")
 _LOCAL_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "qwen3-4b-iuris")
 _LOCAL_TIMEOUT = int(os.getenv("LLM_LOCAL_TIMEOUT", "180"))
 _SYSTEM_PROMPT_PATH = os.getenv("LLM_LOCAL_SYSTEM_PROMPT_PATH", "docs/iuris/SYSTEM_PROMPT_COMPILER.md")
+# Si se setea, _call_local apunta a un proveedor OpenAI-compatible EXTERNO
+# (ej. DeepSeek): agrega Authorization Bearer + el campo `model` al payload.
+# Sin esta var → comportamiento idéntico al de siempre (llama-server local).
+_LLM_API_KEY = os.getenv("V9_LLM_API_KEY", "")
 
 
 def _load_system_prompt() -> str:
@@ -103,9 +107,16 @@ def _call_local(messages: list[dict], model: str = _LOCAL_MODEL,
         "seed": 42,
         "max_tokens": max_tokens,
     }
+    headers = {}
+    if _LLM_API_KEY:  # proveedor externo (DeepSeek): requiere model + auth.
+        # Los callers pasan model local ("qwen3-4b-iuris") que el externo no conoce →
+        # usar el modelo del env (_LOCAL_MODEL = LLM_LOCAL_MODEL_ID, ej. deepseek-chat).
+        payload["model"] = _LOCAL_MODEL
+        headers["Authorization"] = f"Bearer {_LLM_API_KEY}"
     response = requests.post(
         f"{_LOCAL_URL}/v1/chat/completions",
         json=payload,
+        headers=headers,
         timeout=_LOCAL_TIMEOUT,
     )
     response.raise_for_status()
