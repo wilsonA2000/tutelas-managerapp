@@ -19,6 +19,7 @@ bayesian_assignment, live_consolidator, agent/orchestrator, narrative_builder.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -236,6 +237,33 @@ def extract_case(
         except Exception as e:  # noqa: BLE001
             warnings.append(f"folder_rename: {e}")
         timing["folder_rename"] = int((time.perf_counter() - t) * 1000)
+
+    # 10. Resolución de acumulación procesal. Si el caso resultó ser el "bucket" de
+    #     una acumulación (varias tutelas/accionantes juntadas por el juez), garantiza
+    #     un caso por cada radicado acumulado (CREA el hermano faltante con su
+    #     accionante), registra el vínculo RECTOR/ACUMULADO y enruta cada sentencia
+    #     individual al caso de su accionante. Conservador (ancla a la enumeración de
+    #     docs con señal de acumulación) e idempotente. Flag: ACUMULACION_AUTO (default
+    #     on). Envuelto en try/except: NUNCA debe romper la extracción.
+    if not dry_run and os.getenv("ACUMULACION_AUTO", "true").lower() != "false":
+        t = time.perf_counter()
+        try:
+            from backend.email.acumulacion_resolver import resolve_acumulacion
+            _case = db.query(Case).filter(Case.id == case_id).first()
+            if _case is not None:
+                _plan = resolve_acumulacion(db, _case, apply=True)
+                if _plan.is_acumulacion:
+                    _s = getattr(_plan, "_summary", {}) or {}
+                    if _s.get("created") or _s.get("routed"):
+                        warnings.append(
+                            f"acumulacion: rector={_plan.rector_rad} "
+                            f"creados={len(_s.get('created', []))} "
+                            f"vinculados={len(_s.get('linked', []))} "
+                            f"docs_enrutados={len(_s.get('routed', []))}"
+                        )
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"acumulacion: {e}")
+        timing["acumulacion"] = int((time.perf_counter() - t) * 1000)
 
     timing["__total"] = int((time.perf_counter() - t0) * 1000)
 
