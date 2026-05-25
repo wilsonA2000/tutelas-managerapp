@@ -2711,10 +2711,12 @@ _RE_INCIDENTE_SIGNAL = re.compile(
 )
 # Verbo dispositivo del AUTO de incidente / pista en el subject del email → decision_incidente
 _DECISION_INC_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
-    ("SANCIONA",       re.compile(r"(?i)\bsancionar?\b(?!\s+(?:el\s+)?archivo)|\bsancion[óa]\b|\bimpon\w+\s+(?:la\s+)?sanci[óo]n|\bauto\s+sanciona|providencia\s+sanciona|sancionar?\s+por\s+desacato")),
+    # NO_SANCIONA y NIEGA_APERTURA van ANTES que SANCIONA: "abstenerse de imponer
+    # sanciones" contiene "imponer sanción" y matchearía SANCIONA por error (caso c12).
     ("NO_SANCIONA",    re.compile(r"(?i)\babstenerse\s+de\s+(?:imponer|sancionar)|\babst[ée]ngase\s+de\s+sancionar|\bno\s+sancionar?\b|\bno\s+(?:se\s+)?(?:impone|impondr[áa])\s+sanci[óo]n")),
-    ("NIEGA_APERTURA", re.compile(r"(?i)\b(?:negar|rechazar|inadmitir|denegar|no\s+(?:dar\s+)?(?:apertura|tr[áa]mite))\b[^.\n]{0,40}?\b(?:apertura|incidente|tr[áa]mite\s+incidental)|\bauto\s+(?:que\s+)?(?:niega|rechaza|inadmite)\s+(?:la\s+)?apertura")),
-    ("CIERRA",         re.compile(r"(?i)\barchivar?\b|\barch[íi]vese\b|\bterminar?\b[^.\n]{0,20}\bincidente|\bterminaci[óo]n\s+(?:del?\s+)?incidente|\bcerrar?\b[^.\n]{0,20}\bincidente|\bcl[áa]usura\s+(?:del?\s+)?incidente|\bauto\s+(?:que\s+)?(?:archiva|termina|cierra)")),
+    ("NIEGA_APERTURA", re.compile(r"(?i)\b(?:negar|rechazar|inadmitir|denegar|no\s+(?:dar\s+)?(?:apertura|tr[áa]mite))\b[^.\n]{0,40}?\b(?:apertura|incidente|tr[áa]mite\s+incidental)|\bauto\s+(?:que\s+)?(?:niega|rechaza|inadmite)\s+(?:la\s+)?apertura|\babstenerse\s+de\s+(?:dar\s+)?(?:apertura|abrir|tr[áa]mit\w+)")),
+    ("SANCIONA",       re.compile(r"(?i)\bsancionar?\b(?!\s+(?:el\s+)?archivo)|\bsancion[óa]\b|\bimpon\w+\s+(?:la\s+)?sanci[óo]n|\bauto\s+sanciona|providencia\s+sanciona|sancionar?\s+por\s+desacato")),
+    ("CIERRA",         re.compile(r"(?i)\barchivar?\b|\barch[íi]vese\b|\b(?:ordenar?|decretar?|dispon\w+|declarar?)\s+(?:el\s+)?archivo\b|\barchivo\s+(?:definitivo\s+)?de\s+(?:las?\s+|los\s+|el\s+|este\s+)?(?:presentes\s+)?(?:diligencias|actuaciones|incidente|expediente)|\bterminar?\b[^.\n]{0,20}\bincidente|\bterminaci[óo]n\s+(?:del?\s+)?incidente|\bcerrar?\b[^.\n]{0,20}\bincidente|\bcl[áa]usura\s+(?:del?\s+)?incidente|\bauto\s+(?:que\s+)?(?:archiva|termina|cierra)")),
     ("EN_TRAMITE",     re.compile(r"(?i)\bapertur\w+\s+(?:formal\s+)?(?:del?\s+)?incidente|\babr[ií]r?\s+(?:el\s+)?incidente|\brequer\w+\s+previo|\bauto\s+(?:que\s+)?(?:abre|apertura|requiere|admite)\b|\bcorrer?\s+traslado|\bdecretar?\s+pruebas|\bauto\s+(?:de\s+)?pruebas")),
 )
 # Nombre del responsable del desacato — "contra/a [NOMBRE]" / "REQUERIR a [NOMBRE]"
@@ -2860,14 +2862,27 @@ def extract_incidentes_cluster_for_case(db: Session, case: Case) -> dict:
     n_inc = max(1, min(3, len(escrito_dates)))
     out["_n_incidentes"] = n_inc
 
-    # decisión: del AUTO_INCIDENTE si existe (RESUELVE), si no del subject del email
+    # decisión: del AUTO que decide el incidente, leyendo su zona dispositiva (RESUELVE).
+    # El auto puede estar etiquetado AUTO_INCIDENTE o (mal) INCIDENTE_DESACATO — lo
+    # reconocemos por "auto" en el nombre del archivo (los ESCRITOS incidentales del
+    # accionante no lo llevan). Se prefiere una decisión TERMINAL (sanción/archivo/cierre)
+    # sobre una de mera apertura/trámite, y entre terminales la del auto más reciente
+    # (los operadores numeran los docs cronológicamente: 03_, 07_, 10_…).
+    deciding_docs = list(autos_inc) + [d for d in inc_escritos if "auto" in (d.filename or "").lower()]
+    deciding_docs.sort(key=lambda d: (d.filename or ""))
     decision_global = None
-    for d in autos_inc:
+    for d in deciding_docs:
         zone = _last_resuelve_zone(d.extracted_text) or d.extracted_text[:2000]
         dec = _classify_decision_incidente(zone)
-        if dec:
-            decision_global = dec
-            break
+        if dec and dec != "EN_TRAMITE":
+            decision_global = dec  # sin break: nos quedamos con la última (más reciente) terminal
+    if not decision_global:
+        for d in deciding_docs:
+            zone = _last_resuelve_zone(d.extracted_text) or d.extracted_text[:2000]
+            dec = _classify_decision_incidente(zone)
+            if dec:
+                decision_global = dec
+                break
     if not decision_global:
         # buscar pistas en subjects/heads de emails
         for src in [s for s, _d in email_subjects] + [h for h, _d, _t in email_heads]:
