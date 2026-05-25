@@ -230,6 +230,63 @@ def _first_match(pattern, text: str, group: int = 1) -> Optional[str]:
 _RAD23_PREFIX = re.compile(r"68\d")
 _RAD23_WINDOW_CHARS = 50  # 23 dígitos + hasta 27 chars de separadores/saltos
 
+# --- Recuperación ANCLADA al folder (dept-agnóstica) -------------------------
+# El prefijo histórico `68\d` (Santander) tiene dos puntos ciegos:
+#   1) ignora tutelas radicadas FUERA de Santander (Medellín 05, Bogotá 11,
+#      Cúcuta 54…) donde la SED entra como vinculada;
+#   2) falla cuando hay un separador justo tras "68" ("68-296...", "68.679...").
+# Solución: una pasada que acepta CUALQUIER departamento pero exige que la cola
+# del rad (año chars 12-15 + consecutivo chars 16-20) coincida con el rad corto
+# del folder. Eso descarta rads citados/prestados (no inventa por frecuencia).
+_RAD23_CAND = re.compile(r"\d[\d.\-\s–—]{18,45}\d")
+# Rad corto del folder → (año4, consecutivo5). "2026-00061 X" → ("2026","00061").
+_RAD23_FOLDER_SHORT = re.compile(r"(20\d{2})[-.\s]?0?(\d{4,5})")
+
+
+def _folder_short_rad(folder_name: Optional[str]) -> Optional[tuple[str, str]]:
+    """Devuelve (año4, consecutivo5) del rad corto en el folder, o None.
+
+    OJO: muchos folders usan el nº INTERNO de la Gobernación (ej. "2026-21107")
+    en vez del consecutivo del juzgado. En ese caso el ancla no casará con el
+    rad real del juzgado → no se recupera nada (seguro: no inventa).
+    """
+    if not folder_name:
+        return None
+    m = _RAD23_FOLDER_SHORT.search(folder_name)
+    if not m:
+        return None
+    return (m.group(1), m.group(2).zfill(5))
+
+
+def _anchored_rad23(text: str, anchor: tuple[str, str]) -> Optional[str]:
+    """Rad23 de cualquier departamento cuya cola (año+consecutivo) == anchor."""
+    if not text:
+        return None
+    year, consec = anchor
+    pos_order: list[tuple[int, str]] = []
+    for m in _RAD23_CAND.finditer(text):
+        cand = re.sub(r"\D", "", m.group(0))
+        if len(cand) != 23:
+            continue
+        if cand[12:16] != year or cand[16:21] != consec:
+            continue
+        try:
+            if int(cand[21:23]) > 10:  # recurso plausible (00/01, raro 02-03)
+                continue
+        except ValueError:
+            continue
+        pos_order.append((m.start(), cand))
+    if not pos_order:
+        return None
+    from collections import Counter
+    counts = Counter(c for _p, c in pos_order)
+    top = max(counts.values())
+    topset = {c for c, n in counts.items() if n == top}
+    for _p, rad in pos_order:
+        if rad in topset:
+            return rad
+    return pos_order[0][1]
+
 
 # Caracteres permitidos entre dígitos de un rad23 real:
 #   espacios, tabs, newlines, guiones (ASCII y unicode), puntos, comas, slashes.
@@ -241,7 +298,9 @@ _RAD23_WINDOW_CHARS = 50  # 23 dígitos + hasta 27 chars de separadores/saltos
 _RAD23_VALID_SEPARATORS = set(" \t\n\r-./,–—\xa0  ")
 
 
-def _extract_radicado_23(text: str) -> Optional[str]:
+def _extract_radicado_23(
+    text: str, anchor: Optional[tuple[str, str]] = None
+) -> Optional[str]:
     """Extrae el rad23 con estrategia "sliding window + estructura CUP".
 
     Encuentra TODOS los candidatos de 23 dígitos válidos en el texto y
@@ -259,6 +318,15 @@ def _extract_radicado_23(text: str) -> Optional[str]:
     if not text:
         return None
     from collections import Counter
+
+    # (0) Recuperación ANCLADA al folder: si tenemos el rad corto del folder,
+    # aceptamos el rad de CUALQUIER departamento cuya cola coincida. Esto es
+    # alta confianza y descarta rads citados/prestados. Solo si hay ancla.
+    if anchor is not None:
+        anchored = _anchored_rad23(text, anchor)
+        if anchored:
+            return anchored
+
     candidates: list[str] = []
     seen_at_pos: list[tuple[int, str]] = []  # (pos, rad) para desempate
 
@@ -764,9 +832,11 @@ def run(
         return fields
 
     # ----- Identificadores fuertes (radicado, FOREST, cédula, accionante) -----
+    # Ancla del folder para recuperar rads de cualquier depto (ver _anchored_rad23).
+    rad_anchor = _folder_short_rad(folder_name)
     for d, _ in classified:
         if fields.is_empty("radicado_23_digitos"):
-            v = _extract_radicado_23(d.text)
+            v = _extract_radicado_23(d.text, anchor=rad_anchor)
             if v:
                 fields.set("radicado_23_digitos", v, FieldSource.REGEX)
 
