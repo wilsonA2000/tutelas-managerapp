@@ -1,5 +1,6 @@
 """Logica de negocio para casos de tutela."""
 
+import re
 import time
 from datetime import datetime
 from sqlalchemy.orm import Session, subqueryload
@@ -27,6 +28,10 @@ _REVISION_OPTIONS = {
     "sin_extraer",           # field_confidences_json vacío → el pipeline v9 no corrió
 }
 
+# Rad corto en el folder ("2026-00083", "2025-00305", "2026-10070"…). Identifica el
+# caso aunque no haya rad23 — incluye el nº interno de la Gobernación (ej. "2026-21107").
+_RAD_CORTO_FOLDER = re.compile(r"20\d{2}[-\s]?\d{4,5}")
+
 # Conteos por flag, cacheados 30s — escanea ~220 casos en Python (igual que list_cases con filtro).
 _REVISION_COUNT_CACHE: dict = {"data": None, "ts": 0.0}
 REVISION_COUNT_CACHE_TTL = 30
@@ -48,6 +53,13 @@ def _case_review_flags(c: Case) -> dict:
     susp = any((d.verificacion or "") in ("SOSPECHOSO", "NO_PERTENECE") for d in c.documents)
     no_acc = not (c.accionante or "").strip() or "[REVISAR_ACCIONANTE]" in (c.folder_name or "")
     no_rad = not (c.radicado_23_digitos or "").strip()
+    # Muchos juzgados (municipales/promiscuos) NO usan el CUP de 23 dígitos en sus
+    # autos: solo el rad corto (ej. "2026-00083"). Si el folder lo trae y el caso
+    # es una tutela real (>1 doc), el caso SÍ está identificado — la ausencia del
+    # rad23 NO es un error accionable. Validado 2026-05-25: de 29 sin_radicado, los
+    # 29 eran short-rad-only legítimos (el rad23 simplemente no existe en disco).
+    tiene_rad_corto = bool(_RAD_CORTO_FOLDER.search(c.folder_name or ""))
+    no_rad_accionable = no_rad and not (tiene_rad_corto and n_docs > 1)
     compl = _get_case_completitud(c)
     baja = compl < MIN_COMPLETITUD_PERCENT  # <20% del cuadro v9 — el caso casi no tiene datos
     inc_sin_fecha = (
@@ -69,8 +81,9 @@ def _case_review_flags(c: Case) -> dict:
         # sin_extraer: ni corrió el pipeline v9 (field_confidences) NI está suficientemente
         # diligenciado a mano (completitud ≥ EXTRAIDO_MIN_COMPLETITUD). NO entra en necesita_revision.
         "sin_extraer": not _case_extraido(c, compl),
-        # "necesita_revision" agrupa señales accionables (excluye sin_fallo — normal en tutelas en curso)
-        "necesita_revision": no_acc or no_rad or n_docs <= 1 or susp or baja or inc_sin_fecha or sin_qi,
+        # "necesita_revision" agrupa señales accionables (excluye sin_fallo — normal en tutelas en curso).
+        # Usa no_rad_accionable (no el crudo no_rad): un caso identificado por rad corto NO es error.
+        "necesita_revision": no_acc or no_rad_accionable or n_docs <= 1 or susp or baja or inc_sin_fecha or sin_qi,
         "_completitud": compl,
         "_n_docs": n_docs,
     }
