@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -2964,22 +2965,60 @@ def extract_estado_for_case(db: Session, case: Case) -> str:
     return "INACTIVO"
 
 
+_RESPUESTA_DOC_TYPES = frozenset({"RESPUESTA", "DOCX_RESPUESTA"})
+
+
+def _is_respuesta_doc(d: Document) -> bool:
+    """True si el documento es (o parece) un oficio de respuesta/contestación.
+
+    Robusto ante misclasificación: el clasificador por-filename a veces deja los PDF
+    de respuesta como PDF_OTRO/DESCONOCIDO (no tenía regla 'respuesta' para PDFs),
+    así que se reconoce por doc_type de respuesta O por nombre de archivo. Se
+    excluyen los correos (EMAIL*): un "Email_..._RESPUESTA..." es la notificación,
+    no el oficio (su fecha la maneja el fallback por email)."""
+    dt = d.doc_type or ""
+    if dt.startswith("EMAIL") or "INCIDENTE" in dt or "DESACATO" in dt:
+        return False
+    if dt in _RESPUESTA_DOC_TYPES:
+        return True
+    fn = (d.filename or "").lower()
+    if "incidente" in fn or "desacato" in fn:
+        return False
+    return ("respuesta" in fn) or ("contesta" in fn)
+
+
+# Marcadores de contexto cuya fecha NO es la del oficio sino boilerplate:
+#  - "FECHA DE APROBACIÓN" del formato (p.ej. 11/04/2024 de AP-AI-RG-110) → caso 397.
+#  - nombramiento/posesión de la Secretaria ("Decreto número 562 del 27 de octubre de
+#    2025 y acta de posesión No 216 del 04 de noviembre...") que aparece en toda
+#    respuesta SED → caso 72 (daba 27/10/2025).
+_TEMPLATE_DATE_MARKERS = (
+    "aprobaci", "versi", "codig", "vigencia",
+    "decreto", "posesi", "nombramiento", "acta de",
+)
+
+
 def extract_fecha_respuesta_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
-    """`fecha_respuesta` = fecha del DOCX de respuesta de la SED (dateline "Ciudad, DD
-    de MMMM de AAAA" del oficio). Si hay varias respuestas, la más temprana (la
-    contestación inicial). Cotas: año = rad23 ±1 y fecha ≥ fecha_ingreso. Fallback:
-    `date_received` del email .md cuyo subject es "RESPUESTA … TUTELA …".
+    """`fecha_respuesta` = fecha del oficio de respuesta de la SED (dateline "Ciudad, DD
+    de MMMM de AAAA" o header de email "Fecha … DD/MM/AAAA"). Si hay varias respuestas,
+    la más temprana (la contestación inicial). Solo se aceptan fechas con ancla de
+    dateline (coma de ciudad o "fecha") → descarta fechas de nombramiento/decreto
+    ("…del 27 de octubre…") y de plantilla ("FECHA DE APROBACIÓN"). Cotas: año entre
+    rad23-1 y el año actual+1 (una respuesta puede llegar años después en casos viejos
+    con desacatos) y fecha ≥ fecha_ingreso. Fallback: `date_received` del email .md cuyo
+    subject es "RESPUESTA … TUTELA …".
     Returns (valor, fuente) — fuente ∈ {"docx_respuesta","email","none"}."""
     yh = _rad_year(case)
     fi = _parse_ddmmyyyy(getattr(case, "fecha_ingreso", None))
+    _now_y = date.today().year
 
     def _ok(v: str) -> bool:
-        if yh is not None:
-            try:
-                if abs(int(v[-4:]) - yh) > 1:
-                    return False
-            except ValueError:
-                return False
+        try:
+            vy = int(v[-4:])
+        except ValueError:
+            return False
+        if yh is not None and (vy < yh - 1 or vy > _now_y + 1):
+            return False
         if fi:
             dv = _parse_ddmmyyyy(v)
             if dv and dv < fi:
@@ -2993,13 +3032,30 @@ def extract_fecha_respuesta_for_case(db: Session, case: Case) -> tuple[Optional[
         except Exception:
             return (9999, 99, 99)
 
-    # 1) datelines de los DOCX de respuesta → la fecha más temprana válida
+    # 1) datelines de los oficios de respuesta → la fecha más temprana válida.
+    #    Selección robusta vía _is_respuesta_doc (no depende de doc_type=="RESPUESTA"
+    #    exacto; un PDF de respuesta mal etiquetado PDF_OTRO también cuenta).
+    #    Para cada fecha exigimos un ANCLA de dateline:
+    #      - coma justo antes ("Bucaramanga, 22 de mayo…") → oficio, o
+    #      - "fecha" en el contexto ("Fecha Vie 22/05/2026") → header de email.
+    #    y descartamos las precedidas por marcadores de plantilla/nombramiento. Así no
+    #    se cuela "…del 27 de octubre de 2025" (decreto) ni "FECHA DE APROBACIÓN".
     cands: list[str] = []
-    for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == "RESPUESTA").all():
+    for d in db.query(Document).filter(Document.case_id == case.id).all():
+        if not _is_respuesta_doc(d):
+            continue
         t = d.extracted_text or ""
         if not t or len(t) < 200:
             continue
-        for _pos, v in _parse_es_dates(t[:1500]):
+        head = t[:1500]
+        head_l = head.lower()
+        for _pos, v in _parse_es_dates(head):
+            ctx = head_l[max(0, _pos - 40):_pos]
+            if any(mk in ctx for mk in _TEMPLATE_DATE_MARKERS):
+                continue  # fecha de plantilla/nombramiento, no del oficio
+            near = head_l[max(0, _pos - 4):_pos]
+            if ("," not in near) and ("fecha" not in ctx):
+                continue  # sin ancla de dateline (ciudad+coma) ni header de email
             if _ok(v):
                 cands.append(v)
                 break  # solo el primer dateline de cada oficio

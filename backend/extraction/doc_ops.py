@@ -119,6 +119,10 @@ def classify_doc_type(filename: str) -> str:
         return "PDF_IMPUGNACION"
     if any(k in fn for k in ("incidente", "desacato")):
         return "PDF_INCIDENTE"
+    # Respuesta/contestación de la SED (la rama DOCX ya la detectaba; en PDF faltaba
+    # → quedaban PDF_OTRO y los extractores que filtran doc_type=="RESPUESTA" no los leían).
+    if any(k in fn for k in ("respuesta", "contesta")):
+        return "RESPUESTA"
     if fn.startswith("email"):
         return "EMAIL_DB"
     # Screenshots
