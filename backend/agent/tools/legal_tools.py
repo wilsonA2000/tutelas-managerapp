@@ -688,15 +688,27 @@ def casos_por_municipio(db: Session, ciudad: str = "") -> list[dict]:
 
 @register_tool(
     name="extraer_caso",
-    description="Ejecuta extracción inteligente con el Agente IA v3 para un caso",
+    description="Ejecuta la extracción v9 (pipeline plano) para un caso",
     category="extraction",
     params={"case_id": "int - ID del caso a extraer"},
     requires_case_id=True,
 )
 def extraer_caso(db: Session, case_id: int) -> dict:
-    from backend.agent.orchestrator import smart_extract_case
-    from backend.core.settings import settings
-    return smart_extract_case(db, case_id, settings.BASE_DIR)
+    # Unificado a v9 (Fase 3 saneamiento): antes usaba el orchestrator v8
+    # (smart_extract_case, "Agente IA v3" multi-modelo que generaba ruido). Ahora corre
+    # el MISMO pipeline que /api/extraction/single — una sola autoridad de extracción.
+    from backend.v9.pipeline import extract_case
+    result = extract_case(db, case_id, dry_run=False, use_llm=True)
+    return {
+        "status": "completed",
+        "case_id": case_id,
+        "completitud_v9": result.fields.completitud(),
+        "documents_processed": result.docs_processed,
+        "documents_excluded": result.docs_failed,
+        "llm_calls": result.llm_calls,
+        "warnings": result.warnings,
+        "method": "v9.pipeline",
+    }
 
 
 @register_tool(
