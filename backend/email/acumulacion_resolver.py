@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
@@ -173,14 +174,28 @@ def plan_acumulacion(db: Session, primary_case: Case) -> AcumPlan:
     return plan
 
 
-def _create_sibling(db: Session, item: AcumItem, primary_case: Case) -> Case:
-    """Crea el caso hermano faltante (fila 'sombra': sin carpeta física propia;
-    los documentos viven en la carpeta del RECTOR)."""
+def _create_sibling(db: Session, item: AcumItem, primary_case: Case,
+                    create_folder: bool = False) -> Case:
+    """Crea el caso hermano faltante.
+
+    Si create_folder=True le da carpeta física propia (para que no quede vacía y
+    pueda recibir su sentencia individual). Si False es una fila 'sombra' y los
+    documentos quedan en la carpeta del RECTOR.
+    """
     folder_name = re.sub(r'[<>:"/\\|?*]', "",
                          f"{item.rad_corto} {item.accionante or '[PENDIENTE REVISION]'}").strip()[:80]
+    folder_path = None
+    if create_folder:
+        try:
+            from backend.config import BASE_DIR
+            fp = Path(BASE_DIR) / folder_name
+            fp.mkdir(parents=True, exist_ok=True)
+            folder_path = str(fp)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("No se pudo crear carpeta del hermano %s: %s", folder_name, e)
     case = Case(
         folder_name=folder_name,
-        folder_path=None,                       # sombra: docs en el rector
+        folder_path=folder_path,
         accionante=item.accionante,
         radicado_23_digitos=item.rad23,
         juzgado=primary_case.juzgado,
@@ -216,7 +231,7 @@ def apply_plan(db: Session, plan: AcumPlan, primary_case: Case,
     rector_id = None
     for it in plan.items:
         if it.action == "CREATE" and it.case_id is None:
-            c = _create_sibling(db, it, primary_case)
+            c = _create_sibling(db, it, primary_case, create_folder=move_files)
             it.case_id = c.id
             summary["created"].append({"case_id": c.id, "rad": it.rad_corto,
                                        "accionante": it.accionante})
@@ -267,8 +282,63 @@ def apply_plan(db: Session, plan: AcumPlan, primary_case: Case,
         summary["routed"].append({"doc_id": doc.id, "from": old, "to": r.to_case_id,
                                   "filename": r.filename})
 
+    # 4) Nota "[ACUMULACIÓN CONJUNTA]" en observaciones de cada miembro (idempotente)
+    member_ids = {it.case_id for it in plan.items if it.case_id}
+    for cid in member_ids:
+        c = db.get(Case, cid)
+        if c is not None:
+            apply_acumulacion_note(db, c)
+
     db.commit()
     return summary
+
+
+_NOTE_MARKER = "[ACUMULACIÓN CONJUNTA]"
+
+
+def build_acumulacion_note(db: Session, case: Case) -> str:
+    """Construye la línea estándar de observaciones que declara la acumulación.
+
+    Lista todos los miembros (rector + acumulados) con su accionante. Se basa en
+    los campos tipo_acumulacion/acumulado_a_case_id, así que funciona se invoque
+    desde el rector o desde un hijo.
+    """
+    rector_id = (case.acumulado_a_case_id
+                 if case.tipo_acumulacion == "ACUMULADO" and case.acumulado_a_case_id
+                 else case.id)
+    rector = db.get(Case, rector_id) or case
+    miembros = [rector] + (
+        db.query(Case)
+        .filter(Case.acumulado_a_case_id == rector_id)
+        .order_by(Case.id)
+        .all()
+    )
+    partes = []
+    for m in miembros:
+        rc = derive_rad_corto_from_rad23(m.radicado_23_digitos) or (
+            (m.folder_name or "").split(" ")[0])
+        tag = " (RECTOR)" if m.id == rector_id else ""
+        partes.append(f"{rc} {(m.accionante or '?')}{tag} [#{m.id}]")
+    return (f"{_NOTE_MARKER} Este expediente está acumulado (trámite conjunto) con: "
+            + " · ".join(partes) + ".")
+
+
+def apply_acumulacion_note(db: Session, case: Case) -> bool:
+    """Pone/actualiza la nota de acumulación al inicio de observaciones, sin pisar
+    el resto del texto. Idempotente (reemplaza la línea marcada si ya existe).
+    Devuelve True si cambió algo."""
+    if case.tipo_acumulacion not in ("RECTOR", "ACUMULADO"):
+        return False
+    note = build_acumulacion_note(db, case)
+    obs = case.observaciones or ""
+    # quitar cualquier línea previa con el marcador
+    lines = [ln for ln in obs.splitlines() if not ln.lstrip().startswith(_NOTE_MARKER)]
+    rest = "\n".join(lines).strip()
+    new_obs = (note + ("\n\n" + rest if rest else "")).strip()
+    if new_obs != obs:
+        case.observaciones = new_obs
+        return True
+    return False
 
 
 def _move_doc_file(db: Session, doc: Document, to_case_id: int) -> None:

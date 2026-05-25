@@ -75,6 +75,7 @@ def extract_case(
     dry_run: bool = True,
     excel_row: Optional[dict] = None,
     use_llm: bool = False,
+    _resolve_acum: bool = True,
 ) -> ExtractionResult:
     """Ejecuta el pipeline v9 sobre 1 caso. Retorna ExtractionResult.
 
@@ -112,6 +113,34 @@ def extract_case(
         except Exception as e:  # noqa: BLE001
             logger.warning("reclasificación doc_librarian falló case=%d: %s", case_id, e)
         timing["reclassify_docs"] = int((time.perf_counter() - t) * 1000)
+
+    # 0.5 PRE-PASS de acumulación procesal. DEBE ir ANTES de extraer campos: si este
+    #     caso es el "bucket" de una acumulación (varias tutelas/accionantes juntadas
+    #     por el juez), separa los documentos a su caso correcto AHORA, para que la
+    #     extracción de abajo lea solo los docs de ESTE caso (cada acumulado termina
+    #     con sus propios datos). Crea el hermano faltante (carpeta + sentencia), vincula
+    #     RECTOR/ACUMULADO y pone la nota en observaciones. Idempotente; flag
+    #     ACUMULACION_AUTO; envuelto en try/except (nunca rompe la extracción). El guard
+    #     _resolve_acum evita recursión cuando re-extraemos los hermanos (paso 10).
+    _acum_plan = None
+    if (case is not None and not dry_run and _resolve_acum
+            and os.getenv("ACUMULACION_AUTO", "true").lower() != "false"):
+        t = time.perf_counter()
+        try:
+            from backend.email.acumulacion_resolver import resolve_acumulacion
+            _acum_plan = resolve_acumulacion(db, case, apply=True, move_files=True)
+            if _acum_plan.is_acumulacion:
+                # los docs pudieron moverse a hermanos → recomputar lista de este caso
+                folder_name, paths = _list_case_docs(db, case_id)
+                _s = getattr(_acum_plan, "_summary", {}) or {}
+                if _s.get("created") or _s.get("routed"):
+                    warnings.append(
+                        f"acumulacion(pre): rector={_acum_plan.rector_rad} "
+                        f"creados={len(_s.get('created', []))} "
+                        f"docs_enrutados={len(_s.get('routed', []))}")
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"acumulacion(pre): {e}")
+        timing["acumulacion_pre"] = int((time.perf_counter() - t) * 1000)
 
     # 1. field_extractor_pass — extractores a nivel CASE (autoridad de los 18 campos del
     #    cuadro). Usa la DB (Document.extracted_text + .md), así que corre aunque no
@@ -238,32 +267,35 @@ def extract_case(
             warnings.append(f"folder_rename: {e}")
         timing["folder_rename"] = int((time.perf_counter() - t) * 1000)
 
-    # 10. Resolución de acumulación procesal. Si el caso resultó ser el "bucket" de
-    #     una acumulación (varias tutelas/accionantes juntadas por el juez), garantiza
-    #     un caso por cada radicado acumulado (CREA el hermano faltante con su
-    #     accionante), registra el vínculo RECTOR/ACUMULADO y enruta cada sentencia
-    #     individual al caso de su accionante. Conservador (ancla a la enumeración de
-    #     docs con señal de acumulación) e idempotente. Flag: ACUMULACION_AUTO (default
-    #     on). Envuelto en try/except: NUNCA debe romper la extracción.
+    # 10. Cierre de acumulación (tras extraer este caso):
+    #     (a) si el pre-pass (0.5) resolvió un bucket, re-extrae cada hermano para que
+    #         llene SU cuadro desde SU sentencia. Determinista (use_llm=False) y con
+    #         _resolve_acum=False para no recursar. persist solo rellena vacíos → no pisa.
+    #     (b) refresca la nota "[ACUMULACIÓN CONJUNTA]" en observaciones de ESTE caso
+    #         (cubre el caso de extraer un acumulado directamente, sin bucket).
     if not dry_run and os.getenv("ACUMULACION_AUTO", "true").lower() != "false":
         t = time.perf_counter()
         try:
-            from backend.email.acumulacion_resolver import resolve_acumulacion
+            from backend.email.acumulacion_resolver import apply_acumulacion_note
+            # (a) cascada a hermanos
+            if _acum_plan is not None and getattr(_acum_plan, "is_acumulacion", False):
+                sibling_ids = {it.case_id for it in _acum_plan.items
+                               if it.case_id and it.case_id != case_id}
+                for sib_id in sorted(sibling_ids):
+                    try:
+                        extract_case(db, sib_id, dry_run=False, use_llm=False,
+                                     _resolve_acum=False)
+                    except Exception as e:  # noqa: BLE001
+                        warnings.append(f"acumulacion(cascada #{sib_id}): {e}")
+                if sibling_ids:
+                    warnings.append(f"acumulacion: hermanos re-extraídos {sorted(sibling_ids)}")
+            # (b) nota en este caso
             _case = db.query(Case).filter(Case.id == case_id).first()
-            if _case is not None:
-                _plan = resolve_acumulacion(db, _case, apply=True)
-                if _plan.is_acumulacion:
-                    _s = getattr(_plan, "_summary", {}) or {}
-                    if _s.get("created") or _s.get("routed"):
-                        warnings.append(
-                            f"acumulacion: rector={_plan.rector_rad} "
-                            f"creados={len(_s.get('created', []))} "
-                            f"vinculados={len(_s.get('linked', []))} "
-                            f"docs_enrutados={len(_s.get('routed', []))}"
-                        )
+            if _case is not None and apply_acumulacion_note(db, _case):
+                db.commit()
         except Exception as e:  # noqa: BLE001
-            warnings.append(f"acumulacion: {e}")
-        timing["acumulacion"] = int((time.perf_counter() - t) * 1000)
+            warnings.append(f"acumulacion(post): {e}")
+        timing["acumulacion_post"] = int((time.perf_counter() - t) * 1000)
 
     timing["__total"] = int((time.perf_counter() - t0) * 1000)
 

@@ -7,7 +7,11 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from backend.database.models import Base, Case, Document
-from backend.email.acumulacion_resolver import plan_acumulacion, resolve_acumulacion
+from backend.email.acumulacion_resolver import (
+    apply_acumulacion_note,
+    plan_acumulacion,
+    resolve_acumulacion,
+)
 
 JUZ = "683444089001"  # Juzgado 01 Promiscuo Municipal de Hato
 
@@ -120,6 +124,33 @@ def test_bucket_sucio_no_crea_basura(db):
     # No se creó caso para la persona ajena
     assert db.query(Case).filter(Case.accionante == "PERSONA AJENA DISTINTA").first() is None
     assert db.query(Case).count() == 2  # rector + Liliana
+
+
+def test_nota_observaciones_idempotente_y_no_pisa(db):
+    """La nota [ACUMULACIÓN CONJUNTA] lista a los miembros, no pisa prosa previa
+    y no se duplica al re-aplicar."""
+    rector = _mk_case(db, rad23=f"{JUZ}20250004500", accionante="MARIA PAULA MENDEZ RAMIREZ")
+    for k in ("45", "46", "47"):
+        _add_doc(db, rector.id, *SENT[k])
+    _add_doc(db, rector.id, *ENUM_DOC)
+    db.commit()
+    resolve_acumulacion(db, rector, apply=True)
+
+    lili = db.query(Case).filter(Case.accionante == "LILIANA PATRICIA CALA CALA").first()
+    db.refresh(lili)
+    # la nota existe y lista a los 3 con el rector marcado
+    assert lili.observaciones.startswith("[ACUMULACIÓN CONJUNTA]")
+    assert "MARIA PAULA MENDEZ RAMIREZ (RECTOR)" in lili.observaciones
+    assert "GILMA" not in lili.observaciones or "LILIANA PATRICIA CALA CALA" in lili.observaciones
+
+    # agregar prosa manual y re-aplicar: no se pisa, no se duplica el marcador
+    lili.observaciones = lili.observaciones + "\n\nNota manual del operador."
+    db.commit()
+    apply_acumulacion_note(db, lili)
+    db.commit()
+    db.refresh(lili)
+    assert lili.observaciones.count("[ACUMULACIÓN CONJUNTA]") == 1
+    assert "Nota manual del operador." in lili.observaciones
 
 
 def test_caso_simple_no_dispara(db):
