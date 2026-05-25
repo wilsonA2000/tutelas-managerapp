@@ -329,10 +329,29 @@ def app(test_engine, TestSessionFactory, seed_data, tmp_base_dir, tmp_app_dir):
 
 
 @pytest.fixture(scope="session")
-def client(app):
-    """HTTP client para tests (sin servidor corriendo)."""
+def anon_client(app):
+    """HTTP client SIN autenticar — para probar el rechazo 401 del AuthMiddleware."""
     from starlette.testclient import TestClient
     with TestClient(app, raise_server_exceptions=False) as c:
+        yield c
+
+
+@pytest.fixture(scope="session")
+def client(app):
+    """HTTP client AUTENTICADO por defecto (sin servidor corriendo).
+
+    Desde que el AuthMiddleware exige token en todos los endpoints (excepto
+    /api/auth/login|refresh), la mayoría de los tests fallaban con 401 porque
+    llamaban `client.get(...)` sin headers. Se hace login una vez y se setea el
+    header Authorization por defecto del TestClient; los headers por-request lo
+    sobreescriben (p.ej. test_me_invalid_token pasa un token inválido y sigue 401).
+    Para probar el caso SIN token, usar el fixture `anon_client`.
+    """
+    from starlette.testclient import TestClient
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.post("/api/auth/login", json={"username": "testadmin", "password": "test123"})
+        assert r.status_code == 200, f"Login de fixture falló: {r.text}"
+        c.headers.update({"Authorization": f"Bearer {r.json()['access_token']}"})
         yield c
 
 

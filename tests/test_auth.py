@@ -47,8 +47,8 @@ def test_me_authenticated(client, auth_headers):
     assert "role" in data
 
 
-def test_me_no_token(client):
-    r = client.get("/api/auth/me")
+def test_me_no_token(anon_client):
+    r = anon_client.get("/api/auth/me")
     assert r.status_code == 401
 
 

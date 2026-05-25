@@ -1,10 +1,10 @@
 """Tests para chat NL→DB (Tier 1: regex deterministas)."""
-from fastapi.testclient import TestClient
 import pytest
 
-from backend.main import app
-
-client = TestClient(app)
+# Usa el fixture `client` del conftest (TestClient autenticado + DB de test). Antes
+# este módulo creaba su propio `TestClient(app)` a nivel de módulo, que (a) no pasaba
+# por el AuthMiddleware con token → 401, y (b) no usaba la DB de test. Por eso fallaba
+# toda la suite de chat con 401.
 
 
 @pytest.mark.parametrize("question,expected_intent,min_conf", [
@@ -39,7 +39,7 @@ client = TestClient(app)
     ("Cuéntame un chiste", "unknown", 0.0),
     ("qué hora es", "unknown", 0.0),
 ])
-def test_intent_routing(question, expected_intent, min_conf):
+def test_intent_routing(client, question, expected_intent, min_conf):
     r = client.post("/api/chat/", json={"message": question})
     assert r.status_code == 200, f"HTTP {r.status_code}: {r.text}"
     d = r.json()
@@ -48,7 +48,7 @@ def test_intent_routing(question, expected_intent, min_conf):
     assert "answer" in d
 
 
-def test_health():
+def test_health(client):
     r = client.get("/api/chat/health")
     assert r.status_code == 200
     d = r.json()
@@ -56,7 +56,7 @@ def test_health():
     assert "tier2_llm" in d
 
 
-def test_intents_list():
+def test_intents_list(client):
     r = client.get("/api/chat/intents")
     assert r.status_code == 200
     intents = r.json()
@@ -66,7 +66,7 @@ def test_intents_list():
         assert "description" in it
 
 
-def test_overview_data_structure():
+def test_overview_data_structure(client):
     r = client.post("/api/chat/", json={"message": "resumen"})
     assert r.status_code == 200
     d = r.json()
@@ -76,7 +76,7 @@ def test_overview_data_structure():
     assert "by_status" in d["data"]
 
 
-def test_case_detail_invalid_id():
+def test_case_detail_invalid_id(client):
     r = client.post("/api/chat/", json={"message": "caso 99999"})
     assert r.status_code == 200
     d = r.json()
@@ -84,7 +84,7 @@ def test_case_detail_invalid_id():
     assert "no encontré" in d["answer"].lower() or "no encontre" in d["answer"].lower()
 
 
-def test_municipio_unknown_falls_through():
+def test_municipio_unknown_falls_through(client):
     """Si no se identifica municipio, debe hacer fallthrough a otros intents."""
     r = client.post("/api/chat/", json={"message": "Casos de Wilson Arguello"})
     assert r.status_code == 200
@@ -93,7 +93,7 @@ def test_municipio_unknown_falls_through():
     assert d["intent"] == "search_accionante"
 
 
-def test_empty_message():
+def test_empty_message(client):
     r = client.post("/api/chat/", json={"message": ""})
     assert r.status_code == 200
     assert r.json()["intent"] == "empty"
