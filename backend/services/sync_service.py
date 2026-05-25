@@ -114,6 +114,7 @@ def run_sync(db: Session, base_dir: Path, result: dict, is_running_fn, force: bo
     """
     global _last_fingerprint
     from backend.services.backup_service import auto_backup
+    from backend.v9.doc_librarian import reclassify_legacy_docs
 
     # Check rapido de cambios
     if not force:
@@ -242,6 +243,16 @@ def run_sync(db: Session, base_dir: Path, result: dict, is_running_fn, force: bo
                 pct = 10 + int(50 * docs_verified / total_to_verify)
                 result["progress_pct"] = min(pct, 60)
             result["docs_verified"] = docs_verified
+
+        # Tras extraer texto, reclasificar los docs con etiqueta legacy por-filename
+        # (PDF_*/DOCX_*) a la taxonomía rica del doc_librarian (por contenido), usando
+        # la MISMA autoridad que el pipeline v9. Antes el sync dejaba doc_type pobre que
+        # los extractores de field_extractor.py no reconocen (causa raíz del flujo
+        # "soltar carpeta + Sync"). Solo toca etiquetas legacy; idempotente.
+        try:
+            reclassify_legacy_docs(db, case)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("reclassify_legacy_docs falló en sync (case=%s): %s", getattr(case, "id", "?"), e)
 
     db.commit()
     result["docs_moved"] = docs_moved
