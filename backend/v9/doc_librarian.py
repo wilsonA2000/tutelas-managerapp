@@ -712,3 +712,51 @@ def audit_expediente(
         anomalies=anomalies,
         integrity_score=round(integrity_score, 3),
     )
+
+
+# Etiquetas que NO provienen del doc_librarian, sino del clasificador legacy por
+# filename (`classify_doc_type`, usado por sync/upload/gmail_monitor). Solo estas se
+# reclasifican: las etiquetas ricas ya asignadas (la familia DocType, incl. EMAIL_* y
+# un DESCONOCIDO de un pase previo del librarian) se respetan (first-classifier-wins).
+_LEGACY_DOC_TYPES = frozenset({
+    "PDF_OTRO", "PDF_AUTO_ADMISORIO", "PDF_SENTENCIA", "PDF_INCIDENTE",
+    "PDF_IMPUGNACION", "PDF_GMAIL", "DOCX_OTRO", "DOCX_RESPUESTA",
+    "DOCX_CUMPLIMIENTO", "DOCX_SOLICITUD", "DOCX_MEMORIAL", "DOCX_CARTA",
+    "DOCX_DESACATO", "DOCX_IMPUGNACION", "OTRO", "EMAIL_DB", "SCREENSHOT", "",
+})
+
+
+def reclassify_legacy_docs(db, case, *, min_conf: float = 0.5) -> list[dict]:
+    """Reclasifica con el doc_librarian (por contenido) los docs del `case` que aún
+    tengan etiqueta legacy por-filename, persistiendo la etiqueta rica cuando la
+    confianza ≥ `min_conf` y no es DESCONOCIDO.
+
+    Por qué: solo el ingest de Gmail clasificaba con el librarian; los docs añadidos
+    soltando la carpeta + Sync quedaban con `PDF_*`/`DOCX_*`, que los extractores de
+    `field_extractor.py` (filtran por `SENTENCIA_1RA`/`DEMANDA_TUTELA`/`RESPUESTA`/…)
+    no reconocen → fallo/derecho/etc. vacíos. Esto autocura cualquier vía de ingesta.
+
+    Usa el `extracted_text` ya en DB (no re-lee disco). NO toca docs con etiqueta rica.
+    Devuelve [{doc_id, filename, old, new, conf}]. El caller hace commit.
+    """
+    from backend.database.models import Document  # local: no acoplar el módulo a la capa DB
+
+    changes: list[dict] = []
+    for d in db.query(Document).filter(Document.case_id == case.id).all():
+        cur = d.doc_type or ""
+        if cur not in _LEGACY_DOC_TYPES:
+            continue
+        txt = d.extracted_text or ""
+        if len(txt) < 80:
+            continue  # sin texto suficiente para clasificar por contenido
+        dt = DocText(path=d.file_path or "", filename=d.filename or "", text=txt,
+                     method="db", pages=0, has_scanned_pages=False, error=None)
+        cl = classify(dt)
+        if cl.doc_type == DocType.DESCONOCIDO or cl.confidence < min_conf:
+            continue
+        new = cl.doc_type.value
+        if new != cur:
+            d.doc_type = new
+            changes.append({"doc_id": d.id, "filename": d.filename,
+                            "old": cur, "new": new, "conf": round(cl.confidence, 2)})
+    return changes

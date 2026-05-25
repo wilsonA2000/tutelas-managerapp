@@ -96,6 +96,22 @@ def extract_case(
     folder_name, paths = _list_case_docs(db, case_id)
     fields = ExtractedFields()
 
+    # 0. reclasificación de docs (doc_librarian) — autocura etiquetas legacy de docs
+    #    añadidos por Sync/upload (el ingest de Gmail ya las pone ricas). DEBE ir antes
+    #    del field_extractor_pass, que filtra por doc_type (SENTENCIA_1RA/DEMANDA_TUTELA/…).
+    if case is not None:
+        t = time.perf_counter()
+        try:
+            from backend.v9 import doc_librarian
+            reclassified = doc_librarian.reclassify_legacy_docs(db, case)
+            if reclassified:
+                db.flush()  # para que field_extractor_pass vea los nuevos doc_type
+                logger.info("extract_case case=%d: %d docs reclasificados por doc_librarian",
+                            case_id, len(reclassified))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("reclasificación doc_librarian falló case=%d: %s", case_id, e)
+        timing["reclassify_docs"] = int((time.perf_counter() - t) * 1000)
+
     # 1. field_extractor_pass — extractores a nivel CASE (autoridad de los 18 campos del
     #    cuadro). Usa la DB (Document.extracted_text + .md), así que corre aunque no
     #    haya PDFs legibles en disco.
