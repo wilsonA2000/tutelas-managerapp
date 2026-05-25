@@ -143,9 +143,9 @@ def run(db: Session, case, fields: ExtractedFields, *, use_llm: bool = False) ->
         for k, v in inc.items():
             _set(k, v)
 
-    # ── estado (derivado) — se calcula sobre lo que ya hay en `fields` ──
+    # ── estado (derivado) — sobre `fields` + lo ya persistido en DB ──
     try:
-        _set("estado", _derive_estado(fields))
+        _set("estado", _derive_estado(fields, case))
     except Exception as e:  # noqa: BLE001
         logger.debug("estado derivado falló: %s", e)
 
@@ -169,10 +169,29 @@ def run(db: Session, case, fields: ExtractedFields, *, use_llm: bool = False) ->
     return written
 
 
-def _derive_estado(fields: ExtractedFields) -> str:
-    """ACTIVO/INACTIVO derivado de los campos ya extraídos (misma regla que
-    field_extractor.extract_estado_for_case, pero leyendo de `fields`)."""
-    v = fields.values
+_ESTADO_INPUT_FIELDS = (
+    "sentido_fallo_1st", "impugnacion", "sentido_fallo_2nd",
+    "incidente", "decision_incidente", "incidente_2", "decision_incidente_2",
+    "incidente_3", "decision_incidente_3",
+)
+
+
+def _derive_estado(fields: ExtractedFields, case=None) -> str:
+    """ACTIVO/INACTIVO derivado de los campos (misma regla que
+    field_extractor.extract_estado_for_case).
+
+    Lee de `fields` (lo extraído en este pase) PERO cae a los valores ya persistidos
+    en `case` para los campos que este pase no re-extrajo. Sin ese fallback, una
+    re-extracción parcial (que trae solo algunos campos en `fields`) derivaba un
+    estado inconsistente con la DB completa (regresión vista en c12/c60/c390:
+    sentido_fallo_2nd seguía en DB pero faltaba en `fields` → estado ACTIVO erróneo)."""
+    v = dict(fields.values)
+    if case is not None:
+        for k in _ESTADO_INPUT_FIELDS:
+            if not v.get(k):
+                dbval = getattr(case, k, None)
+                if dbval:
+                    v[k] = dbval
     if (v.get("sentido_fallo_1st") or "").upper() == "DESISTIMIENTO":
         return "INACTIVO"  # desistimiento aceptado termina el proceso (art. 26 D2591/91)
     if not v.get("sentido_fallo_1st"):

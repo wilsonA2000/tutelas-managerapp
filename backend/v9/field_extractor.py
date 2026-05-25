@@ -2649,9 +2649,13 @@ def extract_impugnacion_cluster_for_case(db: Session, case: Case) -> tuple[Optio
     sents_2da = [d for d in docs_2da if d.doc_type == "SENTENCIA_2DA" and (d.extracted_text or "") and len(d.extracted_text) > 500]
     sents_2da.sort(key=lambda d: -len(d.extracted_text or ""))
     for d in sents_2da:
-        t = d.extracted_text
-        tail = t[-3500:] if len(t) > 3500 else t
-        zone = _last_resuelve_zone(tail) or _last_resuelve_zone(t)
+        # Igual que la 1ra instancia: leer la dispositiva del FINAL del PDF con
+        # `_dispositiva_zone` (re-lee las últimas páginas y ancla en RESUELVE o en
+        # "PRIMERO: <verbo>" incl. CONFIRMAR/REVOCAR). Robusto ante extracted_text
+        # capado/sin "RESUELVE" en DB (antes fallaba: fecha_fallo_2nd salía pero
+        # sentido_fallo_2nd quedaba vacío — c338). Fallback al texto en DB.
+        t = d.extracted_text or ""
+        zone = _dispositiva_zone(d) or _last_resuelve_zone(t[-3500:]) or _last_resuelve_zone(t)
         if zone:
             tag = _classify_sentido_fallo_2da(zone)
             if tag:
