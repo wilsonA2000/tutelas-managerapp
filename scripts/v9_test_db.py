@@ -36,7 +36,7 @@ from backend.v9.field_extractor import _rad_year  # noqa: E402  (mismo "año usa
 # ── baseline de cobertura (nº de cases con la celda no-vacía) — al 2026-05-12 ──
 # Si re-aplicas un campo y la cobertura cae por debajo de esto, es una regresión.
 COVERAGE_BASELINE: dict[str, int] = {
-    "radicado_23_digitos": 324,
+    "radicado_23_digitos": 388,  # 324→388: re-identificados de docs (folder usa nº interno Gobernación) 2026-05-24
     "radicado_forest": 332,
     "accionante": 377,
     "accionados": 376,
@@ -48,7 +48,7 @@ COVERAGE_BASELINE: dict[str, int] = {
     "fecha_ingreso": 285,
     "asunto": 397,
     "pretensiones": 246,
-    "oficina_responsable": 389,
+    "oficina_responsable": 387,  # 389→387: 2 casos-shell vacíos borrados (dups c325/c384) 2026-05-24
     "abogado_responsable": 175,  # 2026-05-18: regla cerrada — solo cuenta si resuelve a uno de los 17 oficiales
     "estado": 397,
     "fecha_respuesta": 204,
@@ -237,6 +237,16 @@ def check_consistency(cases: list[Case], r: Report) -> None:
     vocab_check("derecho_vulnerado", set(DERECHO_VOCAB) | {"SIN_DETERMINAR"},
                 "derecho_vulnerado tags ∈ vocab", split_sep=" - ")
     vocab_check("tipo_actuacion", {"TUTELA", "INCIDENTE", "IMPUGNACION", "COMUNICACION"}, "tipo_actuacion ∈ vocab")
+
+    # C-bis — radicado_23_digitos: vacío o EXACTAMENTE 23 dígitos puros (sin separadores).
+    # Un radicado judicial colombiano tiene 23 dígitos; valores truncados (21/22) o con
+    # separadores o malformados (24+) indican un bug de ingesta/edición (ver fix endpoint PUT).
+    import re as _re
+    bad_rad = [f"#{c.id}={c.radicado_23_digitos!r}" for c in cases
+               if (c.radicado_23_digitos or "").strip()
+               and not _re.fullmatch(r"\d{23}", c.radicado_23_digitos.strip())]
+    r.check(not bad_rad, "radicado_23_digitos vacío o 23 dígitos puros",
+            "" if not bad_rad else f"{len(bad_rad)} malformados: " + "; ".join(bad_rad[:5]))
 
 
 def check_no_clobber(db, cases: list[Case], r: Report, sample_n: int) -> None:

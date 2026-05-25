@@ -473,10 +473,11 @@ def api_create_case(payload: dict, db: Session = Depends(get_db)):
 
     digits = re.sub(r"\D", "", rad_input)
     if len(digits) >= 21:
-        # Rad23 canónico
+        # Rad23 canónico: un radicado judicial colombiano es EXACTAMENTE 23 dígitos.
+        # (antes ≥21 dejaba entrar 21/22 truncados y 24+ malformados → rads inválidos en DB).
         rad23 = normalize_rad23(rad_input)
-        if not rad23 or len(rad23) < 21:
-            raise HTTPException(status_code=400, detail="radicado_23_digitos inválido (mínimo 21 dígitos)")
+        if not rad23 or len(rad23) != 23:
+            raise HTTPException(status_code=400, detail=f"radicado_23_digitos inválido: {len(rad23)} dígitos (debe ser exactamente 23)")
         rad_corto = derive_rad_corto_from_rad23(rad23)
         if not rad_corto:
             raise HTTPException(status_code=400, detail="No se pudo derivar el radicado corto desde rad23")
