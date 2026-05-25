@@ -48,7 +48,7 @@ COVERAGE_BASELINE: dict[str, int] = {
     "fecha_ingreso": 285,
     "asunto": 397,
     "pretensiones": 246,
-    "oficina_responsable": 374,  # 375->374: merge c288->c123 2026-05-24
+    "oficina_responsable": 372,  # 373->372: merge c235->c192 (Solórzano vs Colegio El Rosario) 2026-05-25
     "abogado_responsable": 175,  # 2026-05-18: regla cerrada — solo cuenta si resuelve a uno de los 17 oficiales
     "estado": 397,
     "fecha_respuesta": 204,
