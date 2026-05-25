@@ -36,7 +36,7 @@ from backend.v9.field_extractor import _rad_year  # noqa: E402  (mismo "año usa
 # ── baseline de cobertura (nº de cases con la celda no-vacía) — al 2026-05-12 ──
 # Si re-aplicas un campo y la cobertura cae por debajo de esto, es una regresión.
 COVERAGE_BASELINE: dict[str, int] = {
-    "radicado_23_digitos": 388,  # 324→388: re-identificados de docs (folder usa nº interno Gobernación) 2026-05-24
+    "radicado_23_digitos": 381,  # 324->388->381: +re-identificados, -9 shells-dup borrados 2026-05-24
     "radicado_forest": 332,
     "accionante": 377,
     "accionados": 376,
@@ -48,7 +48,7 @@ COVERAGE_BASELINE: dict[str, int] = {
     "fecha_ingreso": 285,
     "asunto": 397,
     "pretensiones": 246,
-    "oficina_responsable": 387,  # 389→387: 2 casos-shell vacíos borrados (dups c325/c384) 2026-05-24
+    "oficina_responsable": 380,  # 387->380: 9 shells-dup del Excel import borrados/fusionados 2026-05-24
     "abogado_responsable": 175,  # 2026-05-18: regla cerrada — solo cuenta si resuelve a uno de los 17 oficiales
     "estado": 397,
     "fecha_respuesta": 204,
@@ -63,7 +63,7 @@ COVERAGE_BASELINE: dict[str, int] = {
     "incidente": 397,
     "fecha_apertura_incidente": 63,
     "responsable_desacato": 21,  # 2026-05-18: limpieza basura (10 vaciados); pendiente extractor del auto del juez para 53 cases
-    "decision_incidente": 71,
+    "decision_incidente": 69,  # 71->69: dedup shells 2026-05-24
 }
 
 
