@@ -2185,14 +2185,33 @@ def _dispositiva_zone(d) -> Optional[str]:
 # Un doc clasificado SENTENCIA_1RA puede ser realmente de 2da instancia (mal etiquetado por
 # el librarian). El filename suele delatarlo ("SegundaInstancia", "fallo_confirma", etc.);
 # si no, el contenido (_doc_es_realmente_2da). Para `sentido_fallo_1st` debemos descartarlos.
+# Cobertura ampliada (2026-05-24): variantes que se escapaban y dejaban fallos de 2da
+# etiquetados SENTENCIA_1RA → "FalloTutela2A", "2da" pegado, "Fallo2ªInstancia",
+# "SENTENCIA_CONFIRMA", "FALLO_2DA_CONFIRMA", "Sentencia2daInstanciaModifica".
 _RE_2DA_FILENAME = re.compile(
-    r"(?i)segund[ao]\s*instancia|2da?\s*instancia|2a\.?\s*inst|"
-    r"fallo[^a-z]*confirma|confirma[^a-z]*fallo|fallo[^a-z]*revoca|revoca[^a-z]*fallo"
+    r"(?i)"
+    r"segund[ao]\s*inst"                            # "segunda instancia", "segundainstancia"
+    r"|2\s*[ªºao]?\.?\s*inst"                       # "2 inst", "2a.inst", "2ª inst"
+    r"|2da"                                         # "2da", "2daInstancia", "FalloTutela2da"
+    r"|(?:fallo|sentencia|tutela)[ _\-]*2[ªºa]"     # "FalloTutela2A", "sentencia2a"
+    r"|fallo[^a-z]*confirma|confirma[^a-z]*fallo|fallo[^a-z]*revoca|revoca[^a-z]*fallo"
+    r"|(?:fallo|sentencia)[^a-z]{0,3}(?:confirma|revoca|modifica)"   # "SENTENCIA_CONFIRMA"
+    r"|(?:confirma|revoca|modifica)[^a-z]{0,3}(?:fallo|sentencia|subsidiar)"  # "CONFIRMA_SUBSIDIARIEDAD"
 )
+
+# El filename dice EXPLÍCITAMENTE 1ra. Sirve de override negativo: un fallo de 1ra real
+# que en su cuerpo menciona "segunda instancia"/"Tribunal Superior" (boilerplate de los
+# derechos de impugnación) NO debe ser descartado como 2da por _RE_ES_2DA (bug c73/c114).
+_RE_1RA_FILENAME = re.compile(r"(?i)primera\s*inst|1[ºªea]*r?a?\s*inst|primerainstancia")
 
 
 def _is_segunda_instancia(d) -> bool:
-    if _RE_2DA_FILENAME.search(d.filename or ""):
+    fn = d.filename or ""
+    fn_2da = bool(_RE_2DA_FILENAME.search(fn))
+    # Filename explícito de 1ra y SIN señal de 2da → es 1ra (evita falso+ por boilerplate).
+    if _RE_1RA_FILENAME.search(fn) and not fn_2da:
+        return False
+    if fn_2da:
         return True
     return _doc_es_realmente_2da(d.extracted_text or "")
 

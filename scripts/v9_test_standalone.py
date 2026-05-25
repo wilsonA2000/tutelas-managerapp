@@ -176,7 +176,11 @@ def main():
         ("radicado_23_digitos", "68001400900120260009500", fields.values["radicado_23_digitos"]),
         ("radicado_forest", "20260009501", fields.values["radicado_forest"]),
         ("accionante", "JUAN PEREZ GOMEZ", fields.values["accionante"]),
-        ("sentido_fallo_1st", "CONCEDE", fields.values["sentido_fallo_1st"]),
+        # sentido_fallo_1st YA NO lo extrae regex_pass (autoridad única = field_extractor_pass,
+        # commit b1fd0ec). El standalone solo corre regex_pass → debe quedar VACÍO. La
+        # clasificación CONCEDE/NIEGA/etc. se prueba aparte en _classify_sentido_fallo (abajo)
+        # y end-to-end sobre la DB en v9_test_db.py.
+        ("sentido_fallo_1st (regex_pass NO lo setea)", "", fields.values.get("sentido_fallo_1st", "")),
         ("impugnacion", "NO", fields.values["impugnacion"]),
         ("tipo_actuacion", "TUTELA", fields.values["tipo_actuacion"]),
         ("abogado_canonical", "JUAN DIEGO CRUZ LIZCANO", fields.abogado_canonical),
