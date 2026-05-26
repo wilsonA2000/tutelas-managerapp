@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -159,12 +160,42 @@ def extract_case(
     docs_ok = []
     docs_failed = 0
     if paths:
-        # 2. doc_io
+        # 2. doc_io — con caché por file_hash: reusa Document.extracted_text si el
+        #    hash del archivo coincide → no re-OCR-ea escaneados ya extraídos. Tras
+        #    extraer fresco, persiste texto+hash (solo si no es dry_run) para que la
+        #    próxima corrida pegue caché. Cierra el costo de re-OCR en re-extracciones.
+        from backend.database.models import Document as _Doc
+        _rows = db.query(_Doc).filter(_Doc.case_id == case_id).all()
+        # Kill-switch: V9_DOC_CACHE=false fuerza re-extracción fresca de disco.
+        _use_cache = os.getenv("V9_DOC_CACHE", "true").lower() != "false"
+        _cache = ({r.file_path: (r.file_hash or "", r.extracted_text or "", r.extraction_method or "")
+                   for r in _rows if r.file_path} if _use_cache else None)
+        _row_by_path = {r.file_path: r for r in _rows if r.file_path}
         t = time.perf_counter()
-        docs = doc_io.read_all(paths)
+        docs = doc_io.read_all(paths, cache=_cache)
         timing["doc_io"] = int((time.perf_counter() - t) * 1000)
         docs_ok = [d for d in docs if d.ok]
         docs_failed = len(docs) - len(docs_ok)
+        timing["doc_io_cache_hits"] = sum(1 for d in docs if d.from_cache)
+
+        # Persistir texto recién extraído (no de caché) para acelerar la próxima corrida.
+        if not dry_run:
+            _persisted = 0
+            for d in docs:
+                if d.from_cache or not (d.text and d.text.strip()):
+                    continue
+                row = _row_by_path.get(d.path)
+                if row is None:
+                    continue
+                row.extracted_text = d.text
+                row.extraction_method = d.method
+                row.extraction_date = datetime.utcnow()
+                if d.file_hash:
+                    row.file_hash = d.file_hash
+                _persisted += 1
+            if _persisted:
+                db.commit()
+                timing["doc_cache_persist"] = _persisted
 
         # 3. regex_pass — rellena los campos doc-a-doc que el paso 1 no cubrió.
         #    Pasamos accionante/radicados desde DB explícitamente: si la carpeta

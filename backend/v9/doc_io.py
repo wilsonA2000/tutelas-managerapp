@@ -11,6 +11,7 @@ La clasificación de tipo de documento NO ocurre aquí — eso es trabajo de
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from dataclasses import dataclass
@@ -20,27 +21,67 @@ from typing import Iterable
 logger = logging.getLogger("tutelas.v9.doc_io")
 
 
+def _sha256_file(path: str | Path) -> str:
+    """SHA256 hex del archivo. MISMO esquema que la ingesta (gmail_monitor
+    `_sha256_bytes`) → los file_hash ya guardados en DB matchean sin backfill.
+    NO usar MD5 (doc_ops.compute_file_hash) acá: la DB guarda SHA256."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
 @dataclass
 class DocText:
     path: str
     filename: str
     text: str
-    method: str               # pymupdf / python-docx / antiword / error
+    method: str               # pymupdf / python-docx / antiword / error / cache
     pages: int = 0
     has_scanned_pages: bool = False
     error: str | None = None
+    file_hash: str = ""        # SHA256 del archivo en disco (para caché por hash)
+    from_cache: bool = False   # True si el texto vino de la DB sin re-extraer
 
     @property
     def ok(self) -> bool:
         return not self.error and bool(self.text.strip())
 
 
-def read_one(path: str | Path) -> DocText:
-    """Lee 1 archivo. Despacha por extensión."""
+def read_one(path: str | Path, cache: dict | None = None) -> DocText:
+    """Lee 1 archivo. Despacha por extensión.
+
+    Si `cache` trae una entrada {str(path): (file_hash, text, method)} cuyo
+    file_hash coincide con el del archivo en disco y tiene texto, devuelve ese
+    texto SIN re-extraer — clave para no re-OCR-ear los escaneados en cada
+    corrida. Si el hash no coincide (archivo cambió) o está vacío, re-extrae.
+    """
     p = Path(path)
     if not p.exists():
         return DocText(str(p), p.name, "", "missing", error=f"No existe: {p}")
 
+    cur_hash = ""
+    if cache is not None:
+        cur_hash = _sha256_file(p)
+        entry = cache.get(str(p))
+        if entry:
+            stored_hash, stored_text, stored_method = entry
+            if stored_text and stored_text.strip() and stored_hash and stored_hash == cur_hash:
+                return DocText(str(p), p.name, stored_text, stored_method or "cache",
+                               file_hash=cur_hash, from_cache=True)
+
+    dt = _read_fresh(p)
+    if cur_hash and not dt.file_hash:
+        dt.file_hash = cur_hash
+    return dt
+
+
+def _read_fresh(p: Path) -> DocText:
+    """Extrae texto desde disco (sin caché). Despacha por extensión."""
     ext = p.suffix.lower()
     try:
         if ext == ".pdf":
@@ -86,8 +127,11 @@ def read_one(path: str | Path) -> DocText:
         return DocText(str(p), p.name, "", "error", error=str(e)[:200])
 
 
-def read_all(paths: Iterable[str | Path]) -> list[DocText]:
+def read_all(paths: Iterable[str | Path], cache: dict | None = None) -> list[DocText]:
     """Lee N archivos. No paraleliza — pymupdf + python-docx son rápidos
     y la complejidad de un ProcessPool en WSL/DrvFs no compensa para
-    casos típicos (4-20 docs/caso)."""
-    return [read_one(p) for p in paths]
+    casos típicos (4-20 docs/caso).
+
+    `cache` se propaga a `read_one` para reusar texto ya extraído por hash
+    (ver read_one)."""
+    return [read_one(p, cache=cache) for p in paths]
