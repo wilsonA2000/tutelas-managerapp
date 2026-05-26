@@ -215,14 +215,19 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False, use_
     elapsed_thread.start()
 
     try:
-        # Mutex: pausar llama-server para liberar RAM antes del batch
-        try:
-            from backend.services.llm_mutex import pause_llm_for_extraction
-            paused = pause_llm_for_extraction()
-            if paused:
-                _update_progress(step="LLM pausado para liberar RAM...", phase="Setup")
-        except Exception as e:
-            logger.warning("llm_mutex pause falló: %s", e)
+        # Mutex: pausar (matar) el llama-server para liberar RAM antes del batch.
+        # SOLO si el batch es determinista (use_llm=False). Si el operador eligió
+        # "Local Qwen" (use_llm=True), el server DEBE seguir vivo para las llamadas;
+        # matarlo haría que el LLM cayera en silencio a determinista (regresión del
+        # selector de motor, 2026-05-25).
+        if not use_llm:
+            try:
+                from backend.services.llm_mutex import pause_llm_for_extraction
+                paused = pause_llm_for_extraction()
+                if paused:
+                    _update_progress(step="LLM pausado para liberar RAM...", phase="Setup")
+            except Exception as e:
+                logger.warning("llm_mutex pause falló: %s", e)
 
         _update_progress(step="Creando backup automatico...", phase="Backup")
         auto_backup("pre_extraction")
