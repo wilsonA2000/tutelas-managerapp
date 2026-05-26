@@ -12,6 +12,7 @@ La clasificación de tipo de documento NO ocurre aquí — eso es trabajo de
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -44,7 +45,12 @@ def read_one(path: str | Path) -> DocText:
     try:
         if ext == ".pdf":
             from backend.extraction.pdf_extractor import extract_pdf
-            r = extract_pdf(p)
+            # OCR de páginas escaneadas (sin capa de texto). Flag V9_OCR_SCANNED
+            # (default on): cierra el hueco de los PDFs imagen-pura que quedaban sin
+            # texto en la ingesta. extract_pdf solo OCR-ea las páginas escaneadas, así
+            # que los PDFs con texto no pagan costo.
+            _ocr = os.getenv("V9_OCR_SCANNED", "true").lower() != "false"
+            r = extract_pdf(p, ocr_scanned=_ocr)
             return DocText(
                 path=str(p), filename=p.name,
                 text=r.text or "", method=r.method,

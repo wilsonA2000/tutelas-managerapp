@@ -52,14 +52,32 @@ def _rad_year(case) -> Optional[int]:
     return None
 
 
+# Campos de "actuación tardía": ocurren legítimamente AÑOS después de la radicación
+# (un incidente de desacato o una respuesta de la SED a un requerimiento de 2026 sobre
+# una tutela de 2022). Para estos NO se aplica la cota rad-relativa estrecha; basta con
+# que no antecedan a la radicación ni caigan en el futuro (año actual + 1 de margen).
+# Fix 2026-05-25: F7 rechazaba fecha_respuesta/fecha_apertura_incidente de 2026 en
+# tutelas de 2022 → se perdía dato válido (casos 395, 11).
+_LATE_ACTUATION_FIELDS = {
+    "fecha_respuesta",
+    "fecha_apertura_incidente",
+    "fecha_apertura_incidente_2",
+    "fecha_apertura_incidente_3",
+}
+
+
 def _date_out_of_range(v9_key: str, value: str, rad_year: Optional[int]) -> bool:
-    """True si `value` (DD/MM/YYYY) cae fuera de [rad_year+lo, rad_year+hi] del campo."""
+    """True si `value` (DD/MM/YYYY) cae fuera del rango permitido del campo."""
     if rad_year is None or v9_key not in _DATE_YEAR_BOUNDS:
         return False
     m = re.search(r"\b(20\d{2})\b", value or "")
     if not m:
         return False
     y = int(m.group(1))
+    if v9_key in _LATE_ACTUATION_FIELDS:
+        # piso = año del rad (nada antecede a la radicación); techo = año actual + 1
+        from datetime import datetime as _dt
+        return not (rad_year <= y <= _dt.now().year + 1)
     lo, hi = _DATE_YEAR_BOUNDS[v9_key]
     return not (rad_year + lo <= y <= rad_year + hi)
 

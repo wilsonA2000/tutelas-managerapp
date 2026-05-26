@@ -376,6 +376,11 @@ def extract_accionante(subject: str, body: str) -> str:
         "BUENOS", "BUENAS", "BUEN", "ADJUNTO", "ADJUNTOS", "FAVOR", "AGRADEZCO",
         "QUEDO", "ATENTO", "ATENTA", "REMITO", "ENVIO", "ENVÍO", "ANEXO", "ANEXOS",
         "CONFORME", "REMITIMOS", "REMITE", "SEÑORES", "SEÑOR", "SEÑORA",
+        # conectores / verbos que no forman parte de un nombre (cierran el nombre)
+        "PERO", "QUE", "FUE", "RADICADA", "RADICADO", "ANTE", "MEDIANTE",
+        "SEGUN", "SEGÚN", "COMO", "SOBRE", "PRESENTADA", "PRESENTADO",
+        "INSTAURADA", "INSTAURADO", "INTERPUESTA", "INTERPUESTO", "PROMOVIDA",
+        "PROMOVIDO", "CUYO", "CUYA", "DONDE", "PORQUE", "AVOCA", "VINCULA",
     }
 
     def _is_garbage_token(tok: str) -> bool:
@@ -414,6 +419,10 @@ def extract_accionante(subject: str, body: str) -> str:
                     trimmed.append(tok)
                 if trimmed:
                     name = " ".join(trimmed)
+                else:
+                    # la truncación dejó vacío (el match empezaba en un STOP_TOKEN,
+                    # p.ej. "promovida por PERO QUE FUE RADICADA") → no es un nombre
+                    continue
                 # FIX 8 — sanitizar y validar con helpers compartidos
                 name = _clean(name)
                 if not name or not _is_real(name):
@@ -640,6 +649,14 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
     Returns: Case creado o None si no hay radicado."""
     rad_corto = radicado_data.get("radicado_corto", "")
     rad_23 = radicado_data.get("radicado_23", "")
+    # Normalizar rad23 a formato CONTINUO (solo dígitos). El asunto trae a veces
+    # "680014003016-2026-00381-00" con guiones; si se guarda así, la igualdad de
+    # rad23 para dedup/match falla contra los rads continuos del resto de la DB.
+    if rad_23:
+        from backend.email.rad_utils import normalize_rad23
+        _norm = normalize_rad23(rad_23)
+        if len(_norm) >= 18:
+            rad_23 = _norm
     if not rad_corto:
         return None
 
@@ -1056,6 +1073,13 @@ def check_inbox(db: Session) -> list[dict]:
 
         if not messages:
             return results
+
+        # Procesar del MÁS ANTIGUO al MÁS RECIENTE. La Gmail API devuelve los mensajes
+        # en orden descendente por fecha (newest-first); invertir da cronológico
+        # ascendente. Así, cuando llega una respuesta (RV:/Re:), su correo padre ya fue
+        # ingerido → el match por hilo (in_reply_to → case del padre) funciona, y el
+        # contexto de acumulación se construye en orden. (Fix 2026-05-25.)
+        messages.reverse()
 
         existing_ids = {e.message_id for e in db.query(Email.message_id).all()}
 
