@@ -355,6 +355,22 @@ _W_HEADER   = 0.30
 _W_BODY     = 0.20
 
 
+# Señal robusta de 2da instancia (incluye camelCase "SegundaInstancia", "2da", "Fallo2A",
+# "confirma/revoca/modifica fallo"). El chequeo viejo ("SEGUNDA INSTANCIA" con espacio) no
+# matcheaba camelCase → fallos de 2da caían en SENTENCIA_1RA y su fecha contaminaba la 1ra.
+_RE_2DA_SIGNAL = re.compile(
+    r"(?i)segund[ao]\s*inst"                          # segunda instancia / segundainstancia
+    r"|2\s*[ªºa]?\.?\s*inst"                          # 2 inst / 2ª inst / 2a inst
+    r"|2d[ao]"                                        # 2da/2do (camelCase: sentencia2da, tutela2dainstancia)
+    r"|(?:fallo|sentencia|tutela)\s*2\s*[ªºa]"        # fallo2a / sentencia2a
+    r"|(?:fallo|sentencia|tutela)\s*segund[ao]"       # fallotutelasegunda
+    r"|(?:fallo|sentencia)[^a-z]{0,3}(?:confirma|revoca|modifica)"
+    r"|(?:confirma|revoca|modifica)[^a-z]{0,3}(?:fallo|sentencia)"
+)
+# Un OFICIO/NOTIFICACIÓN que REPORTA un fallo no ES el fallo (no debe ser SENTENCIA).
+_RE_NOTIF_SIGNAL = re.compile(r"(?i)\bnotifica|notificaci[óo]n|\boficio")
+
+
 # Reglas de desambiguación: cuando 2 tipos compiten, hay heurísticas para
 # preferir uno (ej: si SENTENCIA_2DA y SENTENCIA_1RA empatan, mirar si
 # aparece "SEGUNDA INSTANCIA" → 2DA gana).
@@ -373,12 +389,32 @@ def _disambiguate(scores: dict[DocType, float], text: str, filename: str = "") -
             if dt in scores:
                 scores[dt] *= 0.2
 
-    # SENTENCIA: 2da gana sobre 1ra si aparece "SEGUNDA INSTANCIA"
-    if DocType.SENTENCIA_1RA in scores and DocType.SENTENCIA_2DA in scores:
-        if "SEGUNDA INSTANCIA" in head or "SEGUNDA INSTANCIA" in fn_up or "TRIBUNAL" in head:
-            scores[DocType.SENTENCIA_1RA] *= 0.5
-        else:
-            scores[DocType.SENTENCIA_2DA] *= 0.5
+    # SENTENCIA 1ra vs 2da — detección ROBUSTA de 2da (camelCase, 2da, confirma/revoca).
+    _2da_sig = bool(_RE_2DA_SIGNAL.search(fn_up) or _RE_2DA_SIGNAL.search(head)
+                    or "SEGUNDA INSTANCIA" in head or "TRIBUNAL" in head)
+    if _2da_sig and (DocType.SENTENCIA_1RA in scores or DocType.SENTENCIA_2DA in scores):
+        scores[DocType.SENTENCIA_2DA] = max(scores.get(DocType.SENTENCIA_2DA, 0.0), 0.9)
+        if DocType.SENTENCIA_1RA in scores:
+            scores[DocType.SENTENCIA_1RA] *= 0.3
+    # Sin señal de 2da NO penalizamos el 2DA: si su keyword de filename matcheó, es 2da
+    # real (los keywords de 2DA son específicos). Penalizar a ciegas regresionaba c103/c150.
+
+    # Un FALLO/SENTENCIA de acción de tutela ES la sentencia, NO la demanda, aunque el
+    # nombre diga "AccionTutela" (que matchea DEMANDA_TUTELA fuerte). Sin esto,
+    # "FalloAccionTutela.pdf" caía en DEMANDA → sacaba un fallo real del bucket de 1ra.
+    if DocType.DEMANDA_TUTELA in scores and (DocType.SENTENCIA_1RA in scores or DocType.SENTENCIA_2DA in scores):
+        if "FALLO" in fn_up or "SENTENCIA" in fn_up:
+            scores[DocType.DEMANDA_TUTELA] *= 0.3
+
+    # OFICIO/NOTIFICACIÓN que reporta un fallo → NO es la sentencia. Demota SENTENCIA y
+    # routea a NOTIFICACION_FALLO (si menciona fallo/sentencia) o NOTIFICACION genérica.
+    if _RE_NOTIF_SIGNAL.search(fn_up) and (DocType.SENTENCIA_1RA in scores or DocType.SENTENCIA_2DA in scores):
+        tgt = (DocType.NOTIFICACION_FALLO
+               if ("FALLO" in fn_up or "SENTENCIA" in fn_up or "FALLO" in head or "SENTENCIA" in head)
+               else DocType.NOTIFICACION)
+        scores[tgt] = max(scores.get(tgt, 0.0), 0.9)
+        scores[DocType.SENTENCIA_1RA] = scores.get(DocType.SENTENCIA_1RA, 0.0) * 0.3
+        scores[DocType.SENTENCIA_2DA] = scores.get(DocType.SENTENCIA_2DA, 0.0) * 0.3
 
     # AUTO ADMISORIO vs AUTO 2DA: si dice "ADMITE IMPUGNACIÓN" → 2DA
     if DocType.AUTO_ADMISORIO in scores and DocType.AUTO_2DA in scores:
