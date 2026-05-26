@@ -91,7 +91,14 @@ def _read_fresh(p: Path) -> DocText:
             # texto en la ingesta. extract_pdf solo OCR-ea las páginas escaneadas, así
             # que los PDFs con texto no pagan costo.
             _ocr = os.getenv("V9_OCR_SCANNED", "true").lower() != "false"
-            r = extract_pdf(p, ocr_scanned=_ocr)
+            # head=8 (no 5): barrido estructural 2026-05-26 sobre 193 demandas → las
+            # PRETENSIONES caen en las primeras 5 pág solo el 84%, pero en las primeras 8
+            # el 89.6% (HECHOS/PARTES ya cubiertos a 5-6). Subir el head a 8 recupera ese
+            # ~16% sin regresiones (validado 8+3 vs 5+3: 0 regresiones, +pretensiones).
+            # tail=3 se mantiene (el sentido del fallo se lee de disco vía _dispositiva_zone;
+            # meter más cola al texto desestabiliza fecha_fallo — pendiente anclar fecha a
+            # la dispositiva antes de subir el tail).
+            r = extract_pdf(p, ocr_scanned=_ocr, first_pages=8, last_pages=3)
             return DocText(
                 path=str(p), filename=p.name,
                 text=r.text or "", method=r.method,
