@@ -1,0 +1,27 @@
+[Unit]
+# Estabilidad de la iGPU Intel Iris Xe bajo carga de inferencia LLM (llama-server Vulkan).
+# Aplica DOS ajustes en cada boot:
+#
+# 1) gt_min_freq_mhz = RP0 (máximo). El power management (SLPC) dejaba la GPU clavada en
+#    300 MHz bajo carga → cómputo ~4× lento → cada submission excedía el fence timeout del
+#    i915 → "GPU HANG: context reset" (vk::DeviceLostError). RC6 sigue durmiéndola en reposo.
+#
+# 2) rcs0/heartbeat_interval_ms = 20000. El watchdog del i915 pinguea el motor de cómputo
+#    cada 2500 ms (default); un batch grande de llama.cpp Vulkan produce submissions que
+#    superan esa ventana → falso "GPU HANG" → reset → cascada de fence timeouts → crash del
+#    PC (ocurrió 2026-05-26 con un batch de 6 casos). Subir el heartbeat a 20 s da tiempo a
+#    las entregas largas sin desactivar el watchdog (no usar 0: si la GPU cuelga de verdad,
+#    no recupera). El motor de cómputo en Iris Xe es rcs0 (no hay ccs0 en este hardware).
+#
+# Diagnóstico 2026-05-26. Ver memoria project_vulkan_gpu_hang_fix.
+Description=Tune Intel iGPU (min freq RP0 + rcs0 heartbeat 20s) para estabilidad llama-server Vulkan
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'cat /sys/class/drm/card1/gt_RP0_freq_mhz > /sys/class/drm/card1/gt_min_freq_mhz'
+ExecStart=/bin/sh -c 'echo 20000 > /sys/class/drm/card1/engine/rcs0/heartbeat_interval_ms'
+
+[Install]
+WantedBy=multi-user.target
