@@ -67,3 +67,24 @@ def test_f7_fecha_futura_absurda_se_rechaza():
 def test_rad23_normaliza_guiones_a_continuo():
     assert normalize_rad23("680014003016-2026-00381-00") == "68001400301620260038100"
     assert len(normalize_rad23("680014003016-2026-00381-00")) == 23
+
+
+# ── DeepSeek desconectado salvo flag explícito ───────────────────────────────
+
+def test_deepseek_gateado_tras_flag(monkeypatch):
+    """Con V9_LLM_API_KEY pero SIN V9_ALLOW_DEEPSEEK, los clientes de extracción
+    NO usan DeepSeek (key inerte). Con el flag, se reactiva."""
+    import importlib
+    monkeypatch.setenv("V9_LLM_API_KEY", "sk-test")
+    monkeypatch.delenv("V9_ALLOW_DEEPSEEK", raising=False)
+    import backend.v9.llm_gap_fill as g
+    import backend.extraction.ai_extractor as a
+    importlib.reload(g); importlib.reload(a)
+    assert g._LLM_API_KEY == "" and a._LLM_API_KEY == ""  # desconectado
+    monkeypatch.setenv("V9_ALLOW_DEEPSEEK", "true")
+    importlib.reload(g); importlib.reload(a)
+    assert g._LLM_API_KEY == "sk-test" and a._LLM_API_KEY == "sk-test"  # reactivado
+    # restaurar estado limpio para otros tests
+    monkeypatch.delenv("V9_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("V9_ALLOW_DEEPSEEK", raising=False)
+    importlib.reload(g); importlib.reload(a)

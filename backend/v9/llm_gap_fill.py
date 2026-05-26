@@ -29,8 +29,11 @@ logger = logging.getLogger("tutelas.v9.llm_gap")
 
 import urllib.request
 LLM_URL = os.getenv("LLM_LOCAL_URL", f"http://127.0.0.1:{os.getenv('LLM_LOCAL_PORT', '8765')}")
-# Externo (DeepSeek) si V9_LLM_API_KEY está seteada → agrega auth + model al payload.
-_LLM_API_KEY = os.getenv("V9_LLM_API_KEY", "")
+# Proveedor externo (DeepSeek) — DESCONECTADO por default. Requiere DOS cosas a la vez:
+# V9_ALLOW_DEEPSEEK=true (opt-in explícito del operador) Y V9_LLM_API_KEY seteada.
+# Sin el flag, jamás se usa DeepSeek aunque haya key (2026-05-25, decisión de Wilson).
+_ALLOW_DEEPSEEK = os.getenv("V9_ALLOW_DEEPSEEK", "false").lower() == "true"
+_LLM_API_KEY = os.getenv("V9_LLM_API_KEY", "") if _ALLOW_DEEPSEEK else ""
 _LLM_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "qwen3-4b-iuris")
 
 # Vocabularios cerrados para constrained decoding (json_schema enum). El "" permite

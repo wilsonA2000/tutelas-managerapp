@@ -33,10 +33,12 @@ _LOCAL_URL = os.getenv("LLM_LOCAL_URL", "http://127.0.0.1:8765")
 _LOCAL_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "qwen3-4b-iuris")
 _LOCAL_TIMEOUT = int(os.getenv("LLM_LOCAL_TIMEOUT", "180"))
 _SYSTEM_PROMPT_PATH = os.getenv("LLM_LOCAL_SYSTEM_PROMPT_PATH", "docs/iuris/SYSTEM_PROMPT_COMPILER.md")
-# Si se setea, _call_local apunta a un proveedor OpenAI-compatible EXTERNO
-# (ej. DeepSeek): agrega Authorization Bearer + el campo `model` al payload.
-# Sin esta var → comportamiento idéntico al de siempre (llama-server local).
-_LLM_API_KEY = os.getenv("V9_LLM_API_KEY", "")
+# Proveedor externo (DeepSeek) — DESCONECTADO por default. Requiere V9_ALLOW_DEEPSEEK=true
+# (opt-in explícito) Y V9_LLM_API_KEY. Sin el flag, _call_local es SIEMPRE local puro
+# aunque haya key (2026-05-25, decisión de Wilson). Si se setea, _call_local apunta a un
+# proveedor OpenAI-compatible externo (agrega Authorization Bearer + `model`).
+_ALLOW_DEEPSEEK = os.getenv("V9_ALLOW_DEEPSEEK", "false").lower() == "true"
+_LLM_API_KEY = os.getenv("V9_LLM_API_KEY", "") if _ALLOW_DEEPSEEK else ""
 
 
 def _load_system_prompt() -> str:
