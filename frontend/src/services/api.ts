@@ -156,15 +156,15 @@ export const withAuthToken = (url: string): string => {
 export const getDocumentPreviewUrl = (id: number) =>
   withAuthToken(`/api/documents/${id}/preview`);
 
-// Extraction
-export const extractSingle = (caseId: number, force: boolean = false) =>
-  api.post(`/extraction/single/${caseId}?force=${force}`, {}, { timeout: 180000 }).then(r => r.data);
+// Extraction — useLlm: true=Qwen local (default individual), false=determinista (default batch)
+export const extractSingle = (caseId: number, force: boolean = false, useLlm: boolean = true) =>
+  api.post(`/extraction/single/${caseId}?force=${force}&use_llm=${useLlm}`, {}, { timeout: 180000 }).then(r => r.data);
 
 export const getFolderConsistency = (caseId: number) =>
   api.get(`/extraction/folder-consistency/${caseId}`).then(r => r.data);
 
-export const extractBatch = (caseIds?: number[], classifyDocs: boolean = false, force: boolean = false) =>
-  api.post('/extraction/batch', { case_ids: caseIds, classify_docs: classifyDocs, force }, { timeout: 10000 }).then(r => r.data);
+export const extractBatch = (caseIds?: number[], classifyDocs: boolean = false, force: boolean = false, useLlm: boolean = false) =>
+  api.post('/extraction/batch', { case_ids: caseIds, classify_docs: classifyDocs, force, use_llm: useLlm }, { timeout: 10000 }).then(r => r.data);
 
 export const getReviewQueue = () =>
   api.get('/extraction/review').then(r => r.data);

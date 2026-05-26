@@ -22,6 +22,7 @@ class BatchRequest(BaseModel):
     case_ids: list[int] | None = None
     classify_docs: bool = False
     force: bool = False
+    use_llm: bool = False  # selector de motor: False=determinista, True=Qwen local (default batch: determinista)
 
 
 def _guard_folder_consistency(db: Session, case_id: int, force: bool) -> None:
@@ -115,7 +116,9 @@ def _process_one_case_router(args: tuple) -> tuple:
     """
     import time as _time
     from sqlalchemy.exc import OperationalError as _OpErr
-    cid, _classify_docs = args
+    # tupla de 3 (cid, classify_docs, use_llm); tolera la de 2 antigua por compatibilidad
+    cid, _classify_docs, *_rest = args
+    _use_llm = _rest[0] if _rest else False
     from backend.database.database import SessionLocal as _SessionLocal
     from backend.database.models import Case as _Case
     from backend.v9.pipeline import extract_case as _extract_case
@@ -132,7 +135,7 @@ def _process_one_case_router(args: tuple) -> tuple:
                 return False, folder_name, "case no encontrado", cid
 
             folder_name = (case.folder_name or folder_name)[:60]
-            _extract_case(db, cid, dry_run=False, use_llm=False)
+            _extract_case(db, cid, dry_run=False, use_llm=_use_llm)
             try:
                 case.processing_status = "COMPLETO"
                 db.commit()
@@ -173,7 +176,7 @@ def _process_one_case_router(args: tuple) -> tuple:
     return False, folder_name, f"OperationalError x3: {str(last_err)[:90]}", cid
 
 
-def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
+def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False, use_llm: bool = False):
     """Ejecutar extraccion en background con ProcessPool real (sin GIL)."""
     import time
     from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -234,7 +237,7 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False):
             for cid in case_ids:
                 if not _main.extraction_in_progress:
                     break
-                future = executor.submit(_process_one_case_router, (cid, classify_docs))
+                future = executor.submit(_process_one_case_router, (cid, classify_docs, use_llm))
                 futures[future] = cid
 
             for future in as_completed(futures):
@@ -298,7 +301,7 @@ def api_folder_consistency(case_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/single/{case_id}")
-def api_extract_single(case_id: int, force: bool = False, db: Session = Depends(get_db)):
+def api_extract_single(case_id: int, force: bool = False, use_llm: bool = True, db: Session = Depends(get_db)):
     """Extraer un caso individual con el pipeline v9 (síncrono).
 
     (Modernización Fase 7.3) Usa `backend.v9.pipeline.extract_case` en vez del motor v8.
@@ -325,7 +328,7 @@ def api_extract_single(case_id: int, force: bool = False, db: Session = Depends(
 
     start = time.time()
     try:
-        result = extract_case(db, case_id, dry_run=False, use_llm=True)
+        result = extract_case(db, case_id, dry_run=False, use_llm=use_llm)
         # Marca el caso como procesado (semántica de la UI; v9 no gestiona processing_status).
         try:
             case.processing_status = "COMPLETO"
@@ -399,7 +402,7 @@ def api_extract_batch(req: BatchRequest):
     if not case_ids:
         return {"status": "empty", "message": f"Ninguna carpeta está depurada ({len(skipped)} con inconsistencias). Resuélvelas o usa force.", "skipped": skipped}
 
-    thread = threading.Thread(target=_run_extraction_cases, args=(case_ids, req.classify_docs), daemon=True)
+    thread = threading.Thread(target=_run_extraction_cases, args=(case_ids, req.classify_docs, req.use_llm), daemon=True)
     thread.start()
     classify_msg = " + clasificacion de documentos" if req.classify_docs else ""
     skip_msg = f" — {len(skipped)} omitidas por inconsistencias (depurar primero)" if skipped else ""

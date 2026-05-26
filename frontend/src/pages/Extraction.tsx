@@ -50,6 +50,8 @@ export default function Extraction() {
   const [batchSize, setBatchSize] = useState<number>(5)
   const [extractionMode, setExtractionMode] = useState<'single' | 'agent'>('single')
   const [classifyDocs, setClassifyDocs] = useState(false)
+  // Selector de motor LLM: true = Qwen 4B local (llena campos semánticos), false = determinista (rápido, sin LLM)
+  const [useLlm, setUseLlm] = useState(true)
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -89,7 +91,7 @@ export default function Extraction() {
   const allCasesQ = useQuery({ queryKey: ['cases-all'], queryFn: () => getCases({ page: 1, per_page: 500 }) })
 
   const batchMutation = useMutation({
-    mutationFn: (caseIds?: number[]) => extractBatch(caseIds, classifyDocs),
+    mutationFn: (caseIds?: number[]) => extractBatch(caseIds, classifyDocs, false, useLlm),
     onSuccess: (data) => {
       if (data.status === 'started') toast.success(data.message)
       else if (data.status === 'running') toast('Ya hay una extraccion en progreso', { icon: '\u2139\uFE0F' })
@@ -125,7 +127,7 @@ export default function Extraction() {
     toast.error('Error al iniciar extraccion')
   }
 
-  const singleMutation = useMutation({ mutationFn: ({ id, force }: { id: number; force?: boolean }) => extractSingle(id, force), onSuccess: handleExtractionSuccess, onError: (e, vars) => handleExtractError(e, () => singleMutation.mutate({ id: vars.id, force: true })) })
+  const singleMutation = useMutation({ mutationFn: ({ id, force }: { id: number; force?: boolean }) => extractSingle(id, force, useLlm), onSuccess: handleExtractionSuccess, onError: (e, vars) => handleExtractError(e, () => singleMutation.mutate({ id: vars.id, force: true })) })
   const agentMutation = useMutation({ mutationFn: ({ id, classify, force }: { id: number; classify: boolean; force?: boolean }) => agentExtract(id, classify, force), onSuccess: handleExtractionSuccess, onError: (e, vars) => handleExtractError(e, () => agentMutation.mutate({ id: vars.id, classify: vars.classify, force: true })) })
   const dismissOneMut = useMutation({ mutationFn: dismissMismatchedDoc, onSuccess: () => { qc.invalidateQueries({ queryKey: ['mismatched-docs'] }); toast.success('Alerta resuelta') } })
   const dismissAllMut = useMutation({ mutationFn: dismissAllMismatchedDocs, onSuccess: (data) => { qc.invalidateQueries({ queryKey: ['mismatched-docs'] }); toast.success(data.message) } })
@@ -269,6 +271,20 @@ export default function Extraction() {
                     {n === 0 ? 'Todos' : n}
                   </Button>
                 ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs text-muted-foreground font-medium">Motor de extracción:</label>
+              <div className="flex gap-1.5 mt-1">
+                <Button variant={useLlm ? 'default' : 'outline'} size="xs" onClick={() => setUseLlm(true)}
+                  title="Usa tu Qwen 4B local (con capas y anclas) para llenar campos semánticos: derecho, asunto, pretensiones, observaciones. Más lento.">
+                  🖥️ Local Qwen 4B
+                </Button>
+                <Button variant={!useLlm ? 'default' : 'outline'} size="xs" onClick={() => setUseLlm(false)}
+                  title="Solo regex + catálogos + Excel (determinista). Rápido, no llena campos semánticos que requieren lenguaje natural.">
+                  ⚡ Sin LLM (rápido)
+                </Button>
               </div>
             </div>
 
