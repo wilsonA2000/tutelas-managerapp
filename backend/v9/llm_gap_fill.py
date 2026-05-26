@@ -27,6 +27,31 @@ from backend.v9.types import ExtractedFields, FieldSource
 
 logger = logging.getLogger("tutelas.v9.llm_gap")
 
+
+def _is_garbage(v: str) -> bool:
+    """True si el valor parece salida degenerada del LLM (bucle repetitivo / Unicode
+    basura) que NO debe persistirse. Backstop por si el repeat_penalty no alcanza.
+    Ej. reales: '1 1 1 1 1...', '_._  _ _ _ _', '].(  1  1  1...'."""
+    s = (v or "").strip()
+    if len(s) < 4:
+        return False  # valores cortos (enums tipo "SI", "NO") son válidos
+    compact = re.sub(r"\s+", "", s)
+    if not compact:
+        return True
+    if re.search(r"(.)\1{5,}", compact):           # mismo char 6+ veces seguido
+        return True
+    if re.search(r"(.{2,8})\1{2,}", compact):      # subcadena/palabra repetida (CONTCONTCONT)
+        return True
+    from collections import Counter
+    most = Counter(compact).most_common(1)[0][1]
+    if most / len(compact) > 0.6:                  # dominado por un solo char
+        return True
+    alnum = sum(c.isalnum() for c in compact)
+    if alnum / len(compact) < 0.3:                 # casi sin letras/dígitos
+        return True
+    return False
+
+
 import urllib.request
 LLM_URL = os.getenv("LLM_LOCAL_URL", f"http://127.0.0.1:{os.getenv('LLM_LOCAL_PORT', '8765')}")
 # Proveedor externo (DeepSeek) — DESCONECTADO por default. Requiere DOS cosas a la vez:
@@ -49,6 +74,21 @@ _ENUMS = {
 }
 _MAXLEN = {"asunto": 140, "pretensiones": 240, "accionados": 200, "vinculados": 200,
            "responsable_desacato": 120, "responsable_desacato_2": 120, "responsable_desacato_3": 120}
+
+# Vocab SED de `asunto`: cuando gap_fill llena asunto (modo V9_LLM_SINGLE_CALL, el regex
+# no clasificó), lo acota al mismo vocabulario controlado que usa el extractor por-campo
+# → preserva el valor canónico (TRASLADO, REINTEGRO, …) en vez de texto libre.
+try:
+    from backend.cognition.legal_schema import SED_TEMA_MAPPING as _SED_TM
+    _ASUNTO_VOCAB = []
+    for _row in _SED_TM:
+        _cat = _row[-1]
+        if _cat and _cat not in _ASUNTO_VOCAB:
+            _ASUNTO_VOCAB.append(_cat)
+    if _ASUNTO_VOCAB:
+        _ENUMS["asunto"] = _ASUNTO_VOCAB + ["SIN_DETERMINAR", ""]
+except Exception:  # noqa: BLE001
+    pass
 
 
 def _build_schema(missing: list[str]) -> dict:
@@ -151,6 +191,15 @@ def _call_llm(prompt: str, missing: list[str]) -> Optional[str]:
         ],
         "max_tokens": 400, "temperature": 0,
     }
+    # cache_prompt: el server local (llama.cpp) reusa el KV del prompt entre la llamada
+    # con schema y el reintento sin schema (mismo prompt) → no re-evalúa el contexto.
+    # Solo en local; los proveedores externos rechazan params desconocidos.
+    if not _LLM_API_KEY:
+        body["cache_prompt"] = True
+        # Anti-degeneración del 4B local: sin esto, al forzar campos `required` que no
+        # están en el doc, el modelo emite basura repetitiva (Unicode/dígitos en bucle)
+        # que además dispara fence timeouts en la iGPU. repeat_penalty corta el bucle.
+        body["repeat_penalty"] = 1.15
     # Constrained decoding. strict json_schema acota duro (enum+maxLength) y es la
     # config de producción para el 4B. Pero el 30B-A3B (MoE) degenera con strict
     # cuando se le fuerza a llenar campos `required` sin respuesta (emite Unicode
@@ -231,6 +280,9 @@ def run(fields: ExtractedFields, full_text: str) -> tuple[ExtractedFields, int]:
 
     for k, v in parsed.items():
         if k in missing_llm and isinstance(v, str) and v.strip():
+            if _is_garbage(v):
+                logger.warning("LLM campo %s descartado por basura: %r", k, v[:60])
+                continue
             fields.set(k, v, FieldSource.LLM)
 
     return fields, 1

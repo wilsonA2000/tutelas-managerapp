@@ -110,6 +110,11 @@ def _call_local(messages: list[dict], model: str = _LOCAL_MODEL,
         "max_tokens": max_tokens,
     }
     headers = {}
+    if not _LLM_API_KEY:
+        # Anti-degeneración: con greedy (temp=0) y sin penalización, el Qwen 4B local
+        # cae en bucles repetitivos ("1 1 1 1...", "_ _ _ _...") que además alargan el
+        # cómputo y disparan fence timeouts en la iGPU. repeat_penalty los corta.
+        payload["repeat_penalty"] = 1.15
     if _LLM_API_KEY:  # proveedor externo (DeepSeek): requiere model + auth.
         # Los callers pasan model local ("qwen3-4b-iuris") que el externo no conoce →
         # usar el modelo del env (_LOCAL_MODEL = LLM_LOCAL_MODEL_ID, ej. deepseek-chat).
