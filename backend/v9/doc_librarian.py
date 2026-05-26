@@ -160,6 +160,7 @@ _FILENAME_KEYWORDS: dict[DocType, tuple[str, ...]] = {
     ),
     DocType.DEMANDA_TUTELA: (
         "escritotutela", "escrito tutela", "escrito_tutela",
+        "escritodetutela", "escrito de tutela",  # "EscritoDeTutela" (con "De") — c489
         "acciontutela", "accion_tutela", "acciondetutela", "accion de tutela",
         "demandatutela", "demanda_tutela", "demanda tutela", "demanda y anexos",
         "demanda", "01acciontutela",
