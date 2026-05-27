@@ -6,7 +6,7 @@ import {
   CheckCircle, XCircle, Clock, ChevronRight,
   Zap, ShieldAlert, Trash2, FileWarning, Search as SearchIcon, ClipboardCheck, Brain, FolderCheck,
 } from 'lucide-react'
-import { extractBatch, extractSingle, agentExtract, getReviewQueue, getCases, syncFolders, getSyncStatus, getMismatchedDocs, dismissMismatchedDoc, dismissAllMismatchedDocs, verifyAllDocs, getSuspiciousDocs, markDocOk, runFullAudit } from '../services/api'
+import { extractBatch, extractSingle, agentExtract, getReviewQueue, getCases, syncFolders, getSyncStatus, getMismatchedDocs, dismissMismatchedDoc, dismissAllMismatchedDocs, verifyAllDocs, getSuspiciousDocs, markDocOk, runFullAudit, getLlmStatus } from '../services/api'
 import { useNavigate } from 'react-router-dom'
 import PageHeader from '../components/PageHeader'
 import PageShell from '../components/PageShell'
@@ -47,11 +47,10 @@ export default function Extraction() {
   const [caseSearch, setCaseSearch] = useState('')
   const [showCaseDropdown, setShowCaseDropdown] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
-  const [batchSize, setBatchSize] = useState<number>(5)
   const [extractionMode, setExtractionMode] = useState<'single' | 'agent'>('single')
   const [classifyDocs, setClassifyDocs] = useState(false)
-  // Selector de motor LLM: true = Qwen 4B local (llena campos semánticos), false = determinista (rápido, sin LLM)
-  const [useLlm, setUseLlm] = useState(true)
+  // Casos seleccionados para extracción por lotes (checkboxes en la Cola de Revisión).
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -67,6 +66,8 @@ export default function Extraction() {
   const reviewQ = useQuery({ queryKey: ['review-queue'], queryFn: getReviewQueue })
   const mismatchedQ = useQuery({ queryKey: ['mismatched-docs'], queryFn: getMismatchedDocs })
   const suspiciousQ = useQuery({ queryKey: ['suspicious-docs'], queryFn: getSuspiciousDocs })
+  // Semáforo del motor de IA (se enciende/apaga solo). Polling ligero.
+  const llmStatusQ = useQuery({ queryKey: ['llm-status'], queryFn: getLlmStatus, refetchInterval: 2500 })
 
   const verifyAllMut = useMutation({
     mutationFn: verifyAllDocs,
@@ -91,7 +92,7 @@ export default function Extraction() {
   const allCasesQ = useQuery({ queryKey: ['cases-all'], queryFn: () => getCases({ page: 1, per_page: 500 }) })
 
   const batchMutation = useMutation({
-    mutationFn: (caseIds?: number[]) => extractBatch(caseIds, classifyDocs, false, useLlm),
+    mutationFn: (caseIds?: number[]) => extractBatch(caseIds, classifyDocs, false, true),
     onSuccess: (data) => {
       if (data.status === 'started') toast.success(data.message)
       else if (data.status === 'running') toast('Ya hay una extraccion en progreso', { icon: '\u2139\uFE0F' })
@@ -127,7 +128,7 @@ export default function Extraction() {
     toast.error('Error al iniciar extraccion')
   }
 
-  const singleMutation = useMutation({ mutationFn: ({ id, force }: { id: number; force?: boolean }) => extractSingle(id, force, useLlm), onSuccess: handleExtractionSuccess, onError: (e, vars) => handleExtractError(e, () => singleMutation.mutate({ id: vars.id, force: true })) })
+  const singleMutation = useMutation({ mutationFn: ({ id, force }: { id: number; force?: boolean }) => extractSingle(id, force, true), onSuccess: handleExtractionSuccess, onError: (e, vars) => handleExtractError(e, () => singleMutation.mutate({ id: vars.id, force: true })) })
   const agentMutation = useMutation({ mutationFn: ({ id, classify, force }: { id: number; classify: boolean; force?: boolean }) => agentExtract(id, classify, force), onSuccess: handleExtractionSuccess, onError: (e, vars) => handleExtractError(e, () => agentMutation.mutate({ id: vars.id, classify: vars.classify, force: true })) })
   const dismissOneMut = useMutation({ mutationFn: dismissMismatchedDoc, onSuccess: () => { qc.invalidateQueries({ queryKey: ['mismatched-docs'] }); toast.success('Alerta resuelta') } })
   const dismissAllMut = useMutation({ mutationFn: dismissAllMismatchedDocs, onSuccess: (data) => { qc.invalidateQueries({ queryKey: ['mismatched-docs'] }); toast.success(data.message) } })
@@ -143,6 +144,26 @@ export default function Extraction() {
   const reviewQueue: ReviewCase[] = reviewQ.data ?? []
   const allCases = allCasesQ.data?.items ?? []
 
+  // --- Selección de casos para el lote (sobre la Cola de Revisión) ---
+  const queueId = (c: ReviewCase) => c.case_id || (c as unknown as { id: number }).id
+  const toggleSelected = (id: number) => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const selectFirstN = (n: number) => setSelectedIds(new Set(reviewQueue.slice(0, n || reviewQueue.length).map(queueId).filter(Boolean)))
+  const allQueueSelected = reviewQueue.length > 0 && reviewQueue.every(c => selectedIds.has(queueId(c)))
+  const toggleSelectAll = () => setSelectedIds(allQueueSelected ? new Set() : new Set(reviewQueue.map(queueId).filter(Boolean)))
+
+  // --- Estado visual del motor de IA (semáforo) ---
+  const llm = llmStatusQ.data
+  const engine = (() => {
+    if (llm?.extracting) return { dot: 'bg-blue-500', pulse: true, label: 'Extrayendo…', sub: 'El sistema está leyendo los documentos y llenando los campos.' }
+    if (llm?.server === 'starting') return { dot: 'bg-amber-500', pulse: true, label: 'Encendiendo motor de IA…', sub: 'La primera extracción tarda unos segundos más mientras enciende.' }
+    if (llm?.server === 'ready') return { dot: 'bg-emerald-500', pulse: false, label: 'Motor de IA listo', sub: 'Puedes extraer; el motor ya está caliente.' }
+    return { dot: 'bg-slate-300', pulse: false, label: 'Motor de IA en reposo', sub: 'Se encenderá solo cuando inicies una extracción.' }
+  })()
+
   function statusIcon(status: string) {
     if (status === 'success') return <CheckCircle size={14} className="text-emerald-500" />
     if (status === 'error') return <XCircle size={14} className="text-destructive" />
@@ -152,8 +173,8 @@ export default function Extraction() {
   return (
     <PageShell>
       <PageHeader
-        title="Extraccion"
-        subtitle="Extraccion automatica de campos desde documentos PDF y DOCX usando IA"
+        title="Procesar casos"
+        subtitle="Lee los documentos de cada caso y llena el cuadro automáticamente."
         icon={Cpu}
         action={
           <TooltipProvider delay={200}>
@@ -198,6 +219,24 @@ export default function Extraction() {
           </TooltipProvider>
         }
       />
+
+      {/* Semáforo del motor de IA — se enciende y apaga solo. Lenguaje de operador. */}
+      <Card>
+        <CardContent className="py-3">
+          <div className="flex items-center gap-3">
+            <span className={cn('relative flex h-3 w-3 flex-shrink-0', engine.pulse && 'animate-pulse')}>
+              <span className={cn('inline-flex h-3 w-3 rounded-full', engine.dot)} />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">{engine.label}</p>
+              <p className="text-xs text-muted-foreground">{engine.sub}</p>
+            </div>
+            <span className="ml-auto text-[10px] text-muted-foreground hidden sm:block max-w-[15rem] text-right">
+              El motor de IA se enciende solo al procesar y se apaga si no lo usas por un rato.
+            </span>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Audit Results */}
       {auditResult && (
@@ -264,28 +303,22 @@ export default function Extraction() {
             )}
 
             <div>
-              <label className="text-xs text-muted-foreground font-medium">Cantidad de casos:</label>
-              <div className="flex gap-1.5 mt-1">
+              <label className="text-xs text-muted-foreground font-medium">Selección rápida:</label>
+              <div className="flex gap-1.5 mt-1 items-center">
                 {[5, 10, 25, 0].map(n => (
-                  <Button key={n} variant={batchSize === n ? 'default' : 'outline'} size="xs" onClick={() => setBatchSize(n)}>
-                    {n === 0 ? 'Todos' : n}
+                  <Button key={n} variant="outline" size="xs" onClick={() => selectFirstN(n)}>
+                    {n === 0 ? 'Todos' : `Primeros ${n}`}
                   </Button>
                 ))}
+                {selectedIds.size > 0 && (
+                  <Button variant="ghost" size="xs" onClick={() => setSelectedIds(new Set())} className="text-muted-foreground">Limpiar</Button>
+                )}
               </div>
-            </div>
-
-            <div>
-              <label className="text-xs text-muted-foreground font-medium">Motor de extracción:</label>
-              <div className="flex gap-1.5 mt-1">
-                <Button variant={useLlm ? 'default' : 'outline'} size="xs" onClick={() => setUseLlm(true)}
-                  title="Usa tu Qwen 4B local (con capas y anclas) para llenar campos semánticos: derecho, asunto, pretensiones, observaciones. Más lento.">
-                  🖥️ Local Qwen 4B
-                </Button>
-                <Button variant={!useLlm ? 'default' : 'outline'} size="xs" onClick={() => setUseLlm(false)}
-                  title="Solo regex + catálogos + Excel (determinista). Rápido, no llena campos semánticos que requieren lenguaje natural.">
-                  ⚡ Sin LLM (rápido)
-                </Button>
-              </div>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                {selectedIds.size > 0
+                  ? `${selectedIds.size} caso(s) seleccionado(s) — o marca casos puntuales en la Cola de Revisión.`
+                  : 'Elige cuántos procesar, o marca casos puntuales con las casillas en la Cola de Revisión.'}
+              </p>
             </div>
 
             <TooltipProvider delay={200}>
@@ -327,19 +360,20 @@ export default function Extraction() {
 
             <Button
               onClick={() => {
-                if (batchSize === 0) { batchMutation.mutate(undefined) }
-                else {
-                  const pendingIds = (allCases.filter((c: { processing_status: string }) => c.processing_status === 'PENDIENTE' || c.processing_status === 'REVISION') as { id: number }[]).slice(0, batchSize).map(c => c.id)
-                  if (pendingIds.length > 0) batchMutation.mutate(pendingIds)
-                  else toast('No hay casos pendientes', { icon: 'i' })
-                }
+                const ids = Array.from(selectedIds)
+                if (ids.length === 0) { toast('Selecciona al menos un caso', { icon: 'ℹ️' }); return }
+                batchMutation.mutate(ids)
               }}
-              disabled={isLoading}
+              disabled={isLoading || selectedIds.size === 0}
               className="w-full"
               size="lg"
             >
               {batchMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
-              {batchMutation.isPending ? 'Extrayendo...' : `Extraer Pendientes${classifyDocs ? ' + Clasificar' : ''} (3 en paralelo)`}
+              {batchMutation.isPending
+                ? 'Procesando...'
+                : selectedIds.size > 0
+                  ? `Procesar ${selectedIds.size} seleccionado(s)${classifyDocs ? ' + Clasificar' : ''}`
+                  : 'Selecciona casos para procesar'}
             </Button>
           </CardContent>
         </Card>
@@ -693,6 +727,10 @@ export default function Extraction() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-8">
+                    <input type="checkbox" aria-label="Seleccionar todos" checked={allQueueSelected} onChange={toggleSelectAll}
+                      className="rounded border-input text-primary focus:ring-primary" />
+                  </TableHead>
                   <TableHead>Caso</TableHead>
                   <TableHead>Accionante</TableHead>
                   <TableHead>Completitud</TableHead>
@@ -702,7 +740,12 @@ export default function Extraction() {
               </TableHeader>
               <TableBody>
                 {reviewQueue.map((c) => (
-                  <TableRow key={c.case_id}>
+                  <TableRow key={c.case_id} className={cn(selectedIds.has(queueId(c)) && 'bg-primary/5')}>
+                    <TableCell className="w-8">
+                      <input type="checkbox" aria-label={`Seleccionar ${c.folder_name}`}
+                        checked={selectedIds.has(queueId(c))} onChange={() => toggleSelected(queueId(c))}
+                        className="rounded border-input text-primary focus:ring-primary" />
+                    </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5">
                         <span className="font-mono text-xs text-primary font-medium">{c.folder_name}</span>
