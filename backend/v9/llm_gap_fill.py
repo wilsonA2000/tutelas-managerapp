@@ -49,6 +49,20 @@ def _is_garbage(v: str) -> bool:
     alnum = sum(c.isalnum() for c in compact)
     if alnum / len(compact) < 0.3:                 # casi sin letras/dígitos
         return True
+    # Sopa de símbolos: mucha puntuación/símbolos intercalados entre fragmentos cortos,
+    # aunque queden letras sueltas (degeneración tipo '.AND__U1.IG_DE#._JCONT.J_IN' o
+    # '¿ ** _ _ _ ¿ para ¿ ** ¿ donde'). El texto jurídico legítimo es casi todo letras +
+    # separadores escasos (coma, punto, guion); >35% de no-alfanuméricos = basura.
+    # Sopa de símbolos ('¿ ** _ _ _ ¿', '.AND__U1.IG_DE#', ',,,,,'): el texto jurídico real
+    # tiene ≤10% de no-alfanuméricos (medido en c23/c415/c499-obs); la degeneración tiene
+    # ≥35%. Umbral 0.30 con margen amplio. NO marca abreviaturas 'E.P.S./S.A.S.' (~20%),
+    # ni elipsis, ni separadores '------', ni notas con '#'.
+    nonalnum = sum(1 for ch in compact if not ch.isalnum())
+    if nonalnum / len(compact) > 0.30:
+        return True
+    # Script no latino (CJK/cirílico/griego) → el '垒' de c499 (lo que el usuario vio "cirílico").
+    if re.search(r"[Ͱ-ϿЀ-ӿ　-鿿가-힯]", s):
+        return True
     return False
 
 
