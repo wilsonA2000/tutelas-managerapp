@@ -1737,11 +1737,21 @@ _RE_PRET_DEFENSE = re.compile(
 # matcheaban. Se exige un verbo de petición FINITO o "se tutele/ordene..." en lookahead
 # (no participios como "pretensiones solicitadas") para no disparar en prosa.
 _RE_PRET_HEADER_INLINE = re.compile(
-    r"(?i)\bPRETENSIONES?\b\s+"
+    r"(?i)\bPRETENSIONES?\b[\s.\-–:]*"
+    # El petitorio debe seguir INMEDIATAMENTE al título (sin tolerancia de lead-in: ésta
+    # causaba que un 'PRETENSIONES … de la acción de tutela, en los siguientes términos:'
+    # capturara el framing en vez del petitorio, y desplazaba al RECAP que sí daba 'ordene…').
     r"(?=(?:(?:respetuosa|atenta|comedida|formal|cordial|com)mente\s+)?"
     r"(?:solicit(?:o|a|amos|an)\b|rueg(?:o|amos)\b|pid(?:o|imos)\b|peticion(?:o|amos)\b|"
     r"impetr(?:o|amos)\b|deprec(?:o|amos)\b|"
-    r"se\s+(?:tutele|ordene|ampare|disponga|proteja|garantice|reconozca|reintegre|nombre)))"
+    r"se\s+(?:tutele|ordene|ampare|disponga|proteja|garantice|reconozca|reintegre|nombre)|"
+    # Listado por ordinal ("PRIMERA. Amparar…", "1. Tutelar…") o por verbo infinitivo
+    # directo (escritos que omiten "solicito": "V.PRETENSIONES PRIMERA. Amparar…", c502).
+    r"(?:primer[oa]|segund[oa]|tercer[oa]|cuart[oa]|quint[oa])\b|"
+    r"\d{1,2}\s*[.\)\-]\s|"
+    r"(?:amparar|tutelar|ordenar|proteger|garantizar|reconocer|reintegrar|nombrar|"
+    r"declarar|disponer|conceder|reanudar|reubicar|trasladar|asignar|entregar|"
+    r"certificar|liquidar|reliquidar|cancelar|pagar|suspender|revocar|dejar\s+sin)\b))"
 )
 # La SED, en su contestación, también escribe "PRETENSIONES"/"SOLICITO" pero para PEDIR
 # que se NIEGUE la tutela. Eso NO son las pretensiones del accionante → se descarta la

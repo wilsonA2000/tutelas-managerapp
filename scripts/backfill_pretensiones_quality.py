@@ -50,26 +50,26 @@ _RE_DEFRECAP = re.compile(
 )
 
 
-# Apertura clara de petitorio (verbo dispositivo o encabezado de pretensión). Solo
-# aceptamos en fase 1 los valores re-extraídos que arrancan así; lo demás (lead-in,
-# fragmento, paréntesis vacíos) → hueco → LLM verbatim, más confiable.
-_RE_PETITION_OPENER = re.compile(
-    r"(?i)^[\s\W]*(?:ordene|tutele|ampare|disponga|proteja|garantice|reconozca|reintegre|"
-    r"nombre|declare|conceda|orden\w*|tutel\w*|ampar\w*|proteg\w*|solicit\w*|rueg\w*|pido|"
-    r"peticion\w*|impetr\w*|deprec\w*|que\s+se\b|primer[oa]\b|segund[oa]\b|amparar|tutelar|ordenar)"
+# Señal de petitorio: el valor contiene un verbo dispositivo / 'solicito' / ordinal en su
+# arranque. Acepta la sección completa desde 'PRETENSIONES' (con lead-in) y las pretensiones
+# nominales ('Asignación de docente…'); rechaza narrativa pura / defensa / paréntesis vacíos.
+_RE_HAS_PETITION = re.compile(
+    r"(?i)(solicit|rueg|\bpido\b|peticion|impetr|deprec|ordene|tutele|ampare|amparar|tutelar|"
+    r"ordenar|proteg|garantiz|reconoc|reintegr|nombr|declar|disponer|reanud|reubic|traslad|"
+    r"asign|entregar|certific|que\s+se\b|primer[oa]\b|segund[oa]\b)"
 )
 
 
 def is_good(v: str) -> bool:
-    """Acepta el valor re-extraído solo si arranca como petitorio CLARO (verbo/encabezado)
-    y no es meta/hechos. NO usa is_bad (que marca minúsculas — un recap válido arranca con
-    el verbo en minúscula 'ordene…')."""
+    """Transcripción válida (determinista, sin LLM): contiene señal de petitorio en su
+    arranque y no es meta/defensa/narrativa. NO exige verbo seco al inicio (un recap o una
+    sección completa arrancan con lead-in: 'Con base en lo anterior, solicito: 1. Amparar…')."""
     v = (v or "").strip()
     if len(v) < 25:
         return False
-    if _RE_META.search(v[:80]) or _RE_DEFRECAP.search(v):
+    if _RE_META.search(v[:80]) or _RE_DEFRECAP.search(v[:120]):
         return False
-    return bool(_RE_PETITION_OPENER.match(v))
+    return bool(_RE_HAS_PETITION.search(v[:160]))
 
 
 def is_bad(p: str) -> bool:
@@ -154,25 +154,10 @@ def main() -> None:
         db.commit()
     print(f"FASE 1 (regex): fijó {fixed} · huecos {len(gaps)} -> {sorted(c.id for c in gaps)}")
 
-    # ── FASE 2: LLM-CPU 1-a-1 en los huecos ──
-    if WITH_LLM and APPLY and gaps:
-        os.environ["V9_DISABLE_LLM"] = "false"
-        print(f"FASE 2: lanzando llama-server CPU para {len(gaps)} huecos...")
-        _spawn_llm_cpu()
-        if not _llm_ready():
-            print("  LLM no respondió — abortando fase 2 (huecos quedan vacíos)")
-            return
-        llm_fixed = 0
-        for c in gaps:
-            v, _src = extract_pretensiones_for_case(db, c, use_llm=True)
-            if v and not is_bad(v):
-                _set_pret(c, v, db); db.commit(); llm_fixed += 1
-                print(f"  c{c.id}: LLM -> {v[:60]!r}")
-            else:
-                print(f"  c{c.id}: sin pretensión verbatim (queda vacío)")
-        print(f"FASE 2 (LLM): fijó {llm_fixed}/{len(gaps)}")
-
-    print("\n" + ("APLICADO ✓" if APPLY else "DRY-RUN (usa --apply; --llm para fase 2)"))
+    # SIN LLM: las pretensiones son TRANSCRIPCIÓN. Si el regex determinista no halla la
+    # sección, queda vacío (mejor vacío que un resumen del LLM — lo llena el abogado).
+    print(f"Huecos sin transcripción (quedan vacíos, sin demanda o sin sección hallable): {len(gaps)}")
+    print("\n" + ("APLICADO ✓" if APPLY else "DRY-RUN (usa --apply para escribir; backup antes)"))
 
 
 if __name__ == "__main__":
