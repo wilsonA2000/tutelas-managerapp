@@ -113,8 +113,12 @@ def _spawn_llm() -> int:
 
     # LoRA opcional via env (default OFF; A/B 2026-05-08 mostró que baja la extracción).
     use_lora = os.getenv("LLM_LORA_ENABLED", "false").lower() == "true"
+    # --parallel 1: UN solo slot. El flujo es operador-driven (una extracción a la vez),
+    # así que 4 slots solo añadían presión concurrente sobre la iGPU (factor en los
+    # DeviceLost) y fragmentaban la KV. Con 1 slot: menos presión GPU = más estable, y
+    # las llamadas secuenciales del caso reusan el KV-cache del slot (prompt caching real).
     cmd = [str(bin_path), "-m", str(GGUF_BASE), "--port", str(LLM_PORT),
-           "--ctx-size", "4096", "--host", "127.0.0.1"]
+           "--ctx-size", "4096", "--parallel", "1", "--host", "127.0.0.1"]
     if use_gpu:
         cmd += ["--n-gpu-layers", "99"]
         logger.info("llama-server: backend iGPU (Vulkan, --n-gpu-layers 99)")
@@ -205,3 +209,95 @@ def status() -> dict:
         "gguf_base_exists": GGUF_BASE.exists(),
         "gguf_lora_exists": GGUF_LORA.exists(),
     }
+
+
+# --- Ciclo de vida on-demand para extracción (operador-driven) -------------
+# La app enciende el server al darle "Extraer" y lo apaga tras IDLE_TIMEOUT_S
+# sin uso. Entre extracciones seguidas el server queda "caliente" para reusar
+# el KV-cache y arrancar al instante; si pasa el timeout sin uso, el reaper lo
+# apaga. NADA de esto lo ve el operador: la UI solo muestra un semáforo.
+#
+# Evoluciona la regla previa "la app nunca arranca el server": ahora SÍ lo
+# arranca, pero SOLO on-demand al extraer y lo apaga al quedar idle. Si el
+# server ya estaba arriba (chat, o arranque manual del operador) NO se marca
+# como "lo encendió la app" → el reaper jamás lo apaga.
+IDLE_TIMEOUT_S = int(os.getenv("LLM_IDLE_TIMEOUT_S", "300"))
+
+_lifecycle_lock = Lock()
+_app_spawned = False          # True si la app levantó el server (no estaba arriba)
+_extraction_active = 0        # # de extracciones en curso (no apagar mientras > 0)
+_last_extraction_end = 0.0    # epoch del fin de la última extracción
+_reaper_started = False
+
+
+def _idle_reaper() -> None:
+    global _app_spawned
+    while True:
+        time.sleep(30)
+        with _lifecycle_lock:
+            idle = (
+                _extraction_active == 0
+                and _app_spawned
+                and (time.time() - _last_extraction_end) >= IDLE_TIMEOUT_S
+            )
+        if idle:
+            logger.info("Motor IA idle ≥%ds → apagando (lo encendió la app)", IDLE_TIMEOUT_S)
+            _kill_by_port(LLM_PORT)
+            with _lifecycle_lock:
+                _app_spawned = False
+
+
+def _ensure_reaper() -> None:
+    global _reaper_started
+    import threading
+    with _lifecycle_lock:
+        if _reaper_started:
+            return
+        _reaper_started = True
+    threading.Thread(target=_idle_reaper, daemon=True, name="llm-idle-reaper").start()
+
+
+def begin_extraction(wait_s: int = 90) -> bool:
+    """Enciende el server on-demand para una extracción y lo marca activo.
+
+    Si ya estaba arriba (chat / arranque manual), NO marca `_app_spawned` →
+    el reaper no lo apagará. Incrementa el contador ANTES de esperar la carga
+    para que el semáforo muestre "encendiendo" durante el spawn. Retorna True
+    si el server quedó listo (si no, la extracción cae a determinista, como antes).
+    """
+    global _app_spawned, _extraction_active
+    was_up = is_up(timeout=1.0)
+    with _lifecycle_lock:
+        _extraction_active += 1
+    _ensure_reaper()
+    ready = ensure_llm_up(wait_s=wait_s)
+    if ready and not was_up:
+        with _lifecycle_lock:
+            _app_spawned = True
+    return ready
+
+
+def end_extraction() -> None:
+    """Marca el fin de una extracción; el reaper apagará el server tras IDLE_TIMEOUT_S."""
+    global _extraction_active, _last_extraction_end
+    with _lifecycle_lock:
+        _extraction_active = max(0, _extraction_active - 1)
+        _last_extraction_end = time.time()
+
+
+def lifecycle_state() -> dict:
+    """Estado para el semáforo de la UI (sin jerga interna).
+
+    server: "off" (apagado) · "starting" (encendiendo/cargando) · "ready" (listo)
+    extracting: hay una extracción en curso.
+    """
+    up = is_up(timeout=0.8)
+    with _lifecycle_lock:
+        active = _extraction_active > 0
+    if up:
+        server = "ready"
+    elif active or is_warming():
+        server = "starting"
+    else:
+        server = "off"
+    return {"server": server, "extracting": active}

@@ -215,12 +215,18 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False, use_
     elapsed_thread.start()
 
     try:
-        # Mutex: pausar (matar) el llama-server para liberar RAM antes del batch.
-        # SOLO si el batch es determinista (use_llm=False). Si el operador eligió
-        # "Local Qwen" (use_llm=True), el server DEBE seguir vivo para las llamadas;
-        # matarlo haría que el LLM cayera en silencio a determinista (regresión del
-        # selector de motor, 2026-05-25).
-        if not use_llm:
+        # Ciclo de vida del motor IA. Con use_llm (flujo del operador) la app
+        # ENCIENDE el server on-demand (begin_extraction) y lo apaga sola tras
+        # quedar idle (ver llm_mutex). Sin use_llm (scripts deterministas) se
+        # mantiene la pausa para liberar RAM. El finally llama end_extraction.
+        if use_llm:
+            try:
+                from backend.services.llm_mutex import begin_extraction
+                _update_progress(step="Encendiendo motor de IA...", phase="Setup")
+                begin_extraction()
+            except Exception as e:
+                logger.warning("llm_mutex begin_extraction falló: %s", e)
+        else:
             try:
                 from backend.services.llm_mutex import pause_llm_for_extraction
                 paused = pause_llm_for_extraction()
@@ -292,8 +298,31 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False, use_
     except Exception as e:
         _main.add_monitor_log(f"Error en extraccion: {e}", level="error")
     finally:
+        if use_llm:
+            try:
+                from backend.services.llm_mutex import end_extraction
+                end_extraction()
+            except Exception as e:
+                logger.warning("llm_mutex end_extraction falló: %s", e)
         _main.extraction_in_progress = False
         _elapsed_stop.set()
+
+
+@router.get("/llm-status")
+def api_llm_status():
+    """Estado del motor de IA para el semáforo de la UI (solo lectura).
+
+    server: "off" · "starting" (encendiendo/cargando) · "ready".
+    extracting: hay una extracción en curso (individual, lote o avanzado).
+    """
+    try:
+        from backend.services.llm_mutex import lifecycle_state
+        st = lifecycle_state()
+    except Exception as e:
+        logger.warning("lifecycle_state falló: %s", e)
+        st = {"server": "off", "extracting": False}
+    st["extracting"] = bool(st.get("extracting")) or bool(_main.extraction_in_progress)
+    return st
 
 
 @router.get("/folder-consistency/{case_id}")
@@ -332,7 +361,12 @@ def api_extract_single(case_id: int, force: bool = False, use_llm: bool = True, 
         return {"status": "running", "message": "Ya hay una extraccion en progreso"}
 
     start = time.time()
+    _llm_lifecycle = False
     try:
+        if use_llm:
+            from backend.services.llm_mutex import begin_extraction
+            begin_extraction()
+            _llm_lifecycle = True
         result = extract_case(db, case_id, dry_run=False, use_llm=use_llm)
         # Marca el caso como procesado (semántica de la UI; v9 no gestiona processing_status).
         try:
@@ -366,6 +400,10 @@ def api_extract_single(case_id: int, force: bool = False, use_llm: bool = True, 
             "case_id": case_id,
             "message": str(e),
         }
+    finally:
+        if _llm_lifecycle:
+            from backend.services.llm_mutex import end_extraction
+            end_extraction()
 
 
 @router.post("/batch")
@@ -436,7 +474,11 @@ def api_agent_extract(case_id: int, classify: bool = False, force: bool = False,
     _guard_folder_consistency(db, case_id, force)
 
     start = time.time()
+    _llm_lifecycle = False
     try:
+        from backend.services.llm_mutex import begin_extraction
+        begin_extraction()
+        _llm_lifecycle = True
         result = extract_case(db, case_id, dry_run=False, use_llm=True)
         elapsed = int(time.time() - start)
         try:
@@ -477,6 +519,10 @@ def api_agent_extract(case_id: int, classify: bool = False, force: bool = False,
             "case_id": case_id,
             "message": str(e),
         }
+    finally:
+        if _llm_lifecycle:
+            from backend.services.llm_mutex import end_extraction
+            end_extraction()
 
 
 @router.get("/agent/{case_id}/reasoning")

@@ -15,6 +15,7 @@ equipo) — default False para el preview; True solo en CLI/batch nocturno.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -34,6 +35,13 @@ def run(db: Session, case, fields: ExtractedFields, *, use_llm: bool = False) ->
     Cada extractor va en su propio try/except: un fallo aislado no tumba el resto.
     """
     from backend.v9 import field_extractor as fe
+
+    # V9_LLM_SINGLE_CALL: en vez de 3 llamadas LLM por-campo (derecho/asunto/pretensiones),
+    # se conserva SOLO lo que halló el regex (multi-derecho, vocab SED canónico, pretensión
+    # literal — todo gratis) y se deja VACÍO lo que requería LLM, para que `llm_gap_fill`
+    # lo llene en UNA sola llamada multi-campo (contexto enviado una vez). Default: off.
+    single_call = os.getenv("V9_LLM_SINGLE_CALL", "false").lower() == "true"
+    fe_llm = use_llm and not single_call
 
     written = 0
 
@@ -69,10 +77,13 @@ def run(db: Session, case, fields: ExtractedFields, *, use_llm: bool = False) ->
     _set("vinculados", _try("vinculados", lambda: fe.extract_vinculados_for_case(db, case)))
 
     # ── materia ──
-    dv = _try("derecho_vulnerado", lambda: fe.extract_derecho_vulnerado_for_case(db, case, use_llm=use_llm))
+    dv = _try("derecho_vulnerado", lambda: fe.extract_derecho_vulnerado_for_case(db, case, use_llm=fe_llm))
     if dv:
         val, s = dv
-        _set("derecho_vulnerado", val, _src(s))
+        # single_call: solo conserva el regex; si el regex no halló (s="default"), deja
+        # vacío para que gap_fill lo resuelva en la llamada única.
+        if not (single_call and s != "regex"):
+            _set("derecho_vulnerado", val, _src(s))
 
     # ── juzgado / geografía ──
     j1 = _try("juzgado", lambda: fe.extract_juzgado_for_case(db, case))
@@ -91,20 +102,24 @@ def run(db: Session, case, fields: ExtractedFields, *, use_llm: bool = False) ->
     if fing:
         val, _s = fing
         _set("fecha_ingreso", val)
-    asu = _try("asunto", lambda: fe.extract_asunto_for_case(db, case, use_llm=use_llm))
+    asu = _try("asunto", lambda: fe.extract_asunto_for_case(db, case, use_llm=fe_llm))
     if asu:
         val, s = asu
-        _set("asunto", val, _src(s))
-        # categoria_tematica se DERIVA del asunto recién extraído
-        try:
-            from backend.cognition.legal_schema import categoria_tematica_de_asunto
-            cat = categoria_tematica_de_asunto(val)
-            _set("categoria_tematica", cat or "SIN_DETERMINAR")
-        except Exception as e:  # noqa: BLE001
-            logger.debug("categoria_tematica derivada falló: %s", e)
-    pret = _try("pretensiones", lambda: fe.extract_pretensiones_for_case(db, case, use_llm=use_llm))
+        # single_call: si el regex no clasificó (s="default"), deja vacío → gap_fill lo
+        # llena con el enum del vocab SED (preserva valor canónico).
+        if not (single_call and s != "regex"):
+            _set("asunto", val, _src(s))
+            # categoria_tematica se DERIVA del asunto recién extraído
+            try:
+                from backend.cognition.legal_schema import categoria_tematica_de_asunto
+                cat = categoria_tematica_de_asunto(val)
+                _set("categoria_tematica", cat or "SIN_DETERMINAR")
+            except Exception as e:  # noqa: BLE001
+                logger.debug("categoria_tematica derivada falló: %s", e)
+    pret = _try("pretensiones", lambda: fe.extract_pretensiones_for_case(db, case, use_llm=fe_llm))
     if pret:
         val, s = pret
+        # single_call: si el regex no localizó (val=None) ya no se setea → gap_fill lo llena.
         _set("pretensiones", val, _src(s))
 
     # ── asignación interna ──
