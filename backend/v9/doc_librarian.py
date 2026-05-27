@@ -400,6 +400,27 @@ def _disambiguate(scores: dict[DocType, float], text: str, filename: str = "") -
     # Sin señal de 2da NO penalizamos el 2DA: si su keyword de filename matcheó, es 2da
     # real (los keywords de 2DA son específicos). Penalizar a ciegas regresionaba c103/c150.
 
+    # DOC DE FASE DESACATO: si el filename indica incidente/desacato pero NO nombra el
+    # fallo (sin "fallo"/"sentencia"), el doc es de la fase de desacato (escrito de parte,
+    # auto, oficio) — su body CITA el fallo que busca ejecutar, pero NO ES la sentencia.
+    # Sin esto, "EscritoIncidenteDesacato" caía en SENTENCIA_2DA (el recap del fallo en el
+    # body dispara la señal de 2da) sacándolo del bucket incidente. Se respeta el paquete
+    # "INCIDENTE DE DESACATO FALLO TUTELA Y ANEXOS" (nombra FALLO → puede traer la sentencia).
+    if ("INCIDENTE" in fn_up or "DESACATO" in fn_up) and not ("FALLO" in fn_up or "SENTENCIA" in fn_up):
+        for dt in (DocType.SENTENCIA_1RA, DocType.SENTENCIA_2DA):
+            if dt in scores:
+                scores[dt] *= 0.2
+
+    # ACTA / RESOLUCIÓN ADMINISTRATIVA: un fallo o auto del juez nunca se llama "acta"
+    # (registro de reunión) ni "resolución NNNNN" (acto administrativo de la SED, p.ej.
+    # "RES_24850 POR LA CUAL SE DA CUMPLIMIENTO AL FALLO"). El substring "fallo" en esos
+    # nombres disparaba SENTENCIA_1RA y contaminaba fecha_fallo/sentido del cuadro.
+    if re.search(r"(?:^|\s)ACTA(?:\s|$)|RESOLUCI[OÓ]N|(?:^|\s)RES\s?\d", fn_up):
+        for dt in (DocType.SENTENCIA_1RA, DocType.SENTENCIA_2DA,
+                   DocType.AUTO_ADMISORIO, DocType.AUTO_2DA):
+            if dt in scores:
+                scores[dt] *= 0.2
+
     # Un FALLO/SENTENCIA de acción de tutela ES la sentencia, NO la demanda, aunque el
     # nombre diga "AccionTutela" (que matchea DEMANDA_TUTELA fuerte). Sin esto,
     # "FalloAccionTutela.pdf" caía en DEMANDA → sacaba un fallo real del bucket de 1ra.
@@ -760,6 +781,11 @@ _LEGACY_DOC_TYPES = frozenset({
     "PDF_IMPUGNACION", "PDF_GMAIL", "DOCX_OTRO", "DOCX_RESPUESTA",
     "DOCX_CUMPLIMIENTO", "DOCX_SOLICITUD", "DOCX_MEMORIAL", "DOCX_CARTA",
     "DOCX_DESACATO", "DOCX_IMPUGNACION", "OTRO", "EMAIL_DB", "SCREENSHOT", "",
+    # DESCONOCIDO: el clasificador legacy / ingestas no-Gmail dejaban demandas y
+    # fallos genuinos como DESCONOCIDO → invisibles a los extractores (filtran por
+    # DEMANDA_TUTELA/SENTENCIA_*). reclassify los recupera con `classify()` por
+    # contenido; si sigue siendo DESCONOCIDO o conf<min, NO se toca (idempotente).
+    "DESCONOCIDO",
 })
 
 
