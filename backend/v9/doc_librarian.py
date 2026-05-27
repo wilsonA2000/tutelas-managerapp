@@ -284,6 +284,14 @@ _BODY_PATTERNS: dict[DocType, list[re.Pattern]] = {
         re.compile(r"(?i)\bSOLICITO\s+(?:SE\s+)?ABRIR\s+INCIDENTE\b"),
         re.compile(r"(?i)\bINCIDENTE\s+DE\s+DESACATO\b.{0,200}\bSANCION"),
     ],
+    # Escrito de tutela del accionante: petición en PRIMERA persona (interpongo/acudo) +
+    # las dos partes etiquetadas juntas. Discrimina del recap del juez (3ra persona:
+    # "el accionante interpuso/acudió"). El boost por estructura (en _disambiguate) usa
+    # estas + SEÑOR JUEZ/PRETENSIONES para rescatar demandas mal clasificadas DESCONOCIDO.
+    DocType.DEMANDA_TUTELA: [
+        re.compile(r"(?i)\b(?:INTERPONG|INSTAUR|PROMUEV|INCO|FORMUL)\w*\s+(?:LA\s+)?(?:PRESENTE\s+)?ACCI[ÓO]N\s+(?:CONSTITUCIONAL\s+)?DE\s+TUTELA\b"),
+        re.compile(r"(?i)\bACUDO\s+(?:RESPETUOSAMENTE\s+)?(?:ANTE\s+)?(?:SU\s+|EL\s+|A\s+SU\s+)?(?:DESPACHO|SE[ÑN]OR[ÍI]A)\b"),
+    ],
 }
 
 
@@ -467,7 +475,63 @@ def _disambiguate(scores: dict[DocType, float], text: str, filename: str = "") -
             )
             scores[DocType.NOTIFICACION] *= 0.7
 
+    # DEMANDA por ESTRUCTURA (rescata escritos de tutela mal clasificados DESCONOCIDO cuyo
+    # filename no lo dice —"001Tutela.pdf"— y cuyos marcadores caen fuera del header[:600]).
+    # El escrito del accionante combina ≥3 señales; se exige que NO sea providencia del juez
+    # (sin AVOCA/SE ADMITE/RESUELVE-dispositiva/ADMINISTRANDO JUSTICIA/encabezado JUZGADO N).
+    # Rescate de DEMANDA mal clasificada DESCONOCIDO: exige la señal DISCRIMINANTE de
+    # primera persona del accionante ("INTERPONGO/ACUDO la acción de tutela") — NO aparece
+    # en recaps (3ra persona "interpuso/acudió") ni en providencias. Excluye explícitamente
+    # providencia del juez, contestación de la SED e incidente. Solo si el score actual es
+    # bajo (<0.5) — los docs ya tipados no se tocan.
+    _t8 = (text or "")[:8000]
+    # Disparador discriminante: el doc ARRANCA dirigiéndose al juez ("SEÑOR JUEZ…" en el
+    # encabezado) — así abre el accionante; autos/sentencias/respuestas abren con
+    # "JUZGADO"/membrete — O usa primera persona ("interpongo/acudo la acción de tutela").
+    _trigger = bool(_RE_DEMANDA_OPENING.search(_t8[:220]) or _RE_DEMANDA_1P.search(_t8))
+    _struct = sum(bool(p.search(_t8.upper())) for p in (
+        re.compile(r"ACCIONANTE\s*[:\.]"), re.compile(r"ACCIONAD[OA]S?\s*[:\.]"),
+        re.compile(r"\bPRETENSION"), re.compile(r"\bHECHOS\b")))
+    if (_trigger and _struct >= 2
+            and not _RE_ES_PROVIDENCIA.search(text or "")
+            and not _RE_ES_RESPUESTA.search(_t8)
+            and not _RE_ES_INCIDENTE.search((filename or "") + " " + _t8)
+            and max(scores.values(), default=0.0) < 0.5):
+        scores[DocType.DEMANDA_TUTELA] = max(scores.get(DocType.DEMANDA_TUTELA, 0.0), 0.65)
+
     return scores
+
+
+# Señal DISCRIMINANTE de DEMANDA: petición en PRIMERA persona del accionante. Los recaps
+# (auto/sentencia) usan 3ra persona pasada ("interpuso/acudió") → no matchea.
+_RE_DEMANDA_1P = re.compile(
+    r"(?i)\b(?:INTERPONG[OA]|INSTAUR[OA]|PROMUEV[OA]|INCO[OA]|FORMUL[OA])\b[^\n]{0,50}?"
+    r"\bACCI[ÓO]N\s+(?:CONSTITUCIONAL\s+)?DE\s+TUTELA\b"
+    r"|\bACUDO\s+(?:RESPETUOSAMENTE\s+)?(?:ANTE|A)\s+(?:SU\s+|EL\s+|USTED|ESTE)?\s*"
+    r"(?:DESPACHO|SE[ÑN]OR[ÍI]A|JUZGADO|USTED)"
+    r"|\bYO,?\s+[A-ZÁÉÍÓÚÑ][^\n]{0,70}?\bidentificad[oa]\b[^\n]{0,90}?"
+    r"\b(?:interpong|acudo|instaur|promuev)\w*"
+)
+# El doc ARRANCA dirigiéndose al juez (apertura típica del escrito del accionante).
+_RE_DEMANDA_OPENING = re.compile(
+    r"(?i)(?:SE[ÑN]OR(?:A|ES)?|HONORABLE)\s+(?:JUE[ZC]|MAGISTRAD)|"
+    r"JUE[ZC]\s+(?:\d+\s+)?(?:CONSTITUCIONAL|PROMISCUO|CIVIL|PENAL|LABORAL|MUNICIPAL|DE\s+TUTELA)"
+    r"[^\n]{0,60}\(\s*REPARTO\s*\)"
+)
+# La SED en su contestación recapitula el petitorio pero NO es demanda.
+_RE_ES_RESPUESTA = re.compile(
+    r"(?i)\bAL\s+RESPONDER\s+CITE\s+ESTE\s+N[ÚU]MERO\b|\bProyect[óo]\s*[:\.]|"
+    r"\bcontestaci[óo]n\s+a\s+la\s+(?:acci[óo]n\s+de\s+)?tutela\b|\bDep\s+Radicadora\b"
+)
+# Escrito/auto de incidente de desacato (estructura de petición similar a demanda).
+_RE_ES_INCIDENTE = re.compile(r"(?i)\bINCIDENTE\s+DE\s+DESACATO\b|\bABRIR\s+INCIDENTE\b|\bincidente\b")
+# El doc ES una providencia del juez (NO una demanda): frases inequívocas de auto/sentencia.
+_RE_ES_PROVIDENCIA = re.compile(
+    r"(?i)\bAVOCAR?\s+CONOCIMIENTO\b|\bSE\s+ADMITE\s+(?:LA\s+)?(?:PRESENTE\s+)?ACCI[ÓO]N\b|"
+    r"\bADMINISTRANDO\s+JUSTICIA\b|\bRESUELV[EO]\b[\s\S]{0,200}?\b(?:TUTELAR|CONCEDER|NEGAR|"
+    r"DENEGAR|CONFIRMAR|REVOCAR|AVOCAR|ADMITIR)\b|^\s*JUZGADO\s+\w+\s+(?:CIVIL|PENAL|LABORAL|"
+    r"PROMISCUO|MUNICIPAL|CONSTITUCIONAL|ADMINISTRATIVO)"
+)
 
 
 def classify(doc: DocText) -> DocClassification:
