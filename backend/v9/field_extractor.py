@@ -1559,22 +1559,37 @@ def _asunto_vocab() -> list[str]:
         return []
 
 
-def _asunto_case_text(db: Session, case: Case, limit_per_doc: int = 6000) -> str:
-    """Texto del case para clasificar el asunto: asuntos de emails + (casi) todos los
-    docs con texto (incluye los de 2da instancia y DESCONOCIDO — sus ANTECEDENTES
-    recapitulan el reclamo, lo que recupera cases que solo conservan los docs de 2da)."""
+# Doctypes que enuncian el RECLAMO DEL ACCIONANTE (o el juez recapitulándolo). NO
+# incluye la RESPUESTA/contestación de la SED ni oficios de cumplimiento: ahí la SED
+# cita normativa ("reubicación", "traslado del titular") que contamina el asunto con
+# un tema que no es el del caso. Se usan en el PASE 1 (autoritativo).
+_ASUNTO_PRIMARY_DOCTYPES = [
+    "DEMANDA_TUTELA", "ANEXO_DEMANDA", "AUTO_ADMISORIO", "SENTENCIA_1RA",
+    "SENTENCIA_2DA", "AUTO_2DA", "AUTO_CONCEDE_IMPUGNACION", "IMPUGNACION",
+]
+# Doctypes que solo se miran en el PASE 2 (fallback) — pueden traer la defensa SED.
+_ASUNTO_SECONDARY_DOCTYPES = [
+    "INCIDENTE_DESACATO", "NOTIFICACION", "NOTIFICACION_FALLO",
+    "OFICIO_CUMPLIMIENTO", "RESPUESTA", "DESCONOCIDO",
+]
+
+
+def _asunto_case_text(db: Session, case: Case, limit_per_doc: int = 6000, *, primary_only: bool = False) -> str:
+    """Texto del case para clasificar el asunto: asuntos de emails + docs con texto.
+
+    `primary_only=True` (PASE 1): solo el reclamo del accionante (demanda/auto/sentencia),
+    SIN la RESPUESTA de la SED — evita que la normativa citada en la defensa
+    ('reubicación', 'traslado del titular') gane sobre el reclamo real. Si el PASE 1 no
+    clasifica, el caller reintenta con `primary_only=False` (todos los docs, como antes —
+    recupera cases que solo conservan docs de 2da/respuesta)."""
+    doctypes = _ASUNTO_PRIMARY_DOCTYPES if primary_only else (_ASUNTO_PRIMARY_DOCTYPES + _ASUNTO_SECONDARY_DOCTYPES)
     parts: list[str] = []
     for e in db.query(Email).filter(Email.case_id == case.id).all():
         if e.subject:
             parts.append(e.subject)
     for d in db.query(Document).filter(
         Document.case_id == case.id,
-        Document.doc_type.in_([
-            "DEMANDA_TUTELA", "ANEXO_DEMANDA", "AUTO_ADMISORIO", "SENTENCIA_1RA",
-            "SENTENCIA_2DA", "AUTO_2DA", "AUTO_CONCEDE_IMPUGNACION", "IMPUGNACION",
-            "INCIDENTE_DESACATO", "NOTIFICACION", "NOTIFICACION_FALLO",
-            "OFICIO_CUMPLIMIENTO", "RESPUESTA", "DESCONOCIDO",
-        ]),
+        Document.doc_type.in_(doctypes),
     ).all():
         if d.extracted_text:
             parts.append(d.extracted_text[:limit_per_doc])
@@ -1635,16 +1650,20 @@ def extract_asunto_for_case(db: Session, case: Case, *, use_llm: bool = True) ->
     """`asunto` = etiqueta del vocabulario controlado SED. Returns (valor, fuente)
     con fuente ∈ {"regex", "llm", "default"}."""
     vocab = _asunto_vocab()
-    text = _asunto_case_text(db, case)
     try:
         from backend.cognition.legal_schema import clasificar_sed_tematica
-        _l1, _l2, _l3, cat = clasificar_sed_tematica(text)
+        # PASE 1: solo el reclamo del accionante (sin la defensa SED).
+        _l1, _l2, _l3, cat = clasificar_sed_tematica(_asunto_case_text(db, case, primary_only=True))
+        if cat:
+            return cat, "regex"
+        # PASE 2 (fallback): todos los docs — recupera cases sin demanda archivada.
+        _l1, _l2, _l3, cat = clasificar_sed_tematica(_asunto_case_text(db, case))
         if cat:
             return cat, "regex"
     except Exception:
         pass
     if use_llm:
-        v = _llm_classify_asunto(text, vocab)
+        v = _llm_classify_asunto(_asunto_case_text(db, case), vocab)
         if v:
             return v, "llm"
     return ASUNTO_SIN_DETERMINAR, "default"
