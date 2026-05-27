@@ -43,12 +43,14 @@ class Case(Base):
     fecha_respuesta = Column(String)
     sentido_fallo_1st = Column(String, index=True)  # CONCEDE / NIEGA / IMPROCEDENTE
     fecha_fallo_1st = Column(String)
+    parte_resolutiva_1st = Column(Text)  # transcripción verbatim del RESUELVE (1ra instancia)
     impugnacion = Column(String, index=True)  # SI / NO
     quien_impugno = Column(String)
     forest_impugnacion = Column(String)
     juzgado_2nd = Column(String)
     sentido_fallo_2nd = Column(String)  # CONFIRMA / REVOCA / MODIFICA
     fecha_fallo_2nd = Column(String)
+    parte_resolutiva_2nd = Column(Text)  # transcripción verbatim del RESUELVE (2da instancia)
     incidente = Column(String)  # SI / NO
     fecha_apertura_incidente = Column(String)
     responsable_desacato = Column(String)   # funcionario público sancionable (jurídico, Dcto 2591/91)
@@ -126,12 +128,14 @@ class Case(Base):
         "FECHA_RESPUESTA": "fecha_respuesta",
         "SENTIDO_FALLO_1ST": "sentido_fallo_1st",
         "FECHA_FALLO_1ST": "fecha_fallo_1st",
+        "PARTE_RESOLUTIVA_1ST": "parte_resolutiva_1st",
         "IMPUGNACION": "impugnacion",
         "QUIEN_IMPUGNO": "quien_impugno",
         "FOREST_IMPUGNACION": "forest_impugnacion",
         "JUZGADO_2ND": "juzgado_2nd",
         "SENTIDO_FALLO_2ND": "sentido_fallo_2nd",
         "FECHA_FALLO_2ND": "fecha_fallo_2nd",
+        "PARTE_RESOLUTIVA_2ND": "parte_resolutiva_2nd",
         "INCIDENTE": "incidente",
         "FECHA_APERTURA_INCIDENTE": "fecha_apertura_incidente",
         "RESPONSABLE_DESACATO": "responsable_desacato",

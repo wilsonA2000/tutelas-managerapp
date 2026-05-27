@@ -141,6 +141,11 @@ def run(db: Session, case, fields: ExtractedFields, *, use_llm: bool = False) ->
     if ff1:
         val, _s = ff1
         _set("fecha_fallo_1st", val)
+    # transcripción verbatim del RESUELVE 1ra (determinista, 0 LLM)
+    pr1 = _try("parte_resolutiva_1ra", lambda: fe.extract_parte_resolutiva_1ra_for_case(db, case))
+    if pr1:
+        val, _s = pr1
+        _set("parte_resolutiva_1st", val)
 
     # ── cluster impugnación ──
     imp = _try("impugnacion_cluster", lambda: fe.extract_impugnacion_cluster_for_case(db, case))
@@ -150,6 +155,11 @@ def run(db: Session, case, fields: ExtractedFields, *, use_llm: bool = False) ->
         _set("quien_impugno", quien)
         _set("sentido_fallo_2nd", sent2)
         _set("fecha_fallo_2nd", fec2)
+    # transcripción verbatim del RESUELVE 2da (determinista, 0 LLM)
+    pr2 = _try("parte_resolutiva_2da", lambda: fe.extract_parte_resolutiva_2da_for_case(db, case))
+    if pr2:
+        val, _s = pr2
+        _set("parte_resolutiva_2nd", val)
 
     # ── cluster incidentes (slots 1/2/3) ──
     inc = _try("incidentes_cluster", lambda: fe.extract_incidentes_cluster_for_case(db, case))

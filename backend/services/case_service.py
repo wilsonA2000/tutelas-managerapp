@@ -256,8 +256,13 @@ MIN_COMPLETITUD_PERCENT = 20.0
 # Se excluyen los 5 campos heredados de v8 que v9 NO escribe (DIRECCION/GRUPO/EQUIPO del
 # organigrama y los *_CANONICAL); incluirlos deprimía artificialmente la completitud.
 _V8_ONLY_FIELDS = {"direccion", "grupo", "equipo", "abogado_canonical", "dependencia_canonical"}
+# Transcripciones verbatim del fallo: solo existen si el caso YA tiene sentencia. Contarlas
+# en la completitud penalizaría injustamente a las tutelas activas aún sin fallo → se excluyen
+# del denominador (siguen en CSV_FIELD_MAP para serialización/Excel).
+_TRANSCRIPTION_FIELDS = {"parte_resolutiva_1st", "parte_resolutiva_2nd"}
 _CUADRO_FIELDS: tuple[str, ...] = tuple(
-    attr for attr in Case.CSV_FIELD_MAP.values() if attr not in _V8_ONLY_FIELDS
+    attr for attr in Case.CSV_FIELD_MAP.values()
+    if attr not in _V8_ONLY_FIELDS and attr not in _TRANSCRIPTION_FIELDS
 )
 
 # Etiquetas legibles para los charts del dashboard (los valores en DB son códigos en MAYÚSCULAS).

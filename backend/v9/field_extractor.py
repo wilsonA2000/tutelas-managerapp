@@ -2237,6 +2237,104 @@ def _dispositiva_zone(d) -> Optional[str]:
     return _last_resuelve_zone(d.extracted_text or "")
 
 
+# ── Transcripción VERBATIM de la parte resolutiva (requisito del jurado) ──
+# A diferencia de `_dispositiva_zone` (que recorta a 2500 chars DESPUÉS de RESUELVE para
+# clasificar el sentido), aquí copiamos el resolutivo COMPLETO e INCLUYENDO el encabezado,
+# cortando en el cierre estándar de tutela. Tarea determinista (localizar + copiar), 0 LLM.
+# Inicio (inclusive) de la parte resolutiva: "RESUELVE/RESUELVO" o "FALLA:".
+_RE_RESUELVE_START = re.compile(r"(?is)\bRESUELV[EO]\b|\bFALLA\s*[:.]")
+# Cierre de la dispositiva: "NOTIFÍQUESE Y CÚMPLASE" / "CÚMPLASE" (CÚMPLASE casi solo
+# aparece en el cierre, no a media orden). Cortamos ANTES para no arrastrar la firma.
+_RE_FALLO_CLOSE = re.compile(r"(?i)NOTIF[IÍ]QUE?SE\s+Y\s+C[UÚ]MPLASE|\bC[UÚ]MPLASE\b")
+
+
+def _resuelve_verbatim(text: str, cap: int = 4000) -> Optional[str]:
+    """Transcribe VERBATIM la parte resolutiva: desde el último 'RESUELVE/RESUELVO/FALLA:'
+    (o, si no aparece el keyword, el último 'PRIMERO: <verbo>') hasta el cierre
+    'NOTIFÍQUESE Y CÚMPLASE'/'CÚMPLASE'. Normaliza espacios suavemente (conserva la
+    estructura PRIMERO/SEGUNDO). Devuelve None si quedan <20 chars útiles."""
+    if not text:
+        return None
+    starts = list(_RE_RESUELVE_START.finditer(text))
+    if starts:
+        start = starts[-1].start()
+    else:
+        m = list(_RE_PRIMERO_DECISION.finditer(text))
+        if not m:
+            return None
+        start = m[-1].start()
+    span = text[start:start + cap]
+    mc = _RE_FALLO_CLOSE.search(span)
+    if mc:
+        span = span[:mc.start()]
+    # Normalización suave: colapsa espacios/tabs, comprime líneas en blanco repetidas.
+    span = re.sub(r"[ \t]+", " ", span)
+    span = re.sub(r"\n[ \t]*\n[ \t]*\n+", "\n\n", span)
+    span = span.strip(" \n\t·•-–—")
+    return span if len(span) >= 20 else None
+
+
+def _dispositiva_verbatim(d) -> Optional[str]:
+    """Como `_dispositiva_zone` (lee el resolutivo del FINAL del PDF, sin el cap de 30k),
+    pero devuelve la transcripción VERBATIM completa (RESUELVE…CÚMPLASE)."""
+    fp = getattr(d, "file_path", None)
+    if fp and str(fp).lower().endswith(".pdf"):
+        try:
+            from backend.extraction.pdf_extractor import extract_pdf
+            tail = extract_pdf(fp, first_pages=0, last_pages=5).text or ""
+            v = _resuelve_verbatim(tail)
+            if v:
+                return v
+        except Exception as e:  # pragma: no cover
+            logger.debug("resolutiva PDF falló (doc#%s): %s", getattr(d, "id", "?"), e)
+    return _resuelve_verbatim(d.extracted_text or "")
+
+
+def extract_parte_resolutiva_1ra_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
+    """Transcribe verbatim la parte resolutiva de la SENTENCIA_1RA (misma selección de doc
+    que `extract_sentido_fallo_1ra_for_case`: descarta 2da mal etiquetada, fallback a
+    DESCONOCIDO con dispositiva clara). Returns (texto|None, fuente∈{"sentencia","desconocido","none"})."""
+    sents = [
+        d for d in db.query(Document).filter(
+            Document.case_id == case.id, Document.doc_type == "SENTENCIA_1RA"
+        ).all() if (d.extracted_text or "") and len(d.extracted_text) > 500
+    ]
+    sents.sort(key=lambda d: -len(d.extracted_text or ""))
+    for d in sents:
+        if _is_segunda_instancia(d):
+            continue
+        v = _dispositiva_verbatim(d)
+        if v:
+            return v, "sentencia"
+    for d in db.query(Document).filter(
+        Document.case_id == case.id, Document.doc_type == "DESCONOCIDO"
+    ).all():
+        t = d.extracted_text or ""
+        if not t or len(t) < 800 or _is_segunda_instancia(d):
+            continue
+        v = _dispositiva_verbatim(d)
+        if v:
+            return v, "desconocido"
+    return None, "none"
+
+
+def extract_parte_resolutiva_2da_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
+    """Transcribe verbatim la parte resolutiva de la SENTENCIA_2DA (misma selección que
+    `sentido_fallo_2nd` en `extract_impugnacion_cluster_for_case`). Returns
+    (texto|None, fuente∈{"sentencia_2da","none"})."""
+    sents = [
+        d for d in db.query(Document).filter(
+            Document.case_id == case.id, Document.doc_type == "SENTENCIA_2DA"
+        ).all() if (d.extracted_text or "") and len(d.extracted_text) > 500
+    ]
+    sents.sort(key=lambda d: -len(d.extracted_text or ""))
+    for d in sents:
+        v = _dispositiva_verbatim(d)
+        if v:
+            return v, "sentencia_2da"
+    return None, "none"
+
+
 # Un doc clasificado SENTENCIA_1RA puede ser realmente de 2da instancia (mal etiquetado por
 # el librarian). El filename suele delatarlo ("SegundaInstancia", "fallo_confirma", etc.);
 # si no, el contenido (_doc_es_realmente_2da). Para `sentido_fallo_1st` debemos descartarlos.

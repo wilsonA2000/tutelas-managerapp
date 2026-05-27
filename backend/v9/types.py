@@ -52,6 +52,7 @@ EXCEL_FIELDS: tuple[str, ...] = (
     # Fallo 1ra instancia
     "sentido_fallo_1st",
     "fecha_fallo_1st",
+    "parte_resolutiva_1st",      # transcripción verbatim del RESUELVE (determinista, 0 LLM)
     # Impugnación
     "impugnacion",               # SI / NO
     "quien_impugno",
@@ -59,6 +60,7 @@ EXCEL_FIELDS: tuple[str, ...] = (
     "juzgado_2nd",
     "sentido_fallo_2nd",
     "fecha_fallo_2nd",
+    "parte_resolutiva_2nd",      # transcripción verbatim del RESUELVE (2da instancia)
     # Incidente / desacato (1ro, 2do, 3ro — un caso puede tener varios)
     "incidente",                 # SI / NO
     "fecha_apertura_incidente",

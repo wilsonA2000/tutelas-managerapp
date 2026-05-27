@@ -229,7 +229,7 @@ def _checks_field_extractor() -> list[tuple]:
             _RE_CIUDAD_TAIL_JUZGADO, _RE_CIUDAD_DE_JUZGADO, _ciudad_clean,
             _parse_es_dates, _fecha_auto_from_text, _first_date_near_year,
             _extract_pretensiones_from_text, _clean_abogado_name, _resolve_abogado_combined,
-            _ASUNTO_TO_L1, _classify_sentido_fallo,
+            _ASUNTO_TO_L1, _classify_sentido_fallo, _resuelve_verbatim,
             _RE_OBS_MEDIDA_PROVISIONAL, _RE_OBS_SEP,
             _normalize_entity_list, _canon_entity, _looks_like_accionado_value,
         )
@@ -525,6 +525,31 @@ def _checks_field_extractor() -> list[tuple]:
         "fallo: 'no tutelar el amparo solicitado' (sin improcedente) → NIEGA",
         "NIEGA",
         _classify_sentido_fallo("RESUELVE: PRIMERO. No tutelar el amparo solicitado por el accionante."),
+    ))
+    # --- PARTE_RESOLUTIVA (transcripción verbatim, determinista, 0 LLM) ---
+    _pr = _resuelve_verbatim(
+        "En consecuencia, el despacho RESUELVE: PRIMERO: TUTELAR el derecho de "
+        "petición. SEGUNDO: ORDENAR a la entidad responder en 48 horas. "
+        "NOTIFÍQUESE Y CÚMPLASE. Firmado: El Juez"
+    )
+    out.append((
+        "parte_resolutiva: arranca en RESUELVE y copia ordinales",
+        True,
+        bool(_pr) and _pr.startswith("RESUELVE") and "PRIMERO" in _pr and "ORDENAR" in _pr,
+    ))
+    out.append((
+        "parte_resolutiva: excluye el cierre (CÚMPLASE) y la firma",
+        True,
+        bool(_pr) and "CÚMPLASE" not in _pr and "Firmado" not in _pr,
+    ))
+    _pr2 = _resuelve_verbatim(
+        "El a-quo RESUELVE negar el amparo. Esta Sala RESUELVE: PRIMERO: REVOCAR "
+        "el fallo. SEGUNDO: CONCEDER el amparo. CÚMPLASE."
+    )
+    out.append((
+        "parte_resolutiva: ancla en el ÚLTIMO RESUELVE (el operativo, no el recap)",
+        True,
+        bool(_pr2) and "REVOCAR" in _pr2 and "negar el amparo" not in _pr2,
     ))
     # --- CATEGORIA_TEMATICA (campo 18): derivada del asunto (grupo L2 SED) ---
     out.append((

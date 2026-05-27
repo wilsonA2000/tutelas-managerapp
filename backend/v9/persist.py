@@ -128,8 +128,10 @@ _CASE_FIELD_MAP = {
     # Fallo 1ra y 2da viven en Case (también en ComplianceTracking pero son distintos)
     "sentido_fallo_1st": "sentido_fallo_1st",
     "fecha_fallo_1st": "fecha_fallo_1st",
+    "parte_resolutiva_1st": "parte_resolutiva_1st",
     "sentido_fallo_2nd": "sentido_fallo_2nd",
     "fecha_fallo_2nd": "fecha_fallo_2nd",
+    "parte_resolutiva_2nd": "parte_resolutiva_2nd",
     "juzgado_2nd": "juzgado_2nd",
 }
 
