@@ -1703,9 +1703,13 @@ _RE_PRET_INLINE = re.compile(
     r"|(?:los?\s+)?hechos\s+y\s+pretensiones\s+que\s+(?:fundamentan|sustentan|motivan)\b[^\n]{0,50}?(?:\bson\b|[:\-–])\s*$"
 )
 # Recap en auto/sentencia: "...promovida por X solicitando que se ordene/tutele/ampare ..."
+# El verbo dispositivo va en LOOKAHEAD: así `m.end()` queda ANTES del verbo y la sección
+# transcrita lo INCLUYE ("ordene a los accionados…"), en vez de truncarlo a "a los
+# accionados…" (bug de truncamiento, c488/c397).
 _RE_PRET_RECAP = re.compile(
     r"(?i)(?:solicit(?:a|ando|o)|pretend(?:e|iendo)|pidiendo|deprecando|aspira(?:ndo)?\s+a|persigue)\s+"
-    r"(?:que\s+)?(?:se\s+)?(?:le\s+)?(?:ordene|tutele|ampare|disponga|protej|garantic|reconozc|reintegr|nombr|traslad|provea)"
+    r"(?:que\s+)?(?:se\s+)?(?:le\s+)?"
+    r"(?=(?:ordene|tutele|ampare|disponga|protej|garantic|reconozc|reintegr|nombr|traslad|provea))"
 )
 # Encabezado de la siguiente sección (corta la transcripción aquí)
 _RE_PRET_END = re.compile(
@@ -1749,7 +1753,26 @@ _RE_PRET_DEFENSE_SECTION = re.compile(
     r"[^.]{0,45}(?:tutela|pretensiones|amparo|acci[óo]n)|"
     r"tener\s+por\s+contestad|"
     r"pronunciamiento\s+de\s+fondo\s+y\s+excepciones|"
+    r"(?:al\s+)?considera\w*\s+que\s+no\s+(?:ha|han|se\s+ha)\s+vulnerad|"
+    r"no\s+(?:ha|han|se\s+ha)\s+vulnerad\w*\s+(?:los?\s+)?derecho|"
     r"exoner\w+\s+a\s+(?:la\s+)?(?:secretar|gobernaci|entidad|naci[óo]n))"
+)
+# NO es petitorio sino NARRATIVA DE HECHOS / ENCABEZADO / texto de la entidad: la sección
+# arranca describiendo lo que el accionante "alega/adujo" (hechos), presentando a las
+# partes, o con un título de sección. Se descarta (≠ "solicita/pretende QUE SE ordene…",
+# que sí es recap del petitorio). Se evalúa sobre el INICIO de la sección.
+_RE_PRET_NOTPETITION = re.compile(
+    r"(?i)^[\s\W]*(?:"
+    r"(?:el|la|los|las)\s+accionantes?\b[^.]{0,70}?\b(?:alega|adujo|aduce|manifiesta|narra|sostiene|expone|relata|refiere|argumenta|vinculad[oa])\b"
+    r"|(?:los|las)\s+accionantes?,?\s+actuando\b"
+    r"|en\s+apoyo\s+de\s+sus\s+pretensiones\b"
+    r"|argumentos\s+f[áa]cticos\s+y\s+jur[íi]dicos"
+    r"|frente\s+a\s+los\s+hechos\b"
+    r"|el\s+grupo\s+de\s+talento\s+humano\b"
+    r"|(?:la|el)\s+secretar[íi]a\s+de\s+educaci[óo]n\b[^.]{0,40}?\b(?:considera|manifiesta|informa)\b"
+    r"|dado\s+que\s+esta\s+situaci[óo]n"
+    r"|se[ñn]or\s+juez,?\s+[A-ZÁÉÍÓÚÑ]"          # arranca con el encabezado de la demanda
+    r")"
 )
 
 
@@ -1784,6 +1807,20 @@ def _extract_pretensiones_from_text(text: str, *, strip_defense: bool = False, r
     # Guard anti-defensa: si la sección es la petición de la SED (que se niegue/declare
     # improcedente la tutela), NO son las pretensiones del accionante → descartar.
     if _RE_PRET_DEFENSE_SECTION.search(section[:400]):
+        return None
+    # Guard NO-petitorio: narrativa de hechos / encabezado / texto de la entidad.
+    if _RE_PRET_NOTPETITION.search(section[:120]):
+        return None
+    # Quality-gate de truncamiento: si arranca a media frase (minúscula sin verbo
+    # petitorio cerca, o fragmento 'n '/'o '/'arse'/'despacho:') → captura defectuosa,
+    # descartar para que caiga a otra fuente / al LLM verbatim.
+    head40 = section[:40]
+    _bad_frag = re.match(r"(?i)^(?:n\s|o\s|arse\b|despacho\s*:)", section)
+    _starts_lower = bool(re.match(r"^[a-záéíóúñ]", section)) and not re.search(
+        r"(?i)\b(?:solicit|rueg|pid|peticion|tutel|ampar|orden|proteg|garantic|reconozc|"
+        r"reintegr|nombr|declar|provee?r|asignaci|mantener|entregar|informar|reanud)\w*", head40
+    )
+    if _bad_frag or _starts_lower:
         return None
     return section[:4000].strip()
 
@@ -1853,6 +1890,10 @@ def _llm_locate_pretensiones(text: str) -> Optional[str]:
         return None
     anchor = re.sub(r"\s+", " ", raw).strip().strip('"\'`*').strip()
     if not anchor or "no_hay" in _fold(anchor) or len(anchor) < 8:
+        return None
+    # Rechazar meta-comentarios del LLM (editorializa en vez de copiar): "(extraído del
+    # resumen, no verbatim)", "no consta…", "no se especifica… se infiere".
+    if re.search(r"(?i)extra[íi]do|no\s+verbatim|no\s+consta|no\s+se\s+especific|se\s+infiere", anchor):
         return None
     pos = _flexible_substr_pos(text, anchor)
     if pos is None:

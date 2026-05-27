@@ -551,6 +551,31 @@ def _checks_field_extractor() -> list[tuple]:
         True,
         bool(_pr2) and "REVOCAR" in _pr2 and "negar el amparo" not in _pr2,
     ))
+    # --- PRETENSIONES: calidad de formato (recap conserva verbo, rechaza no-petitorio) ---
+    out.append((
+        "pret recap: conserva el verbo dispositivo ('ordene a...')",
+        True,
+        (_extract_pretensiones_from_text(
+            "La acción promovida por X, pretende se ordene a los accionados reanudar.\nPRUEBAS",
+            recap_ok=True) or "").lower().startswith("ordene"),
+    ))
+    out.append((
+        "pret: descarta narrativa de hechos ('El accionante alega...')",
+        None,
+        _extract_pretensiones_from_text(
+            "El accionante, docente vinculado desde 2015, alega que las condiciones.\nHECHOS",
+            recap_ok=True),
+    ))
+    out.append((
+        "pret: descarta encabezado ('ARGUMENTOS FÁCTICOS Y JURÍDICOS')",
+        None,
+        _extract_pretensiones_from_text("ARGUMENTOS FÁCTICOS Y JURÍDICOS DE LAS ACCIONADAS.\nPRUEBAS"),
+    ))
+    out.append((
+        "pret: descarta captura truncada a media frase ('a los accionados...')",
+        None,
+        _extract_pretensiones_from_text("a los accionados reanudar de manera inmediata.\nPRUEBAS"),
+    ))
     # --- CATEGORIA_TEMATICA (campo 18): derivada del asunto (grupo L2 SED) ---
     out.append((
         "categoria: TRASLADO → CARRERA_DOCENTE",
