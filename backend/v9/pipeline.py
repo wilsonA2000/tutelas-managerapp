@@ -143,6 +143,28 @@ def extract_case(
             warnings.append(f"acumulacion(pre): {e}")
         timing["acumulacion_pre"] = int((time.perf_counter() - t) * 1000)
 
+    # 0.6 GUARD ANTI-CONFLACIÓN — una DEMANDA con accionante AJENO (misfileada de otra
+    #     tutela por rad corto compartido) envenena la extracción de derecho/asunto/
+    #     accionante. Se detecta por accionante y se rutea a su caso correcto cuando el
+    #     match es inequívoco (si no, flag). DEBE ir antes del field_extractor_pass para
+    #     que extraiga solo los docs propios. Flag CONFLATION_AUTO; solo en --apply.
+    if (case is not None and not dry_run
+            and os.getenv("CONFLATION_AUTO", "true").lower() != "false"):
+        t = time.perf_counter()
+        try:
+            from backend.v9.conflation_guard import route_foreign_demandas
+            _cf = route_foreign_demandas(db, case, apply=True)
+            if _cf.get("moved"):
+                db.flush()
+                folder_name, paths = _list_case_docs(db, case_id)  # recomputar: docs salieron
+                warnings.append(f"conflacion: {len(_cf['moved'])} demanda(s) ajena(s) ruteada(s) "
+                                + ", ".join(f"{m['filename'][:30]}→c{m['to_case']}" for m in _cf['moved']))
+            if _cf.get("flagged"):
+                warnings.append(f"conflacion: {len(_cf['flagged'])} demanda(s) ajena(s) sin destino único (revisar)")
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"conflacion(guard): {e}")
+        timing["conflation_guard"] = int((time.perf_counter() - t) * 1000)
+
     # 1. field_extractor_pass — extractores a nivel CASE (autoridad de los 18 campos del
     #    cuadro). Usa la DB (Document.extracted_text + .md), así que corre aunque no
     #    haya PDFs legibles en disco.
