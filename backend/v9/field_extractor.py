@@ -1707,6 +1707,31 @@ _RE_PRET_DEFENSE = re.compile(
     r"contestaci[óo]n\s+a\s+la\s+(?:acci[óo]n\s+de\s+)?tutela|oposici[óo]n\s+a\s+la\s+tutela|"
     r"en\s+respuesta\s+a\s+la\s+acci[óo]n\s+de\s+tutela)\b"
 )
+# Header "PRETENSIONES" seguido EN LA MISMA LÍNEA por el arranque del petitorio. El
+# escrito de tutela suele venir con el PDF aplanado ("PRETENSIONES Solicito
+# respetuosamente al despacho: 1. Tutelar...") → sin salto de línea tras el título, ni
+# `_RE_PRET_HEADER` (exige fin de línea) ni `_RE_PRET_INLINE` (exige ':' + fin de línea)
+# matcheaban. Se exige un verbo de petición FINITO o "se tutele/ordene..." en lookahead
+# (no participios como "pretensiones solicitadas") para no disparar en prosa.
+_RE_PRET_HEADER_INLINE = re.compile(
+    r"(?i)\bPRETENSIONES?\b\s+"
+    r"(?=(?:(?:respetuosa|atenta|comedida|formal|cordial|com)mente\s+)?"
+    r"(?:solicit(?:o|a|amos|an)\b|rueg(?:o|amos)\b|pid(?:o|imos)\b|peticion(?:o|amos)\b|"
+    r"impetr(?:o|amos)\b|deprec(?:o|amos)\b|"
+    r"se\s+(?:tutele|ordene|ampare|disponga|proteja|garantice|reconozca|reintegre|nombre)))"
+)
+# La SED, en su contestación, también escribe "PRETENSIONES"/"SOLICITO" pero para PEDIR
+# que se NIEGUE la tutela. Eso NO son las pretensiones del accionante → se descarta la
+# sección entera (regla del usuario: pretensiones = transcripción del escrito de tutela).
+_RE_PRET_DEFENSE_SECTION = re.compile(
+    r"(?i)(?:declar\w*\s+(?:la\s+)?improceden|improceden\w*\s+de\s+las\s+pretensiones|"
+    r"(?:se\s+)?(?:niegue|nieguen|deniegue|denieguen|niega|deniega|negar|denegar|"
+    r"desestime|desestimen|desestimar|rechace|rechacen|rechazar)\b"
+    r"[^.]{0,45}(?:tutela|pretensiones|amparo|acci[óo]n)|"
+    r"tener\s+por\s+contestad|"
+    r"pronunciamiento\s+de\s+fondo\s+y\s+excepciones|"
+    r"exoner\w+\s+a\s+(?:la\s+)?(?:secretar|gobernaci|entidad|naci[óo]n))"
+)
 
 
 def _extract_pretensiones_from_text(text: str, *, strip_defense: bool = False, recap_ok: bool = False) -> Optional[str]:
@@ -1725,7 +1750,7 @@ def _extract_pretensiones_from_text(text: str, *, strip_defense: bool = False, r
             text = text[:md.start()]
             if len(text) < 200:
                 return None
-    m = _RE_PRET_HEADER.search(text) or _RE_PRET_INLINE.search(text)
+    m = _RE_PRET_HEADER.search(text) or _RE_PRET_HEADER_INLINE.search(text) or _RE_PRET_INLINE.search(text)
     if not m and recap_ok:
         m = _RE_PRET_RECAP.search(text)
     if not m:
@@ -1736,6 +1761,10 @@ def _extract_pretensiones_from_text(text: str, *, strip_defense: bool = False, r
     section = re.sub(r"\s+", " ", section).strip()
     section = section.lstrip(" ·•-–—:").strip()  # quita bullets/sep iniciales, conserva el punto final
     if len(section) < 12:
+        return None
+    # Guard anti-defensa: si la sección es la petición de la SED (que se niegue/declare
+    # improcedente la tutela), NO son las pretensiones del accionante → descartar.
+    if _RE_PRET_DEFENSE_SECTION.search(section[:400]):
         return None
     return section[:4000].strip()
 
