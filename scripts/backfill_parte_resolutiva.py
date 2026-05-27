@@ -12,8 +12,13 @@ from __future__ import annotations
 
 import sys
 import warnings
+from pathlib import Path
 
 warnings.filterwarnings("ignore")
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from backend.database.database import SessionLocal
 from backend.database.models import Case, Document
