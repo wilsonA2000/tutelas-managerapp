@@ -2948,29 +2948,36 @@ def _classify_decision_incidente(text: str) -> Optional[str]:
     return None
 
 
-def _clean_responsable_desacato(raw: str) -> Optional[str]:
+def _clean_responsable_desacato(raw: str, doc_text: str = "") -> Optional[str]:
+    """Limpia y VALIDA el responsable_desacato contra el catálogo de los 17 abogados
+    canónicos / roster del Grupo Jurídico. Devuelve canónico (UPPER) o None.
+
+    Regla c456 (feedback_abogado_responsable, mem 2026-05-18): responsable_desacato
+    es el abogado SED que proyectó la respuesta al incidente — debe ser uno de los
+    17 oficiales en `backend/data/abogados_canonicos.json`. Cargos (Secretaria de
+    Educación, Director, Gobernador, etc.) e instituciones (GOBERNACIÓN, SED,
+    Ministerio) → None. Coherente con `_resolve_abogado_combined` para
+    `abogado_responsable`.
+
+    El argumento `doc_text` opcional permite el match-por-correo (paso 1 del
+    roster) cuando el call site lo tiene disponible.
+    """
     if not raw:
         return None
     v = re.sub(r"\s+", " ", raw).strip(" ,.;:-").strip()
     v = re.sub(r"(?i)^(?:se[ñn]ora?\s+|doctora?\s+|dra?\.?\s+|funcionari[oa]\s+|ciudadan[oa]\s+)+", "", v).strip()
     if not (6 <= len(v) <= 80):
         return None
+    # Pre-rechazo barato: instituciones puras y cargos sin nombre nunca son canónicos.
     f = _fold(v)
-    # si es un cargo genérico, conservarlo (Secretario de Educación, Director de X)
-    if re.search(r"\bsecretari[oa]\b|\bdirector\w*\b|\bjefe\b|\bcoordinador\w*\b|\bsubsecretari[oa]\b|\bgobernador\b", f):
-        return v.upper()
-    # si parece nombre propio (2-5 palabras alfabéticas) → ok
-    words = v.split()
-    _BASURA = {"INCIDENTE", "DESACATO", "TUTELA", "SENTENCIA", "FALLO", "ORDEN", "ACCION", "ACCIÓN",
-               "JUZGADO", "PARTE", "PARTES", "DEPARTAMENTO", "ENTIDAD", "ENTIDADES", "RESPONSABLE",
-               "SUPERIOR", "JERARQUICO", "JERÁRQUICO", "TODOS", "DEMAS", "DEMÁS", "DESPACHO",
-               "GOBERNACION", "GOBERNACIÓN", "EDUCACION", "EDUCACIÓN", "MINISTERIO", "PROVISIONALIDAD"}
-    _BASURA_PREFIX = ("ACCIONAD", "DEMANDAD", "VINCULAD", "DENUNCIAD")
-    if 2 <= len(words) <= 6 and all(w[:1].isalpha() for w in words):
-        bad = any(w.upper() in _BASURA or w.upper().startswith(_BASURA_PREFIX) for w in words)
-        if not bad:
-            return v.upper()
-    return None
+    if re.search(r"\b(?:gobernacion|secretaria de educacion|ministerio|alcaldia|"
+                 r"departamento de santander|fomag|fiduprevisora|despacho|"
+                 r"juzgado|tribunal|institucion)\b", f) and len(v.split()) <= 6:
+        return None
+    # Delegar al resolver compartido: roster Grupo Jurídico → catálogo canónicos.
+    # Si no hay match, devuelve None (regla cerrada: el campo queda vacío).
+    canonical, _src = _resolve_abogado_combined(v, doc_text=doc_text)
+    return canonical.upper() if canonical else None
 
 
 def extract_incidentes_cluster_for_case(db: Session, case: Case) -> dict:
@@ -3100,26 +3107,33 @@ def extract_incidentes_cluster_for_case(db: Session, case: Case) -> dict:
     if not decision_global:
         decision_global = "EN_TRAMITE"  # hay incidente pero sin auto que lo decida → en trámite
 
-    # responsable: del escrito de incidente / AUTO / email body — buscar el primero que matchee
+    # responsable: del escrito de incidente / AUTO / email body — buscar el primero que matchee.
+    # Pasa el doc_text al cleaner para habilitar match-por-correo en el roster (paso 1
+    # del _resolve_abogado_combined). Regla c456: solo se acepta canónico/roster; el
+    # cargo "Secretaria de Educación" o "Gobernador" → None (no es responsable jurídico).
     resp_global = None
     for d in (inc_escritos + autos_inc):
-        m = _RE_RESPONSABLE_DESACATO.search(d.extracted_text[:8000])
+        t = d.extracted_text[:8000]
+        m = _RE_RESPONSABLE_DESACATO.search(t)
         if m:
-            r = _clean_responsable_desacato(m.group(1))
+            r = _clean_responsable_desacato(m.group(1), doc_text=t)
             if r:
                 resp_global = r
                 break
     if not resp_global:
         for h, _d, t in email_heads:
-            m = _RE_RESPONSABLE_DESACATO.search(t[:8000])
+            head = t[:8000]
+            m = _RE_RESPONSABLE_DESACATO.search(head)
             if m:
-                r = _clean_responsable_desacato(m.group(1))
+                r = _clean_responsable_desacato(m.group(1), doc_text=head)
                 if r:
                     resp_global = r
                     break
-    # default: en tutelas SED el responsable suele ser el Secretario de Educación
-    if not resp_global and decision_global in ("SANCIONA", "NO_SANCIONA"):
-        resp_global = "SECRETARIO DE EDUCACIÓN DEPARTAMENTAL DE SANTANDER"
+    # Nota: antes había aquí un default "SECRETARIO DE EDUCACIÓN DEPARTAMENTAL DE
+    # SANTANDER" cuando decision_global ∈ {SANCIONA, NO_SANCIONA}. Eliminado porque
+    # introducía un cargo no-canónico que la auditoría (audit_responsables_canonicos.py)
+    # marca como INSTITUCIONAL. Si el responsable canónico no se puede identificar,
+    # dejar None es preferible (regla c456 + feedback_abogado_responsable).
 
     # fecha de apertura del incidente 1: la del 1er escrito, o del email "apertura incidente", o None
     fecha_inc1 = escrito_dates[0][0] if escrito_dates and escrito_dates[0][0] != "9999/99/9999" else None
@@ -3145,14 +3159,16 @@ def extract_incidentes_cluster_for_case(db: Session, case: Case) -> dict:
         out["incidente_2"] = "SI"
         out["fecha_apertura_incidente_2"] = escrito_dates[1][0] if escrito_dates[1][0] != "9999/99/9999" else None
         # responsable/decision por slot: best-effort del 2do escrito
-        m = _RE_RESPONSABLE_DESACATO.search(escrito_dates[1][1].extracted_text[:8000])
-        out["responsable_desacato_2"] = _clean_responsable_desacato(m.group(1)) if m else None
+        t2 = escrito_dates[1][1].extracted_text[:8000]
+        m = _RE_RESPONSABLE_DESACATO.search(t2)
+        out["responsable_desacato_2"] = _clean_responsable_desacato(m.group(1), doc_text=t2) if m else None
         out["decision_incidente_2"] = "EN_TRAMITE"
     if len(escrito_dates) >= 3:
         out["incidente_3"] = "SI"
         out["fecha_apertura_incidente_3"] = escrito_dates[2][0] if escrito_dates[2][0] != "9999/99/9999" else None
-        m = _RE_RESPONSABLE_DESACATO.search(escrito_dates[2][1].extracted_text[:8000])
-        out["responsable_desacato_3"] = _clean_responsable_desacato(m.group(1)) if m else None
+        t3 = escrito_dates[2][1].extracted_text[:8000]
+        m = _RE_RESPONSABLE_DESACATO.search(t3)
+        out["responsable_desacato_3"] = _clean_responsable_desacato(m.group(1), doc_text=t3) if m else None
         out["decision_incidente_3"] = "EN_TRAMITE"
     return out
 
