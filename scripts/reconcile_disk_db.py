@@ -53,6 +53,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "data" / "tutelas.db"
 REVIEW_CSV = ROOT / "data" / "reconcile_disk_db_revision.csv"
+QUARANTINE = ROOT / "data" / "quarantine_misfiled" / "reconcile_disk_orphans"
 
 _TOMBSTONE = re.compile(r"^MERGED_INTO_CASE_\d+$")
 _IGNORE_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
@@ -188,17 +189,35 @@ def analyze(db, base: Path, disk):
                                   "sharers": shared.get(os.path.abspath(fp) if fp else "", []),
                                   "doc_dirs": sorted(os.path.basename(x) for x in resident)})
 
-    # (3) orphans: archivos en disco sin fila documents (tras los re-links)
-    review_orphan = []
+    # hashes de docs del caso CUYO file_path EXISTE (copia válida en disco). Guard:
+    # un orphan solo es "redundante" si su caso ya tiene ese contenido con archivo
+    # vivo en otra ruta — así nunca cuarentenamos la única copia (caso c429).
+    case_live_hashes: dict[int, set[str]] = defaultdict(set)
+    for d in docs:
+        fp = relinked.get(d["id"]) or d["file_path"]
+        if d["file_hash"] and fp and os.path.exists(fp):
+            case_live_hashes[d["case_id"]].add(d["file_hash"])
+
+    # (3) orphans: archivos en disco sin fila documents (tras los re-links).
+    #   redundant_orphan = byte-idéntico a un doc YA registrado (con copia viva) del
+    #   caso dueño de su carpeta → cuarentenable. El resto va a revisión.
+    review_orphan, redundant_orphan = [], []
     for p in sorted(all_paths - known_paths):
-        owners = folder_owner.get(os.path.dirname(p), [])
-        review_orphan.append({"path": p, "folder": os.path.basename(os.path.dirname(p)),
-                              "owner_cases": owners})
+        d = os.path.dirname(p)
+        owners = folder_owner.get(d, [])
+        owner = owners[0] if len(owners) == 1 else None
+        s = path_sha.get(p)
+        if owner and s and s in case_live_hashes.get(owner, set()):
+            redundant_orphan.append({"path": p, "folder": os.path.basename(d),
+                                     "case_id": owner, "sha": s})
+        else:
+            review_orphan.append({"path": p, "folder": os.path.basename(d),
+                                  "owner_cases": owners})
 
     return {"safe_relink": safe_relink, "safe_folder": safe_folder,
             "review_gone": review_gone, "review_shared": review_shared,
-            "review_orphan": review_orphan, "n_cases": len(cases), "n_docs": len(docs),
-            "n_files": len(all_paths)}
+            "review_orphan": review_orphan, "redundant_orphan": redundant_orphan,
+            "n_cases": len(cases), "n_docs": len(docs), "n_files": len(all_paths)}
 
 
 # ───────────────────────── reporte ─────────────────────────
@@ -232,7 +251,13 @@ def print_report(res, base, apply):
     for cid, n in gb.most_common(12):
         print(f"   c{cid}: {n} docs")
 
-    print(f"\n🟡 REVIEW-ORPHAN (archivo en disco sin fila documents): "
+    print(f"\n🟠 REDUNDANT-ORPHAN (archivo dup de un doc ya registrado del caso): "
+          f"{len(res.get('redundant_orphan', []))}  [--quarantine-redundant-orphans]")
+    rb = Counter(r["folder"] for r in res.get("redundant_orphan", []))
+    for folder, n in rb.most_common(12):
+        print(f"   {n:>3}  {folder}")
+
+    print(f"\n🟡 REVIEW-ORPHAN (archivo en disco sin fila documents, no atribuible): "
           f"{len(res['review_orphan'])}")
     ob = Counter(r["folder"] for r in res["review_orphan"])
     for folder, n in ob.most_common(15):
@@ -279,11 +304,40 @@ def apply_fixes(db, res):
           f"venv/bin/python scripts/v9_test_db.py")
 
 
+def quarantine_redundant_orphans(res) -> int:
+    """Mueve a cuarentena los archivos huérfanos byte-idénticos a un doc YA registrado
+    (con copia viva) del caso dueño de su carpeta. No toca la DB — son archivos sin fila.
+    Reversible: los archivos quedan en data/quarantine_misfiled/reconcile_disk_orphans/."""
+    items = res.get("redundant_orphan", [])
+    if not items:
+        print("\nNo hay orphans redundantes que cuarentenar.")
+        return 0
+    QUARANTINE.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for r in items:
+        src = r["path"]
+        if not os.path.exists(src):
+            continue
+        dest = QUARANTINE / f"c{r['case_id']}_{r['folder']}_{os.path.basename(src)}"
+        n = 1
+        while dest.exists():
+            dest = QUARANTINE / f"c{r['case_id']}_{r['folder']}_{n}_{os.path.basename(src)}"
+            n += 1
+        shutil.move(src, str(dest))
+        moved += 1
+    print(f"\n🟠 REDUNDANT-ORPHAN cuarentenados: {moved} → "
+          f"{QUARANTINE.relative_to(ROOT)}")
+    return moved
+
+
 # ───────────────────────── main ─────────────────────────
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="Aplica SAFE-* (default: dry-run)")
+    ap.add_argument("--quarantine-redundant-orphans", action="store_true",
+                    help="Mueve a cuarentena los orphans byte-idénticos a un doc ya "
+                         "registrado del caso (requiere --apply)")
     args = ap.parse_args()
 
     db = sqlite3.connect(str(DB_PATH))
@@ -300,15 +354,18 @@ def main():
 
     if not args.apply:
         n = len(res["safe_relink"]) + len(res["safe_folder"])
-        print(f"\n(dry-run — nada modificado. --apply aplica {n} fixes seguros.)")
+        extra = (f" + {len(res.get('redundant_orphan', []))} orphans redundantes a cuarentena"
+                 if args.quarantine_redundant_orphans else "")
+        print(f"\n(dry-run — nada modificado. --apply aplica {n} fixes seguros{extra}.)")
         db.close()
         return 0
 
-    if not (res["safe_relink"] or res["safe_folder"]):
-        print("\nNada seguro que aplicar.")
-        db.close()
-        return 0
-    apply_fixes(db, res)
+    if res["safe_relink"] or res["safe_folder"]:
+        apply_fixes(db, res)
+    else:
+        print("\nNada seguro que aplicar en DB.")
+    if args.quarantine_redundant_orphans:
+        quarantine_redundant_orphans(res)
     db.close()
     return 0
 
