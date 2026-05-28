@@ -181,6 +181,14 @@ def extract_radicado(text: str) -> dict:
         m = RAD_23_WITH_SEPARATORS.pattern.search(text)
     if not m:
         m = re.search(r"(68[\d]{5,7}[-\s\.]?[\d]{3,4}[-\s\.]?[\d]{4}[-\s\.]?[\d]{5}[-\s\.]?[\d]{2})", text)
+    if not m:
+        # Formato SEGMENTADO con prefijo de municipio (juzgados penales/promiscuos):
+        # "68001-3107-001-2026-00015" = DANE(5)-juzgado(4)-secc(3)-año(4)-consec(5) = rad-21.
+        # Los patrones de arriba NO lo capturan (exigen ≥5 díg contiguos tras "68").
+        # Este SÍ trae el prefijo de municipio (68001) que desambigua rad cortos
+        # compartidos entre juzgados (ver matcher Fase 4). El " NI 6539" (nro interno)
+        # queda fuera por el \b final → nunca contamina el rad23.
+        m = re.search(r"\b(68\d{3}[-\s.]\d{4}[-\s.]\d{3}[-\s.]20\d{2}[-\s.]\d{5})\b", text)
     if m:
         result["radicado_23"] = m.group(1)
 

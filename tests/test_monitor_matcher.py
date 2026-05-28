@@ -399,6 +399,23 @@ class TestResolveRadicado:
         )
         assert extract_radicado(md)["radicado_corto"] == "2026-00053"
 
+    def test_rad23_segmentado_con_prefijo_municipio(self):
+        """#6: el formato segmentado 'DANE-juzgado-secc-año-consec' (juzgados penales/
+        promiscuos) ahora SÍ captura el rad23 con prefijo de municipio, y el ' NI ####'
+        (nro interno) queda fuera. Antes devolvía rad23='' y solo el corto."""
+        from backend.email.gmail_monitor import extract_radicado
+        from backend.email.rad_utils import juzgado_code
+        r = extract_radicado("Radicado: 68001-3107-001-2026-00015 NI 6539")
+        assert r["radicado_corto"] == "2026-00015"
+        assert juzgado_code(r["radicado_23"]) == "680013107001"   # municipio 68001 desambigua
+
+    def test_rad23_continuo_sin_regresion(self):
+        """El rad23 continuo (sin separadores) sigue capturándose igual."""
+        from backend.email.gmail_monitor import extract_radicado
+        r = extract_radicado("Radicado 68079408900120260003700")
+        assert r["radicado_corto"] == "2026-00037"
+        assert "68079408900120260003700" in r["radicado_23"]
+
 
 # ─────────────────────────────────────────────────────────────
 # Fase 4: rad_corto compartido entre municipios (anti-conflación)
