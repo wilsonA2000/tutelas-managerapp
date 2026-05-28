@@ -189,27 +189,27 @@ def analyze(db, base: Path, disk):
                                   "sharers": shared.get(os.path.abspath(fp) if fp else "", []),
                                   "doc_dirs": sorted(os.path.basename(x) for x in resident)})
 
-    # hashes de docs del caso CUYO file_path EXISTE (copia válida en disco). Guard:
-    # un orphan solo es "redundante" si su caso ya tiene ese contenido con archivo
-    # vivo en otra ruta — así nunca cuarentenamos la única copia (caso c429).
-    case_live_hashes: dict[int, set[str]] = defaultdict(set)
+    # hashes de docs CUYO file_path EXISTE (copia válida en disco), global + por caso.
+    # Guard: un orphan solo es "redundante" si ese contenido ya está registrado con un
+    # archivo vivo en otra ruta — así nunca cuarentenamos la única copia (caso c429).
+    live_hash_case: dict[str, int] = {}
     for d in docs:
         fp = relinked.get(d["id"]) or d["file_path"]
         if d["file_hash"] and fp and os.path.exists(fp):
-            case_live_hashes[d["case_id"]].add(d["file_hash"])
+            live_hash_case.setdefault(d["file_hash"], d["case_id"])
 
     # (3) orphans: archivos en disco sin fila documents (tras los re-links).
-    #   redundant_orphan = byte-idéntico a un doc YA registrado (con copia viva) del
-    #   caso dueño de su carpeta → cuarentenable. El resto va a revisión.
+    #   redundant_orphan = byte-idéntico a CUALQUIER doc ya registrado con copia viva
+    #   (el contenido no se pierde) → cuarentenable. El resto va a revisión.
     review_orphan, redundant_orphan = [], []
     for p in sorted(all_paths - known_paths):
         d = os.path.dirname(p)
         owners = folder_owner.get(d, [])
-        owner = owners[0] if len(owners) == 1 else None
         s = path_sha.get(p)
-        if owner and s and s in case_live_hashes.get(owner, set()):
+        if s and s in live_hash_case:
             redundant_orphan.append({"path": p, "folder": os.path.basename(d),
-                                     "case_id": owner, "sha": s})
+                                     "case_id": owners[0] if owners else live_hash_case[s],
+                                     "sha": s})
         else:
             review_orphan.append({"path": p, "folder": os.path.basename(d),
                                   "owner_cases": owners})
