@@ -161,3 +161,23 @@ def test_caso_simple_no_dispara(db):
     plan = resolve_acumulacion(db, c, apply=True)
     assert not plan.is_acumulacion
     assert db.query(Case).count() == 1
+
+
+def test_guard_no_crea_hermano_vacio_sin_docs(db):
+    """Guard anti-fantasma (c503): un miembro enumerado SIN doc propio que se le
+    rutee NO genera un caso hermano vacío. Solo se crea el que recibe documentos."""
+    rector = _mk_case(db, rad23=f"{JUZ}20250004500", accionante="MARIA PAULA MENDEZ RAMIREZ",
+                      folder="2025-00045 MARIA PAULA MENDEZ RAMIREZ")
+    # Docs solo de 45 (rector) y 47 (Liliana). El 46 se ENUMERA pero no tiene doc.
+    _add_doc(db, rector.id, *SENT["45"])
+    _add_doc(db, rector.id, *SENT["47"])
+    _add_doc(db, rector.id, *ENUM_DOC)  # menciona 45, 46 y 47
+    db.commit()
+
+    resolve_acumulacion(db, rector, apply=True)
+
+    # 47 (Liliana) SÍ se crea (tiene doc ruteado)
+    assert db.query(Case).filter(Case.accionante == "LILIANA PATRICIA CALA CALA").first() is not None
+    # 46 (Gilma) NO se crea: ningún doc se le rutea → sin fantasma vacío
+    assert db.query(Case).filter(Case.radicado_23_digitos == f"{JUZ}20250004600").first() is None
+    assert db.query(Case).count() == 2  # rector + Liliana, nada más

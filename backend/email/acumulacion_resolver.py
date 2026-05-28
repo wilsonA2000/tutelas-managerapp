@@ -228,9 +228,23 @@ def apply_plan(db: Session, plan: AcumPlan, primary_case: Case,
         return summary
 
     # 1) Garantizar caso por radicado + resolver rector_id
+    # Guard anti-fantasma: NO crear un hermano ACUMULADO si ningún doc se rutea a su
+    # rad (miembro enumerado sin señal documental propia → caso vacío como el c503).
+    # El RECTOR siempre se materializa (lleva los docs conjunto). Ver
+    # feedback_acumulacion_bucket_sucio.
+    routed_rads = {r.to_rad for r in plan.doc_routes}
     rector_id = None
     for it in plan.items:
         if it.action == "CREATE" and it.case_id is None:
+            if it.role != "RECTOR" and it.rad_corto not in routed_rads:
+                summary.setdefault("skipped", []).append(
+                    {"rad": it.rad_corto, "accionante": it.accionante,
+                     "motivo": "sin docs ruteados (evita hermano vacío)"})
+                logger.info(
+                    "Acumulación: NO creo hermano %s (%s) — ningún doc se rutea a él",
+                    it.rad_corto, it.accionante,
+                )
+                continue
             c = _create_sibling(db, it, primary_case, create_folder=move_files)
             it.case_id = c.id
             summary["created"].append({"case_id": c.id, "rad": it.rad_corto,
@@ -240,6 +254,8 @@ def apply_plan(db: Session, plan: AcumPlan, primary_case: Case,
 
     # 2) Registrar vínculos (idempotente) + backfill de huecos seguros
     for it in plan.items:
+        if it.case_id is None:
+            continue  # hermano saltado por el guard anti-fantasma (sin docs)
         c = db.get(Case, it.case_id)
         if not c:
             continue
