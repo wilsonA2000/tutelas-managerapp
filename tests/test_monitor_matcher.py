@@ -398,3 +398,56 @@ class TestResolveRadicado:
             "Notificación del fallo de tutela 2026-00053 del accionante Edgar."
         )
         assert extract_radicado(md)["radicado_corto"] == "2026-00053"
+
+
+# ─────────────────────────────────────────────────────────────
+# Fase 4: rad_corto compartido entre municipios (anti-conflación)
+# Fixture: case 100 (Bucaramanga 68001) y case 300 (Cúcuta 54001) comparten
+# el rad_corto "2026-00100" en juzgados distintos.
+# ─────────────────────────────────────────────────────────────
+
+
+class TestRadCortoAmbiguo:
+    def test_cache_candidatos_multi(self, cache):
+        # El rad_corto compartido devuelve AMBOS casos; el único, solo uno.
+        assert cache.rad_corto_candidates("2026-00100") == {100, 300}
+        assert cache.rad_corto_candidates("2026-00200") == {200}
+        assert cache.rad_corto_candidates("2099-99999") == set()
+
+    def test_cache_juzgado_of(self, cache):
+        assert cache.juzgado_of(100) == "680014009027"
+        assert cache.juzgado_of(300) == "540014105002"
+        assert cache.juzgado_of(999) == ""
+
+    def test_ambiguo_sin_rad23_no_autoasigna(self, db, cache):
+        # Email solo con el rad_corto compartido y SIN rad23 → no se puede
+        # desambiguar el municipio → NO auto-asignar (esto causaba la conflación).
+        s = EmailSignals(rad_corto="2026-00100")
+        r = score_case_match(db, cache, s)
+        assert r.case_id is None
+        assert r.confidence == "NONE"
+
+    def test_no_ambiguo_sin_rad23_si_asigna(self, db, cache):
+        # rad_corto que solo tiene un caso → sí se asigna (comportamiento previo).
+        s = EmailSignals(rad_corto="2026-00200")
+        r = score_case_match(db, cache, s)
+        assert r.case_id == 200
+        assert "rad_corto" in r.breakdown
+
+    def test_rad23_desambigua_a_bucaramanga(self, db, cache):
+        # Mismo rad_corto compartido, pero el rad23 del email es de Bucaramanga
+        # → debe resolver al caso 100, NUNCA al 300 (Cúcuta).
+        s = EmailSignals(rad23="68-001-40-09-027-2026-00100-00", rad_corto="2026-00100")
+        r = score_case_match(db, cache, s)
+        assert r.case_id == 100
+
+    def test_rad23_desambigua_a_cucuta(self, db, cache):
+        s = EmailSignals(rad23="54-001-41-05-002-2026-00100-00", rad_corto="2026-00100")
+        r = score_case_match(db, cache, s)
+        assert r.case_id == 300
+
+    def test_evict_limpia_candidatos(self, db, cache):
+        # Al desindexar un caso, sale de by_rad_corto_all y juzgado12.
+        cache._evict_case_no_lock(300)
+        assert cache.rad_corto_candidates("2026-00100") == {100}
+        assert cache.juzgado_of(300) == ""

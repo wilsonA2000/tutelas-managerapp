@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 
 from backend.email.rad_utils import (
     derive_rad_corto_from_rad23,
+    juzgado_code,
     normalize_rad23,
 )
 
@@ -70,6 +71,13 @@ class CaseLookupCache:
     def __init__(self):
         self.by_rad23: dict[str, int] = {}
         self.by_rad_corto: dict[str, int] = {}
+        # TODOS los casos que comparten un rad_corto (no globalmente único: cada
+        # juzgado lleva su propia secuencia AAAA-NNNNN). Permite detectar ambigüedad
+        # y desambiguar por municipio antes de asignar. Ver matcher.score_case_match.
+        self.by_rad_corto_all: dict[str, set[int]] = {}
+        # juzgado_code (primeros 12 díg del rad23 = depto+muni+entidad+espec+subesp)
+        # por caso. Discrimina municipio (68001 Bucaramanga vs 68500 Oiba vs 68092 Betulia).
+        self.juzgado12: dict[int, str] = {}
         self.by_forest: dict[str, int] = {}
         self.by_cc_hash: dict[str, int] = {}
         self._lock = threading.RLock()
@@ -86,6 +94,8 @@ class CaseLookupCache:
         with self._lock:
             self.by_rad23.clear()
             self.by_rad_corto.clear()
+            self.by_rad_corto_all.clear()
+            self.juzgado12.clear()
             self.by_forest.clear()
             self.by_cc_hash.clear()  # (vestigial) la capa PII se retiró — este dict queda vacío
 
@@ -130,6 +140,11 @@ class CaseLookupCache:
         # del mismo expediente, no expedientes distintos — colapsarlas al mismo bucket
         # es lo deseado. Usar `[:20]` era un bug histórico que colapsaba consecutivos
         # contiguos (00011 ↔ 00012).
+        # juzgado_code (municipio+despacho) para desambiguar rad_corto compartido
+        jc = juzgado_code(c.radicado_23_digitos) if c.radicado_23_digitos else ""
+        if jc:
+            self.juzgado12[c.id] = jc
+
         if c.radicado_23_digitos:
             norm = normalize_rad23(c.radicado_23_digitos)
             if len(norm) >= 21:
@@ -138,6 +153,7 @@ class CaseLookupCache:
                 derived = derive_rad_corto_from_rad23(c.radicado_23_digitos)
                 if derived:
                     self.by_rad_corto[derived] = c.id
+                    self.by_rad_corto_all.setdefault(derived, set()).add(c.id)
 
         # rad_corto del folder_name (si difiere del derivado, se añade también)
         if c.folder_name:
@@ -146,6 +162,7 @@ class CaseLookupCache:
                 folder_corto = f"{m.group(1)}-{m.group(2).zfill(5)}"
                 # No sobrescribir si ya hay uno derivado del rad23
                 self.by_rad_corto.setdefault(folder_corto, c.id)
+                self.by_rad_corto_all.setdefault(folder_corto, set()).add(c.id)
 
         # forest
         if c.radicado_forest:
@@ -157,6 +174,15 @@ class CaseLookupCache:
             stale_keys = [k for k, v in d.items() if v == case_id]
             for k in stale_keys:
                 d.pop(k, None)
+        # by_rad_corto_all: quitar el case_id de cada set; borrar la clave si queda vacía
+        empty = []
+        for k, ids in self.by_rad_corto_all.items():
+            ids.discard(case_id)
+            if not ids:
+                empty.append(k)
+        for k in empty:
+            self.by_rad_corto_all.pop(k, None)
+        self.juzgado12.pop(case_id, None)
 
     # ─────────────────────────────────────────────────────────
     # Lookup
@@ -179,6 +205,17 @@ class CaseLookupCache:
         if not rad_corto:
             return None
         return self.by_rad_corto.get(rad_corto)
+
+    def rad_corto_candidates(self, rad_corto: str | None) -> set[int]:
+        """TODOS los casos que comparten este rad_corto (puede haber varios de
+        municipios distintos: el rad_corto NO es globalmente único)."""
+        if not rad_corto:
+            return set()
+        return set(self.by_rad_corto_all.get(rad_corto, set()))
+
+    def juzgado_of(self, case_id: int) -> str:
+        """juzgado_code (primeros 12 díg del rad23) del caso, o '' si no se conoce."""
+        return self.juzgado12.get(case_id, "")
 
     def lookup_by_forest(self, forest: str | None) -> int | None:
         if not forest:

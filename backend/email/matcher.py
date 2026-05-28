@@ -177,23 +177,40 @@ def score_case_match(
     if cid := hits.get("cc"):
         _add_signal(cid, "cc_hash", WEIGHT_CC)
 
-    if cid := hits.get("rad_corto"):
-        # Verificar consistencia de juzgado (F7): si el email tiene rad23 y el caso
-        # también, los juzgado_code deben coincidir. Si el rad_corto matchea pero
-        # juzgados difieren → es otro caso con mismo year:seq (raro pero posible).
-        if signals.rad23:
-            case_rad23 = _get_case_rad23(db, cid)
-            if case_rad23 and not same_juzgado(signals.rad23, case_rad23):
+    if rc_winner := hits.get("rad_corto"):
+        # El rad_corto (AAAA-NNNNN) NO es globalmente único: cada juzgado lleva su
+        # propia secuencia, así que varios casos de municipios distintos pueden
+        # compartirlo (p.ej. 2026-00015 en San Andrés/Oiba/Betulia). Desambiguar
+        # SIEMPRE por municipio (juzgado_code) — nunca volcar al primero del bucket.
+        rc_candidates = cache.rad_corto_candidates(signals.rad_corto) or {rc_winner}
+        email_juzgado = juzgado_code(signals.rad23)  # "" si rad23 ausente/corto (<12d)
+        if email_juzgado:
+            # El caso correcto es el del MISMO juzgado que el rad23 del email.
+            same = [cid for cid in rc_candidates if cache.juzgado_of(cid) == email_juzgado]
+            if len(same) == 1:
+                _add_signal(same[0], "rad_corto_juzgado", WEIGHT_RAD_CORTO_JUZGADO)
+            elif not same:
+                # Ningún caso con ese rad_corto es del juzgado del email → otro
+                # municipio. NO sumar (la identidad real está en otro lado / es nuevo).
                 logger.info(
-                    "F7 rechazo rad_corto match: email rad23=%s case %d rad23=%s",
-                    signals.rad23[:20], cid, case_rad23[:20],
+                    "rad_corto %s: ningún caso es del juzgado %s del email (candidatos=%s) → no asigno",
+                    signals.rad_corto, email_juzgado, sorted(rc_candidates),
                 )
-                # NO sumar score — es un falso match por homonimia year:seq
-            else:
-                _add_signal(cid, "rad_corto_juzgado", WEIGHT_RAD_CORTO_JUZGADO)
+            # len(same) > 1: dos casos mismo juzgado + mismo rad_corto = duplicado real;
+            # no forzamos — que decidan rad23 exacto / thread / revisión.
         else:
-            # Sin rad23 en email, peso menor (no podemos verificar juzgado)
-            _add_signal(cid, "rad_corto", WEIGHT_RAD_CORTO_SIN_JUZGADO)
+            # Email SIN rad23 usable: solo asignar por rad_corto si NO es ambiguo
+            # entre municipios. Si el rad_corto lo comparten ≥2 casos (o ≥2 juzgados),
+            # NO auto-asignar — esto es lo que causaba la conflación (volcar al primero).
+            distinct_juzgados = {cache.juzgado_of(cid) for cid in rc_candidates if cache.juzgado_of(cid)}
+            if len(rc_candidates) <= 1 and len(distinct_juzgados) <= 1:
+                _add_signal(rc_winner, "rad_corto", WEIGHT_RAD_CORTO_SIN_JUZGADO)
+            else:
+                logger.warning(
+                    "rad_corto %s AMBIGUO (%d casos, %d juzgados) y email sin rad23 → "
+                    "no auto-asigno, queda para revisión: candidatos=%s",
+                    signals.rad_corto, len(rc_candidates), len(distinct_juzgados), sorted(rc_candidates),
+                )
 
     # ── 3. Similaridad de nombre del accionante (para candidatos ya identificados) ──
     if signals.accionante_name:
