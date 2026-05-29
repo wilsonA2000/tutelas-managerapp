@@ -66,20 +66,34 @@ POST /api/v9/extract-batch          # body: {limit:10, apply:false} o {case_ids:
   valores escritos por v8). Tracking de qué campo es de v9 vs v8 vía
   `field_confidences_json.v9_sources`.
 
-### Cuándo borrar v5.5/v8
+### Saneamiento de legacy — HECHO (2026-05-29)
 
-Después de validar que v9 cubre ≥80% de los campos en producción sobre los 220
-casos reales, borrar:
-- `backend/extraction/unified.py` (legacy v5.5, ya casi muerto)
-- `backend/extraction/pipeline.py` (1590 LOC, mover `extract_document_text` y
-  `verify_document_belongs` a `backend/v9/doc_io.py` antes)
-- `backend/cognition/cognitive_complementary_ai.py`
-- `backend/cognition/cognitive_fill.py`
-- `backend/cognition/focused_field_extractors.py`
-- `backend/cognition/bayesian_assignment.py`
-- `backend/cognition/live_consolidator.py`
+El borrado de la sedimentación v5.5/v8 ya se ejecutó. Estado real del árbol
+(reemplaza la lista antigua de "qué borrar", que marcaba mal varios archivos):
 
-### Cambios v8.3 (sesión 2026-05-07/08)
+**Eliminados** (viven solo en historial de git — rama `backup/pre-saneamiento-20260529`):
+- `backend/extraction/unified.py`, `backend/extraction/pipeline.py`,
+  `backend/extraction/unified_cognitive.py`
+- `backend/cognition/cognitive_complementary_ai.py`,
+  `backend/cognition/focused_field_extractors.py`,
+  `backend/cognition/live_consolidator.py`
+- Carpetas de cuarentena `backend/_legacy/` y `tests/_legacy/` (24 tests viejos
+  v6/v8, ya ignorados por `tests/conftest.py::collect_ignore_glob`).
+- `extract_document_text` y `verify_document_belongs` se movieron a
+  `backend/v9/doc_io.py` antes de borrar `pipeline.py`; `classify_doc_type` vive
+  ahora en `backend/extraction/doc_ops.py`.
+
+**NO se borran — son dependencias VIVAS de v9** (la lista vieja los marcaba mal):
+- `backend/cognition/bayesian_assignment.py` → lo usan `extraction/doc_ops.py`
+  (`verify_document_belongs`) y `services/cleanup_actions.py` (`infer_assignment`).
+- `backend/cognition/cognitive_fill.py` → lo usan el cron
+  `services/active_learning_scheduler.py` (3 AM) y `ner_spacy._get_nlp`.
+- `backend/agent/orchestrator.py` → lo usa `agent/tools/legal_tools.py`.
+
+Vivo en `cognition/`: `legal_schema.py`, `canonical_identifiers.py`,
+`confidence.py`, `folder_renamer.py`. Conservado a propósito: `scripts/archive/`
+(one-shots históricos con README). Gate verde al cierre: pytest 563 passed · v9
+standalone 83/83 · v9_test_db 47 ok/5 fail (data-quality pre-existente, no regresión).
 
 ### Cambios v8.3 (sesión 2026-05-07/08)
 
@@ -148,8 +162,14 @@ Sin LLM, el chat funciona con Tier 1 (templates determinísticos).
 
 ## Arquitectura — el "big picture"
 
-### Pipeline cognitivo de 7 capas (v6.0+)
-Activado por `USE_COGNITIVE_PIPELINE=true` en `.env`. Entry-point: `backend/extraction/unified_cognitive.py::unified_extract_dispatch`. Cada capa vive en `backend/cognition/`:
+### Pipeline cognitivo de 7 capas (v6.0 — HISTÓRICO, motor borrado)
+> ⚠️ El entry-point `unified_cognitive.py` y el flag `USE_COGNITIVE_PIPELINE` ya
+> NO existen (borrados en el saneamiento v9). Esta sección se conserva como
+> referencia conceptual del modelo de 7 capas; la extracción real es v9
+> (`backend/v9/pipeline.py`). Varios módulos `cognition/*` citados abajo también
+> fueron eliminados (ver "Saneamiento de legacy — HECHO").
+
+Modelo conceptual (cada capa vivía en `backend/cognition/`):
 
 0. **Visual** — `pdf_visual_analyzer.VisualSignature` (sello/firma/maquetación). Persiste a `documents.visual_signature_json` y `institutional_score`.
 1. **Tipología** — `case_classifier` + contradicciones filename↔contenido.
@@ -160,7 +180,8 @@ Activado por `USE_COGNITIVE_PIPELINE=true` en `.env`. Entry-point: `backend/extr
 6. **Live consolidator** — `live_consolidator.consolidate_case` dentro del pipeline (NO post-hoc); fusiona huérfano→padre y F9 duplicados con score≥0.85.
 7. **Persist** — `cognitive_persist.persist_case` con entropy gate (umbral `COGNITIVE_ENTROPY_THRESHOLD=2.2`); contradicciones SIEMPRE fuerzan REVISION.
 
-Hay un fallback a v5.5 legacy en `backend/extraction/unified.py` (6 fases) si el flag está apagado. **No mezclar capas entre pipelines** — cada uno tiene su propio contrato de IR.
+(Histórico: existía un fallback a v5.5 legacy en `backend/extraction/unified.py`
+con 6 fases; ese archivo fue borrado. Hoy hay una sola autoridad de extracción: v9.)
 
 ### Capas v8.2 sobre el pipeline
 - **Catálogos canónicos** — `backend/data/abogados_canonicos.json` (17 oficiales con aliases) y `backend/data/dependencias_resolver.py` (mapeo Excel ↔ SED_ORG L1/L2/L3). Resuelven typos antes de persistir.
@@ -223,8 +244,7 @@ Hay un fallback a v5.5 legacy en `backend/extraction/unified.py` (6 fases) si el
 | **Pipeline v9 (recomendado, 1 autoridad/campo)** | **`backend/v9/pipeline.py`** |
 | Patterns regex Colombia (radicado, FOREST, cédula) | `backend/agent/regex_library.py` |
 | Cognición forense sin IA (7 etapas) | `backend/services/forensic_analyzer.py` |
-| Pipeline extracción legacy v5.5 (deprecating) | `backend/extraction/unified.py` |
-| Pipeline cognitivo v6 (7 capas, deprecating) | `backend/extraction/unified_cognitive.py` |
+| Utilidades de documentos (extract/verify/classify) | `backend/extraction/doc_ops.py` |
 | Tools del agente IA | `backend/agent/tools/` |
 | Post-validator con F4 (10 reglas) | `backend/extraction/post_validator.py` |
 | Config DB (FK, WAL, pool) | `backend/database/database.py` |

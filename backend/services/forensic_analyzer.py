@@ -117,7 +117,7 @@ def extract_docx_response_metadata(text: str) -> dict:
 
 
 def classify_by_content(text: str, head_chars: int = 2000) -> list[tuple[str, int]]:
-    """[DEPRECATED v9.4] Usar `backend.extraction.pipeline.classify_doc_type` +
+    """[DEPRECATED v9.4] Usar `backend.extraction.doc_ops.classify_doc_type` +
     `zone_classifier` de la cognición v6 (más sofisticado: confidence por zona).
 
     F1 Etapa 2 legacy: clasifica por estructura léxica.
@@ -127,7 +127,7 @@ def classify_by_content(text: str, head_chars: int = 2000) -> list[tuple[str, in
     """
     _warnings.warn(
         "classify_by_content está deprecada (v9.4). Usa "
-        "backend.extraction.pipeline.classify_doc_type para nuevos flujos.",
+        "backend.extraction.doc_ops.classify_doc_type para nuevos flujos.",
         DeprecationWarning, stacklevel=2,
     )
     head = (text or "")[:head_chars]

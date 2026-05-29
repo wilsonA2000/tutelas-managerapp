@@ -17,8 +17,9 @@ Estado tras la modernización (Fase 7-8). Lo que sigue VIVO:
 Borrado en la Fase 8 (era solo del motor v8 / RunPod): `cognitive_complementary_ai`,
 `focused_field_extractors`, `document_authority`, `cognitive_persist`, `live_consolidator`,
 `entropy`, `procedural_timeline`, `case_classifier`, `flag_normalizer`,
-`agent/{lifecycle,orchestrator,semantic_enricher,tools}` — junto con
-`backend/_legacy/extraction/{pipeline,unified,unified_cognitive}.py`.
+`agent/{lifecycle,semantic_enricher}` — junto con
+`extraction/{pipeline,unified,unified_cognitive}.py` (estos viven solo en el
+historial de git: rama `backup/pre-saneamiento-20260529`).
 """
 
 from backend.cognition.zone_classifier import classify_zones, DocZones
