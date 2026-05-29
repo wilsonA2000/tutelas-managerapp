@@ -1242,11 +1242,17 @@ def check_inbox(db: Session) -> list[dict]:
                     if _rc:
                         _muni = _resolver_juz_muni(f"{subject} {(body or '')[:3000]}")
                         _c2, _mth = _resolver_match_rad_corto(
-                            db, _rc, accionante=accionante or "", municipio=_muni)
+                            db, _rc, accionante=accionante or "", municipio=_muni,
+                            email_rad23=_rad23)
                         if _c2:
                             case = _c2
                             match_route = f"F2:{_mth}"
                             logger.info(f"F2: respuesta matcheada a caso {_c2.id} por {_mth}")
+                        elif _mth == "rad_corto_cross_juzgado_blocked":
+                            logger.info(
+                                f"F2: rad_corto {_rc} bloqueado — email trae rad23 {_rad23} "
+                                f"de juzgado distinto al único caso con ese consecutivo "
+                                f"(fix #11, evita conflación cross-juzgado)")
                     if not case and len(re.sub(r"\D", "", _rad23)) >= 21:
                         _sh = _resolver_adopt_shell(db, _rad23, accionante or "")
                         if _sh:

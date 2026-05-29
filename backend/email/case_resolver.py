@@ -81,13 +81,33 @@ def case_municipio(c: Case) -> Optional[str]:
 def match_by_rad_corto(
     db: Session, rad_corto: str, *, juzgado_code: Optional[str] = None,
     accionante: str = "", municipio: Optional[str] = None,
+    email_rad23: Optional[str] = None,
 ) -> tuple[Optional[Case], str]:
     """Case por rad_corto en folder_name. Con homónimos year:seq (juzgados distintos)
     desambigua por MUNICIPIO del juzgado (F2), código de juzgado, o accionante. Si no se
-    puede desambiguar → (None, ...) (conflar dos expedientes es peor que no asignar)."""
+    puede desambiguar → (None, ...) (conflar dos expedientes es peor que no asignar).
+
+    Fix #11 (2026-05-28): guard cross-juzgado. Si el correo TRAE su propio rad23
+    (juzgado completo = primeros 12 díg DANE+código), un candidato cuyo rad23 tenga
+    juzgado DISTINTO no puede ser el mismo expediente — el consecutivo coincidente entre
+    juzgados es normal (cada despacho tiene su propia secuencia). Sin este filtro, el
+    branch `rad_corto_unique` pegaba una tutela NUEVA al único caso con ese consecutivo
+    aunque fuera de otro juzgado (conflaciones GLADYS/CLAUDIA/LLAMISTH en la ingesta del
+    2026-05-28). Los shells (rad23 NULL) NO bloquean: son territorio de adopt_shell."""
     cases = db.query(Case).filter(Case.folder_name.like(f"{rad_corto} %")).all()
     if not cases:
         return None, "no_match"
+
+    email_j12 = re.sub(r"\D", "", email_rad23 or "")[:12]
+    if len(email_j12) == 12:
+        def _juz_compatible(c: Case) -> bool:
+            cj = re.sub(r"\D", "", c.radicado_23_digitos or "")[:12]
+            return (not cj) or cj == email_j12  # shell (sin rad23) no bloquea
+        filtered = [c for c in cases if _juz_compatible(c)]
+        if not filtered:
+            return None, "rad_corto_cross_juzgado_blocked"
+        cases = filtered
+
     if len(cases) == 1:
         return cases[0], "rad_corto_unique"
     if municipio:
