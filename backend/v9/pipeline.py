@@ -125,7 +125,7 @@ def extract_case(
     #     _resolve_acum evita recursión cuando re-extraemos los hermanos (paso 10).
     _acum_plan = None
     if (case is not None and not dry_run and _resolve_acum
-            and os.getenv("ACUMULACION_AUTO", "true").lower() != "false"):
+            and os.getenv("ACUMULACION_AUTO", "false").lower() == "true"):
         t = time.perf_counter()
         try:
             from backend.email.acumulacion_resolver import resolve_acumulacion
@@ -326,7 +326,7 @@ def extract_case(
     #         _resolve_acum=False para no recursar. persist solo rellena vacíos → no pisa.
     #     (b) refresca la nota "[ACUMULACIÓN CONJUNTA]" en observaciones de ESTE caso
     #         (cubre el caso de extraer un acumulado directamente, sin bucket).
-    if not dry_run and os.getenv("ACUMULACION_AUTO", "true").lower() != "false":
+    if not dry_run and os.getenv("ACUMULACION_AUTO", "false").lower() == "true":
         t = time.perf_counter()
         try:
             from backend.email.acumulacion_resolver import apply_acumulacion_note

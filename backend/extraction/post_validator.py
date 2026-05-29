@@ -413,4 +413,64 @@ def validate_extraction(case, fields: dict) -> tuple[dict, list[str]]:
             )
         prev = cur
 
+    # ============================================================
+    # F15 (v9.x, 2026-05-28): Flag falta de legitimación pasiva.
+    # SED Santander NO es competente en municipios certificados (Bcga,
+    # Floridablanca, Girón, Piedecuesta, Barrancabermeja). Si ciudad ∈ certificados
+    # Y SED Santander accionada → agregar warning sin auto-cambiar estado.
+    # ============================================================
+    _CERTIFICADOS = {"BUCARAMANGA", "FLORIDABLANCA", "GIRON", "GIRÓN",
+                     "PIEDECUESTA", "BARRANCABERMEJA"}
+    ciudad_val = (
+        fields.get("ciudad", "") or fields.get("CIUDAD", "")
+        or getattr(case, "ciudad", "") or ""
+    ).strip().upper()
+    accionados_val = (
+        fields.get("accionados", "") or fields.get("ACCIONADOS", "")
+        or getattr(case, "accionados", "") or ""
+    ).upper()
+    if ciudad_val in _CERTIFICADOS:
+        sed_accionada = (
+            ("SECRETARÍA DE EDUCACI" in accionados_val
+             or "SECRETARIA DE EDUCACI" in accionados_val)
+            and "SANTANDER" in accionados_val
+            and "MUNICIPAL" not in accionados_val
+        )
+        if sed_accionada:
+            warnings.append(
+                f"F15: ciudad={ciudad_val} (municipio certificado) + SED Santander "
+                f"accionada — posible falta de legitimación pasiva. "
+                f"Sugerir estado=IMPROCEDENTE y verificar competencia."
+            )
+
+    # ============================================================
+    # F14 (v9.x, 2026-05-28): sentido_fallo sin fecha = sentido a la deriva.
+    # Solo emite WARNING — NO modifica datos. Razón: detectado 41 cases con
+    # esta inconsistencia (audit 2026-05-28). El test F11 espera que el
+    # validator NO toque fields cuando hay solo sentido o solo fecha; F14
+    # respeta esa contract y solo flaggea para revisión humana posterior.
+    # ============================================================
+    def _from_fields(field_key):
+        v = fields.get(field_key, "") or fields.get(field_key.upper(), "")
+        return v.strip() if isinstance(v, str) else ""
+
+    for sent_key, fecha_key in (
+        ("sentido_fallo_1st", "fecha_fallo_1st"),
+        ("sentido_fallo_2nd", "fecha_fallo_2nd"),
+    ):
+        s_f = _from_fields(sent_key)
+        f_f = _from_fields(fecha_key)
+        case_s = str(getattr(case, sent_key, "") or "").strip()
+        case_f = str(getattr(case, fecha_key, "") or "").strip()
+        s_total = s_f or case_s
+        f_total = f_f or case_f
+        if s_total and not f_total:
+            warnings.append(
+                f"F14: {sent_key}={s_total!r} sin {fecha_key} — REVISAR (sin auto-corrección)"
+            )
+        elif f_total and not s_total:
+            warnings.append(
+                f"F14: {fecha_key}={f_total!r} sin {sent_key} — REVISAR (sin auto-corrección)"
+            )
+
     return corrected, warnings

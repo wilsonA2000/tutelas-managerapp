@@ -139,9 +139,18 @@ import unicodedata as _ud
 # REF/ACCIONANTE muy fiable; las sentencias/autos/incidentes lo recapitulan ("promovida por …").
 _ACCIONANTE_DOC_PRIORITY = [
     "AUTO_ADMISORIO", "DEMANDA_TUTELA", "ANEXO_DEMANDA", "SENTENCIA_1RA", "RESPUESTA",
-    "SENTENCIA_2DA", "AUTO_2DA", "AUTO_CONCEDE_IMPUGNACION", "IMPUGNACION",
+    "IMPUGNACION",
     "INCIDENTE_DESACATO", "AUTO_INCIDENTE", "NOTIFICACION", "NOTIFICACION_FALLO",
     "OFICIO_CUMPLIMIENTO", "DESCONOCIDO",
+]
+# FIX (2026-05-28): docs 2da instancia EXCLUIDOS del rastreo de accionante.
+# Bug detectado: en autos AUTO_AVOCA/AUTO_CONCEDE_IMPUGNACION de algunos
+# juzgados (ej. Juz1 Promiscuo Familia Socorro), el campo "ACCIONANTE:" en
+# el formato del auto contiene en realidad el JUZGADO de 1ra inst, no el
+# accionante real. Afectó c176/c503. Solo se usan estos docs si todo lo
+# demás falla (fallback explícito al final del flujo).
+_ACCIONANTE_DOC_FALLBACK = [
+    "SENTENCIA_2DA", "AUTO_2DA", "AUTO_CONCEDE_IMPUGNACION",
 ]
 
 # Personería/Personero Municipal de X — el municipio puede venir partido por \n.
@@ -366,8 +375,33 @@ def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str],
                     return c
         return None
 
+    # FIX (2026-05-28): pattern "yo NOMBRE PROPIO ... interpongo/presento" indica
+    # que el verdadero accionante es esa persona, no la Personería que solo está
+    # vinculada como ministerio público. Patrón "yo, JUAN PÉREZ ... interpongo" o
+    # "El suscrito, NOMBRE ... presento acción". Si match → priorizar la persona.
+    _PAT_YO_INTERPONGO = re.compile(
+        r"(?i)(?:yo|el\s+suscrito|la\s+suscrita)[\s,]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{4,80}?)"
+        r"[\s,]+(?:identificad[oa]\s+con|mayor\s+de\s+edad|en\s+nombre\s+propio|"
+        r"interpongo|presento|impetro)\b"
+    )
+    # Personería ACCIONANTE LEGÍTIMA solo si firma "en calidad de Personero/a Municipal de X"
+    _PAT_PERSONERIA_EN_CALIDAD = re.compile(
+        r"(?i)en\s+(?:mi\s+)?calidad\s+de\s+personer[oa]\s+municipal"
+    )
+
     for _dt, head in texts_by_priority:
+        # --- Caso 0 (NUEVO 2026-05-28): si hay "yo NOMBRE ... interpongo",
+        # priorizar la PERSONA real sobre la Personería (vinculada/asesora). ---
+        m_yo = _PAT_YO_INTERPONGO.search(head[:5000])
+        if m_yo and not _PAT_PERSONERIA_EN_CALIDAD.search(head[:5000]):
+            cand_yo = _clean_acc_value(m_yo.group(1))
+            if cand_yo and len(cand_yo) >= 6:
+                accionante = cand_yo
+                nota = _build_nota(head)
+                break
+
         # --- Caso 1: Personería (siempre normalizar a institución) ---
+        # Solo si NO se detectó persona propia interponiendo arriba.
         m_pers = _PAT_PERSONERIA.search(head)
         if m_pers:
             muni = _norm_municipio(m_pers.group(1))

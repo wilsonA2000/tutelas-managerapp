@@ -13,6 +13,7 @@ no romper a sus consumidores legacy (`unified*.py`, `ir_builder.py`, tests).
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -123,6 +124,43 @@ def classify_doc_type(filename: str) -> str:
     # → quedaban PDF_OTRO y los extractores que filtran doc_type=="RESPUESTA" no los leían).
     if any(k in fn for k in ("respuesta", "contesta")):
         return "RESPUESTA"
+    # FIX (2026-05-28): patrones descubiertos en sesión de curación masiva
+    if "acta_individual_de_reparto" in fn or "acta individual de reparto" in fn \
+       or "actareparto" in fn:
+        return "ACTA_REPARTO"
+    if fn.startswith("rt_") and re.search(r"^rt_\d{4}-\d+", fn):
+        return "INSUMO_CONTESTACION"
+    if "elementos_enviados" in fn or "elementos enviados" in fn:
+        return "EMAIL_OUTLOOK_PDF"
+    if "memorial" in fn or "memorialaccionante" in fn:
+        return "MEMORIAL_ACCIONANTE"
+    if "acumulaci" in fn or "autoacumula" in fn or "auto_acumula" in fn:
+        return "AUTO_ACUMULACION"
+    if "nulidad" in fn or "autonulidad" in fn or "decreta_nulidad" in fn:
+        return "AUTO_NULIDAD"
+    if "obedezca" in fn or "obedezcase" in fn or "cumplas" in fn:
+        return "AUTO_OBEDEZCASE_Y_CUMPLASE"
+    if "abstien" in fn or "abstenerse_abrir" in fn or "abstenerseabrir" in fn:
+        return "AUTO_ABSTIENE_INCIDENTE"
+    if "concede.impugn" in fn or "concedeimpugnacion" in fn:
+        return "AUTO_CONCEDE_IMPUGNACION"
+    if "vincula" in fn:
+        return "AUTO_VINCULA"
+    if "desistimiento" in fn:
+        return "AUTO_DESISTIMIENTO"
+    if "archiv" in fn and ("incidente" in fn or "expediente" in fn):
+        return "AUTO_ARCHIVA"
+    if "registro_presupuestal" in fn or fn.startswith("rp_") or fn.startswith("cdp_"):
+        return "ANEXO_PRUEBA"
+    if "convenio.interadministrativo" in fn or fn.startswith("minuta"):
+        return "INSUMO_ADMINISTRATIVO"
+    if "camscanner" in fn or fn.startswith("document_"):
+        return "ANEXO_PRUEBA"
+    if "estudio_tecnico" in fn or "ip-gu" in fn or "copia_controlada" in fn:
+        return "INSUMO_PROCEDIMIENTO"
+    # Nombre propio archivo (NOMBRE_APELLIDO.pdf) → ANEXO_PRUEBA típico
+    if re.match(r"^[A-Za-zÁÉÍÓÚÑáéíóúñ]+_[A-Za-zÁÉÍÓÚÑáéíóúñ]+(?:_[A-Za-zÁÉÍÓÚÑáéíóúñ]+)?\.pdf$", filename):
+        return "ANEXO_PRUEBA"
     if fn.startswith("email"):
         return "EMAIL_DB"
     # Screenshots

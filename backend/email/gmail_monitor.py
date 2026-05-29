@@ -1292,6 +1292,28 @@ def check_inbox(db: Session) -> list[dict]:
                     }, ensure_ascii=False)
 
                 _email_status = "ASIGNADO" if case else ("AMBIGUO" if accion == "AMBIGUO" else "PENDIENTE")
+
+                # F-DEDUP (2026-05-28): evita duplicados por dual-ingestion (Sync paralela
+                # crea emails sin gmail_id en message_id mientras el monitor los crea
+                # con suffix _gmailid_). Detecta dup por (case_id, subject, sender,
+                # fecha±1día) — mismo contenido en distinta envoltura.
+                if case is not None and subject:
+                    from datetime import timedelta as _td
+                    win = _td(days=1)
+                    dup_q = db.query(Email).filter(
+                        Email.case_id == case.id,
+                        Email.subject == subject,
+                        Email.sender == sender,
+                        Email.date_received >= (date_received - win),
+                        Email.date_received <= (date_received + win),
+                    ).first()
+                    if dup_q is not None:
+                        logger.info(
+                            "Email dup detectado (case=%d subj='%s'), skip",
+                            case.id, subject[:50]
+                        )
+                        continue
+
                 email_record = Email(
                     message_id=message_id, subject=subject, sender=sender,
                     date_received=date_received, body_preview=body or "",

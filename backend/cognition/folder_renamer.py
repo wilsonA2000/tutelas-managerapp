@@ -118,6 +118,18 @@ TRAILING_CUT_PATTERNS = [
     r"\s+derecho\s+de\s+petici[oó]n\b.*$",
     r"\s+presento?\s+(?:acci[oó]n|ante)\b.*$",
     r"\s+interp(ongo|uso|one)\b.*$",
+    # FIX 14 (2026-05-28) — basura del subject email / OCR raro detectada en producción
+    r"\s+(?:CORREO\s+ELECTR[OÓ]NIC[OA]?|EMAIL|E-?MAIL)\b.*$",
+    r"\s+(?:ACCIONANDO|ACCIONADA|AGENCIADA)\b.*$",
+    r"\s+AGENTE\s+OFICIOS[OA]\b.*$",
+    r"\s+(?:DOCUMENTOS?|ANEXOS?)\s*$",
+    r"\s+(?:SE\s+REMITE|FAVOR\s+INFORMARLO\s+A\s+ESTA\s+DEPENDENCIA)\b.*$",
+    r"\s+(?:MINISTERIO\s+DE\s+EDUCACI[OÓ]N\s+NACIONAL|NOTIFICACIONESJUD)\b.*$",
+    r"\s+(?:CORDIAL\s+SALUDO|ATENTAMENTE)\b.*$",
+    r"\s+Y\s+OTRA[S]?\s*$",
+    r"\s+IDENTIFICAD[OA]\s+CON\s+(?:C\.?C\.?|CC|CEDULA|C[EÉ]DULA)\b.*$",
+    r"\s+SEDE\s*$",
+    r"\s+TUTELA\s+EN\s*$",
 ]
 
 # FIX 8.1 — preposiciones colgadas al final tras un nombre (truncamiento NER).

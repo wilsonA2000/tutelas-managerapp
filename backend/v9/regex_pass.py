@@ -834,7 +834,20 @@ def run(
     # ----- Identificadores fuertes (radicado, FOREST, cédula, accionante) -----
     # Ancla del folder para recuperar rads de cualquier depto (ver _anchored_rad23).
     rad_anchor = _folder_short_rad(folder_name)
-    for d, _ in classified:
+
+    # FIX (2026-05-28): para rad23, PRIORIZAR docs de origen judicial
+    # (AUTO_ADMISORIO/DEMANDA_TUTELA/SENTENCIA_1RA) sobre respuestas FOREST.
+    # Razón: el rad de respuesta SED puede ser un rad interno de Gobernación
+    # (FOREST 68XXX) que NO coincide con el rad del juzgado real (puede ser
+    # de otro depto: ej. c139 tenía rad23 de Charalá 68167 cuando el juzgado
+    # real era Encino 68162). El AUTO_ADMISORIO es la fuente autoritativa.
+    _JUDICIAL_DOCTYPES = {"AUTO_ADMISORIO", "DEMANDA_TUTELA", "SENTENCIA_1RA",
+                          "PDF_AUTO_ADMISORIO", "PDF_SENTENCIA", "ANEXO_DEMANDA"}
+    judicial_first = sorted(
+        classified,
+        key=lambda dc: 0 if dc[1] in _JUDICIAL_DOCTYPES else 1,
+    )
+    for d, _ in judicial_first:
         if fields.is_empty("radicado_23_digitos"):
             v = _extract_radicado_23(d.text, anchor=rad_anchor)
             if v:

@@ -37,6 +37,56 @@ from backend.email.rad_utils import derive_rad_corto_from_rad23, juzgado_code
 logger = logging.getLogger(__name__)
 
 
+# Validador de accionante para evitar cases-basura con fragmentos del fallo
+# (bug detectado 2026-05-28: c513-c531 con "QUE LA INSTITUCIÓN", "ACUDE NUEVAMENTE A LA A", etc.)
+_ACCIONANTE_BAD_STARTS = (
+    "QUE ", "QUE,", "NO ", "SI ", "SE ", "DE ", "EN ", "AL ", "A LA ", "LA ",
+    "PARA ", "POR ", "CON ", "SIN ", "SOBRE ", "ACUDE ", "SOLICITA ", "PIDE ",
+    "DECLARA ", "ORDENA ", "RESUELVE ", "CONSIDERANDO ", "VISTOS ", "TENIENDO ",
+    "INCIDENTE ", "TUTELA ", "ACCION ", "ACCIÓN ", "JUZGADO ", "FALLO ", "AUTO ",
+    "ANEXO ", "OFICIO ", "REPUBLICA ", "REPÚBLICA ", "GOBERNACION ", "GOBERNACIÓN ",
+)
+_ACCIONANTE_BAD_KEYWORDS = (
+    "JUZGADO", "SECRETARÍA DE EDUCACIÓN", "SECRETARIA DE EDUCACION",
+    "GOBERNACIÓN DE SANTANDER", "GOBERNACION DE SANTANDER",
+    "MINISTERIO DE EDUCACIÓN", "MINISTERIO DE EDUCACION",
+    "DESCONOCIDO", "PENDIENTE REVISION",
+)
+
+
+def _is_valid_accionante(name: str | None) -> tuple[bool, str]:
+    """Valida si el string parece un accionante real (no fragmento de texto).
+
+    Returns: (is_valid, reason_if_not)
+    Reason vacío si válido.
+    """
+    if not name:
+        return False, "vacío"
+    n = name.strip()
+    if len(n) < 4:
+        return False, f"muy corto ({len(n)} chars)"
+    if len(n) > 120:
+        return False, f"muy largo ({len(n)} chars)"
+    nu = n.upper()
+    # Prohibe que empiece con verbo/preposición/conjunción/keyword institucional
+    for bad in _ACCIONANTE_BAD_STARTS:
+        if nu.startswith(bad):
+            return False, f"empieza con '{bad.strip()}' (fragmento de texto?)"
+    # Prohibe keywords institucionales (institución como accionante=falso)
+    for kw in _ACCIONANTE_BAD_KEYWORDS:
+        if kw in nu and "PERSONERIA" not in nu and "PERSONERÍA" not in nu:
+            return False, f"contiene '{kw}' (institución, no persona)"
+    # Debe contener letras + tener al menos una palabra >=3 chars en mayúscula
+    if not re.search(r"[A-ZÁÉÍÓÚÑ]", n):
+        return False, "sin letras mayúsculas"
+    # Rechazar si termina con caracter de oración incompleta
+    if n.endswith(" A") or n.endswith(" DE") or n.endswith(" LA") or n.endswith(" EL") \
+       or n.endswith(" Y") or n.endswith(",") or n.endswith(":") or n.endswith(".") \
+       or n.endswith(" Y OTROS,") or n.endswith(" DEL"):
+        return False, f"termina con sufijo incompleto"
+    return True, ""
+
+
 @dataclass
 class AcumItem:
     rad_corto: str                 # "2025-00047"
@@ -175,13 +225,23 @@ def plan_acumulacion(db: Session, primary_case: Case) -> AcumPlan:
 
 
 def _create_sibling(db: Session, item: AcumItem, primary_case: Case,
-                    create_folder: bool = False) -> Case:
+                    create_folder: bool = False) -> Case | None:
     """Crea el caso hermano faltante.
 
     Si create_folder=True le da carpeta física propia (para que no quede vacía y
     pueda recibir su sentencia individual). Si False es una fila 'sombra' y los
     documentos quedan en la carpeta del RECTOR.
+
+    Devuelve None si el accionante no pasa validación (fragmento de texto, etc.)
+    — evita los cases-basura como c513-c531 detectados 2026-05-28.
     """
+    ok, why = _is_valid_accionante(item.accionante)
+    if not ok:
+        logger.warning(
+            "Acumulación: NO creo hermano rad=%s — accionante inválido (%s): %r",
+            item.rad_corto, why, item.accionante,
+        )
+        return None
     folder_name = re.sub(r'[<>:"/\\|?*]', "",
                          f"{item.rad_corto} {item.accionante or '[PENDIENTE REVISION]'}").strip()[:80]
     folder_path = None
@@ -246,6 +306,11 @@ def apply_plan(db: Session, plan: AcumPlan, primary_case: Case,
                 )
                 continue
             c = _create_sibling(db, it, primary_case, create_folder=move_files)
+            if c is None:
+                summary.setdefault("skipped", []).append(
+                    {"rad": it.rad_corto, "accionante": it.accionante,
+                     "motivo": "accionante inválido (fragmento de texto?)"})
+                continue
             it.case_id = c.id
             summary["created"].append({"case_id": c.id, "rad": it.rad_corto,
                                        "accionante": it.accionante})

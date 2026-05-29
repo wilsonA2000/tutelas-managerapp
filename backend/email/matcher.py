@@ -182,7 +182,21 @@ def score_case_match(
         # propia secuencia, así que varios casos de municipios distintos pueden
         # compartirlo (p.ej. 2026-00015 en San Andrés/Oiba/Betulia). Desambiguar
         # SIEMPRE por municipio (juzgado_code) — nunca volcar al primero del bucket.
-        rc_candidates = cache.rad_corto_candidates(signals.rad_corto) or {rc_winner}
+        #
+        # FIX (2026-05-28): si email TRAE rad23 explícito pero NO matchea ningún
+        # case en KB, NO usar rad_corto en absoluto. Razón: el rad23 indica el
+        # juzgado real del proceso. Si no hay case con ese rad23, el rad_corto
+        # coincidente seguro es de OTRO juzgado (conflación garantizada).
+        # Esto refuerza la regla "rad23 es identidad de tutela".
+        if signals.rad23 and len(signals.rad23) >= 12 and not hits.get("rad23"):
+            logger.info(
+                "rad_corto %s: email TRAE rad23 (%s) pero ningún case en KB lo match — "
+                "NO uso rad_corto para evitar conflación cross-juzgado",
+                signals.rad_corto, signals.rad23,
+            )
+            rc_candidates = set()  # vacío → bypasea todo el bloque
+        else:
+            rc_candidates = cache.rad_corto_candidates(signals.rad_corto) or {rc_winner}
         email_juzgado = juzgado_code(signals.rad23)  # "" si rad23 ausente/corto (<12d)
         if email_juzgado:
             # El caso correcto es el del MISMO juzgado que el rad23 del email.
