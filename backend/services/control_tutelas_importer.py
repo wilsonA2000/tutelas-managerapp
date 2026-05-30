@@ -19,7 +19,6 @@ from __future__ import annotations
 from backend.core.time import utcnow
 
 import re
-import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime
 from typing import Optional
