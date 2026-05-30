@@ -202,14 +202,17 @@ _ESTADO_INPUT_FIELDS = (
 
 
 def _derive_estado(fields: ExtractedFields, case=None) -> str:
-    """ACTIVO/INACTIVO derivado de los campos (misma regla que
-    field_extractor.extract_estado_for_case).
+    """ACTIVO/INACTIVO derivado de los campos. DELEGA en la autoridad única
+    field_extractor.extract_estado_for_case (antes había una reimplementación
+    byte-por-byte aquí: dos reglas que podían divergir).
 
     Lee de `fields` (lo extraído en este pase) PERO cae a los valores ya persistidos
     en `case` para los campos que este pase no re-extrajo. Sin ese fallback, una
     re-extracción parcial (que trae solo algunos campos en `fields`) derivaba un
     estado inconsistente con la DB completa (regresión vista en c12/c60/c390:
     sentido_fallo_2nd seguía en DB pero faltaba en `fields` → estado ACTIVO erróneo)."""
+    from types import SimpleNamespace
+    from backend.v9 import field_extractor as fe
     v = dict(fields.values)
     if case is not None:
         for k in _ESTADO_INPUT_FIELDS:
@@ -217,15 +220,7 @@ def _derive_estado(fields: ExtractedFields, case=None) -> str:
                 dbval = getattr(case, k, None)
                 if dbval:
                     v[k] = dbval
-    if (v.get("sentido_fallo_1st") or "").upper() == "DESISTIMIENTO":
-        return "INACTIVO"  # desistimiento aceptado termina el proceso (art. 26 D2591/91)
-    if not v.get("sentido_fallo_1st"):
-        return "ACTIVO"
-    if (v.get("impugnacion") or "").upper() == "SI" and not v.get("sentido_fallo_2nd"):
-        return "ACTIVO"
-    for n in ("", "_2", "_3"):
-        if (v.get(f"incidente{n}") or "").upper() == "SI":
-            d = (v.get(f"decision_incidente{n}") or "").upper()
-            if not d or d == "EN_TRAMITE":
-                return "ACTIVO"
-    return "INACTIVO"
+    # La autoridad lee los inputs vía getattr(case, ...); le pasamos la vista
+    # merged (fields + fallback DB) como un objeto con esos atributos.
+    merged = SimpleNamespace(**{k: v.get(k) for k in _ESTADO_INPUT_FIELDS})
+    return fe.extract_estado_for_case(None, merged)
