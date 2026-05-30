@@ -2501,10 +2501,14 @@ _FALLO_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     # de "amparo|tutela|acción|derechos fundamentales" dentro de ~80 chars, es NIEGA.
     # Si NIEGA es accesorio ("niega la nulidad", "niega medida provisional") no se enlaza
     # a amparo/tutela y cae a CONCEDE.
+    # El objeto tras la negación va SIN exigir calificador exacto: los fallos dicen
+    # "NO CONCEDER la protección solicitada" / "NO TUTELAR los derechos" (no siempre
+    # "protección constitucional" / "derecho fundamental") — exigirlo dejaba esos
+    # fallos como CONCEDE (bug #504).
     ("NIEGA",           re.compile(r"(?i)\b(?:negar|nieg[ueao]\w*|niegues\w*|deneg\w+|"
                                    r"no\s+(?:se\s+)?(?:concede\w*|tutela\w*|tutelar|tut[ée]les\w*|amparar?\w*|amp[áa]res\w*|protege\w*))"
-                                   r"\b[^.\n]{0,80}?\b(?:amparo|tutela|acci[óo]n\s+de\s+tutela|protecci[óo]n\s+constitucional|"
-                                   r"derecho[s]?\s+fundamental)")),
+                                   r"\b[^.\n]{0,80}?\b(?:amparo|tutela|acci[óo]n\s+de\s+tutela|protecci[óo]n|"
+                                   r"derecho[s]?|petici[óo]n)")),
     # CONCEDE: verbos del amparo + verbos dispositivos del SED context (cuando el juez
     # CONCEDE, ordena traslados/reintegros/nombramientos/dejar-sin-efecto-de-actos-SED).
     # OJO: solo VERBOS del amparo. El sustantivo "tutela"/"acción de tutela" NO debe contar

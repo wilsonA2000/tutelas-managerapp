@@ -512,6 +512,16 @@ def _checks_field_extractor() -> list[tuple]:
         _classify_sentido_fallo("RESUELVE: PRIMERO. NEGAR el amparo del derecho a la educación solicitado."),
     ))
     out.append((
+        "fallo: 'NO CONCEDER la protección' → NIEGA (negación sin calificador)",
+        "NIEGA",
+        _classify_sentido_fallo("RESUELVE: PRIMERO. NO CONCEDER la protección solicitada por el accionante."),
+    ))
+    out.append((
+        "fallo: 'NO TUTELAR los derechos' → NIEGA",
+        "NIEGA",
+        _classify_sentido_fallo("RESUELVE: PRIMERO. NO TUTELAR los derechos invocados por el actor."),
+    ))
+    out.append((
         "fallo: 'niega la nulidad' + 'tutela' → CONCEDE (no NIEGA: la negación es accesoria)",
         "CONCEDE",
         _classify_sentido_fallo("RESUELVE: PRIMERO. Niega la nulidad propuesta. SEGUNDO. TUTELAR los derechos fundamentales."),
