@@ -66,6 +66,17 @@ _V9_DECISION_INCIDENTE = {
 }
 
 
+# Negación adyacente a la sanción: "NO (SE/HA) SANCIONA", "ABSTIENE/ABSTENERSE
+# DE (IMPONER) SANCIÓN", "SIN SANCIÓN". Evita que el substring "SANCIONA"/"SANCION"
+# clasifique estos como SANCIONADO. NO matchea "POR NO CUMPLIR SE SANCIONA"
+# (sanción real: el NO no es adyacente a la sanción).
+_RE_NEGACION_SANCION = re.compile(
+    r"\bNO\s+(?:SE\s+|HA\s+|HABER\s+)?SANCI[ÓO]N"
+    r"|ABST(?:EN|IEN|UV)\w*\s+(?:DE\s+)?(?:IMPONER\s+)?(?:LA\s+)?SANCI[ÓO]N"
+    r"|SIN\s+SANCI[ÓO]N"
+)
+
+
 def categorize_decision_incidente(decision: str, observaciones: str = "") -> str:
     """Categorizar decisión de incidente de desacato en categorías estándar.
     Usa primero el campo decision_incidente, y si está vacío busca pistas en observaciones."""
@@ -76,6 +87,8 @@ def categorize_decision_incidente(decision: str, observaciones: str = "") -> str
     # Primero intentar con la decisión directa (texto libre legacy)
     d = (decision or "").upper()
     if d and d != "PENDIENTE":
+        if _RE_NEGACION_SANCION.search(d):
+            return "NO SANCIONADO"
         if any(w in d for w in ["SANCIONA", "SANCIÓN", "MULTA", "ARRESTO"]):
             return "SANCIONADO"
         if any(w in d for w in ["CONSULTA", "GRADO JURISDICCIONAL"]):
@@ -95,6 +108,8 @@ def categorize_decision_incidente(decision: str, observaciones: str = "") -> str
     # Si no hay decisión, buscar en observaciones
     obs = (observaciones or "").upper()
     if obs:
+        if _RE_NEGACION_SANCION.search(obs):
+            return "NO SANCIONADO"
         if any(w in obs for w in ["SANCION", "MULTA", "ARRESTO"]):
             return "SANCIONADO"
         if any(w in obs for w in ["CONSULTA", "GRADO JURISDICCIONAL"]):
