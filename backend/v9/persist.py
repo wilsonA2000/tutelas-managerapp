@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -306,14 +306,14 @@ def persist(
         except (json.JSONDecodeError, TypeError):
             tracking = {}
     tracking.update({
-        "v9_extracted_at": datetime.utcnow().isoformat(),
+        "v9_extracted_at": datetime.now(timezone.utc).isoformat(),
         "v9_sources": {**prev_sources, **{k: v.value for k, v in fields.sources.items() if fields.values[k]}},
         "v9_completitud": fields.completitud(),
         "v9_abogado_canonical_confidence": fields.abogado_canonical_confidence,
         "v9_dependencia_canonical_confidence": fields.dependencia_canonical_confidence,
     })
     case.field_confidences_json = json.dumps(tracking, ensure_ascii=False)
-    case.updated_at = datetime.utcnow()
+    case.updated_at = datetime.now(timezone.utc)
 
     db.commit()
 

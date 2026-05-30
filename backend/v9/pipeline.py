@@ -22,7 +22,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -211,7 +211,7 @@ def extract_case(
                     continue
                 row.extracted_text = d.text
                 row.extraction_method = d.method
-                row.extraction_date = datetime.utcnow()
+                row.extraction_date = datetime.now(timezone.utc)
                 if d.file_hash:
                     row.file_hash = d.file_hash
                 _persisted += 1
