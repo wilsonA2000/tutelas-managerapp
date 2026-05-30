@@ -35,6 +35,16 @@ def test_classify_doc_type():
     assert "GMAIL" in classify_doc_type("Gmail - RV_ Tutela.pdf")
 
 
+def test_classify_acta_seguimiento_no_es_sentencia():
+    """Un acta de seguimiento del fallo NO debe clasificarse como SENTENCIA
+    (menciona 'fallo' en el nombre pero es un acta de reunión → no alimenta el
+    extractor de fecha_fallo). Sentencias reales SÍ siguen siendo PDF_SENTENCIA."""
+    from backend.extraction.doc_ops import classify_doc_type
+    assert classify_doc_type("ANEXO No 17 ACTA No 22 Seguimiento fallo de tutela.pdf") == "PDF_OTRO"
+    assert classify_doc_type("10FalloAccionTutela.pdf") == "PDF_SENTENCIA"
+    assert classify_doc_type("SentenciaPrimeraInstancia_2026-00032.pdf") == "PDF_SENTENCIA"
+
+
 def test_update_case_null_value(client, case_ids):
     """PUT con valor vacio no debe corromper DB."""
     r = client.put(f"/api/cases/{case_ids[0]}", json={"OBSERVACIONES": ""})

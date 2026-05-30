@@ -115,6 +115,11 @@ def classify_doc_type(filename: str) -> str:
         return "PDF_GMAIL"
     if any(k in fn for k in ("auto", "admite", "avoca", "admisorio")):
         return "PDF_AUTO_ADMISORIO"
+    # Un acta de seguimiento al cumplimiento del fallo menciona "fallo" en el nombre
+    # pero es un acta de reunión (NO la sentencia). Sin este guard se clasificaba
+    # PDF_SENTENCIA y alimentaba el extractor de fecha_fallo con su fecha de reunión.
+    if "acta" in fn and "seguimiento" in fn:
+        return "PDF_OTRO"
     if any(k in fn for k in ("sentencia", "fallo")):
         return "PDF_SENTENCIA"
     if any(k in fn for k in ("impugn",)):
