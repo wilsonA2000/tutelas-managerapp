@@ -175,18 +175,6 @@ class OrdenCumplimiento:
     source: str = "regex"    # "regex" | "regex_strict" | "llm" | "manual"
 
 
-@dataclass
-class CandidatoLLM:
-    """Cuando regex no extrae plazo pero SÍ identifica un ordinal candidato,
-    devuelve ese bloque acotado para que el LLM lo cognitice. Estrategia híbrida:
-    regex hace el trabajo de localizar el contexto relevante (1-2 K chars en lugar
-    de la sentencia completa de 25 K), el LLM solo razona sobre el ordinal."""
-    pdf_path: str
-    ordinal_nombre: str       # "PRIMERO" / "SEGUNDO" / etc.
-    ordinal_texto: str        # texto completo del ordinal (lo que va al LLM)
-    bloque_resuelve_full: str # bloque RESUELVE entero por si el LLM necesita más contexto
-
-
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 def _word_to_int(w: str) -> Optional[int]:
@@ -347,45 +335,6 @@ def _sentido_es_concede(sentido_fallo: Optional[str]) -> bool:
 
 
 # ── API pública ─────────────────────────────────────────────────────────────
-
-def find_llm_candidate(file_path: str | Path) -> Optional[CandidatoLLM]:
-    """Cuando regex no extrae plazo, encuentra el ordinal candidato para que el LLM
-    lo cognitice. Devuelve None si no hay nada que valga la pena enviar al LLM.
-
-    Estrategia híbrida: regex ya ubicó el bloque RESUELVE y los ordinales con
-    verbo imperativo — el LLM solo recibe el primer ordinal candidato (1-2 K chars),
-    no la sentencia completa.
-    """
-    try:
-        full = _read_pdf_text(file_path)
-    except Exception:
-        return None
-    if len(full) < 1500:
-        return None
-    if _NOT_SENTENCIA.search(full[:3000]):
-        return None
-    bloque = _find_resuelve_block(full)
-    if not bloque:
-        return None
-    ordinales = _split_ordinales(bloque)
-    if not ordinales:
-        return None
-    for nombre, texto in ordinales:
-        if not _VERBO_ORDEN.search(texto):
-            continue
-        if re.search(r"\b(IMPUGNADA?|APEL[AO]|RECURSO\s+DE|NULIDAD)\b", texto[:300], re.IGNORECASE):
-            continue
-        # Solo enviamos al LLM si hay verbo de orden pero regex no agarró plazo numérico
-        if _find_plazos_en_ordinal(texto):
-            continue
-        return CandidatoLLM(
-            pdf_path=str(file_path),
-            ordinal_nombre=nombre,
-            ordinal_texto=re.sub(r"\s+", " ", texto).strip()[:2000],
-            bloque_resuelve_full=bloque[:4000],
-        )
-    return None
-
 
 def _try_extract_from_pdf(file_path: str | Path) -> tuple[Optional[OrdenCumplimiento], str]:
     """Intenta extraer desde un PDF. Devuelve (OrdenCumplimiento|None, motivo).
