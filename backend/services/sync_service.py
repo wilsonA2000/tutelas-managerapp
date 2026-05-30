@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from backend.database.models import (
     Case, Document, Email, Extraction, AuditLog, TokenUsage, ComplianceTracking,
 )
-from backend.extraction.doc_ops import verify_document_belongs, classify_doc_type
+from backend.extraction.doc_ops import verify_document_belongs
 from backend.database.seed import classify_document, is_case_folder
 
 logger = logging.getLogger("tutelas.sync")
@@ -75,8 +75,8 @@ def _extract_text_fast(file_path: str) -> tuple[str, str]:
             text = "\n".join(pages)
             if text.strip():
                 return text, "fitz_fast"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("fitz fast extract falló para %s: %s", file_path, e)
         return "", "fitz_failed"
 
     elif ext in (".docx", ".doc"):
@@ -208,8 +208,8 @@ def run_sync(db: Session, base_dir: Path, result: dict, is_running_fn, force: bo
                     if text and len(text.strip()) >= 50:
                         doc.extracted_text = text
                         doc.extraction_method = method
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("extracción rápida falló para doc %s: %s", doc.file_path, e)
 
             if not doc.extracted_text or len(doc.extracted_text or "") < 100:
                 doc.verificacion = "PENDIENTE_OCR"
@@ -372,15 +372,23 @@ def run_sync(db: Session, base_dir: Path, result: dict, is_running_fn, force: bo
             continue
         try:
             Path(case.folder_path).rename(new_path)
-            old_path = case.folder_path
+            old_prefix = case.folder_path.rstrip("/")
             case.folder_name = new_name
             case.folder_path = str(new_path)
+            # Reemplazo anclado al prefijo de carpeta (evita corromper paths con
+            # nombres similares, p.ej. ".../2026-001" vs ".../2026-001_old").
             for doc in case.documents:
-                if doc.file_path and old_path in doc.file_path:
-                    doc.file_path = doc.file_path.replace(old_path, str(new_path))
+                if doc.file_path and (
+                    doc.file_path == old_prefix
+                    or doc.file_path.startswith(old_prefix + "/")
+                ):
+                    doc.file_path = str(new_path) + doc.file_path[len(old_prefix):]
             folders_renamed += 1
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "No se pudo renombrar carpeta %s → %s: %s",
+                case.folder_path, new_path, e,
+            )
 
     db.commit()
     result["folders_renamed"] = folders_renamed
