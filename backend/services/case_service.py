@@ -218,6 +218,18 @@ def get_case(db: Session, case_id: int) -> dict | None:
     return data
 
 
+# Vocabularios controlados: rechazar valores fuera de vocab antes de persistir.
+# Cierra la puerta por la que entró estado='IMPROCEDENTE' (que pertenece a
+# sentido_fallo_*, no a estado). Solo campos con vocab cerrado y estable.
+_VOCAB_GUARD = {
+    "estado": {"ACTIVO", "INACTIVO"},
+    "impugnacion": {"SI", "NO"},
+    "incidente": {"SI", "NO"},
+    "incidente_2": {"SI", "NO"},
+    "incidente_3": {"SI", "NO"},
+}
+
+
 def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
     """Actualizar campos de un caso con registro de auditoria."""
     case = db.query(Case).filter(Case.id == case_id).first()
@@ -231,6 +243,18 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
 
         old_value = getattr(case, attr) or ""
         new_value = str(new_value).strip()
+
+        # Guard de vocabulario: rechaza valores inválidos, normaliza a canónico.
+        # No aplica al valor vacío (limpiar el campo es válido).
+        vocab = _VOCAB_GUARD.get(attr)
+        if vocab and new_value:
+            if new_value.upper() not in vocab:
+                logger.warning(
+                    "update_case caso %s: valor %r fuera de vocab para %s — rechazado",
+                    case.id, new_value, attr,
+                )
+                continue
+            new_value = new_value.upper()
 
         if old_value != new_value:
             setattr(case, attr, new_value)

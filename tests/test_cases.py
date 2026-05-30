@@ -87,6 +87,23 @@ def test_update_case_generates_audit(client, case_ids):
     assert any(a["field_name"] == "ASUNTO" and a["action"] == "EDICION_MANUAL" for a in audit)
 
 
+def test_update_case_vocab_guard_rejects_invalid_estado(client, case_ids):
+    """estado fuera de vocab {ACTIVO,INACTIVO} debe rechazarse (no persistir)."""
+    cid = case_ids[0]
+    client.put(f"/api/cases/{cid}", json={"ESTADO": "ACTIVO"})
+    # IMPROCEDENTE pertenece a sentido_fallo_*, NO a estado → rechazado
+    client.put(f"/api/cases/{cid}", json={"ESTADO": "IMPROCEDENTE"})
+    estado = client.get(f"/api/cases/{cid}").json().get("ESTADO", "")
+    assert estado == "ACTIVO"  # se quedó en el valor válido previo, no IMPROCEDENTE
+
+
+def test_update_case_vocab_guard_normalizes_case(client, case_ids):
+    """un valor válido en minúscula se normaliza al canónico en mayúscula."""
+    cid = case_ids[0]
+    client.put(f"/api/cases/{cid}", json={"ESTADO": "inactivo"})
+    assert client.get(f"/api/cases/{cid}").json().get("ESTADO", "") == "INACTIVO"
+
+
 def test_sync_single_case(client, case_ids):
     r = client.post(f"/api/cases/{case_ids[0]}/sync")
     assert r.status_code == 200
