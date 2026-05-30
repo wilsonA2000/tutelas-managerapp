@@ -11,6 +11,7 @@ import logging
 import sqlite3
 from pathlib import Path
 from datetime import datetime
+from backend.core.time import utcnow
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
@@ -213,7 +214,7 @@ def rebuild_from_folders(
                     if text and len(text.strip()) >= 10:
                         doc.extracted_text = text
                         doc.extraction_method = method
-                        doc.extraction_date = datetime.utcnow()
+                        doc.extraction_date = utcnow()
                         stats["documents_with_text"] += 1
                 except Exception as e:
                     stats["errors"].append(f"Doc {doc.filename}: {str(e)[:80]}")

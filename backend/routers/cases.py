@@ -268,6 +268,7 @@ def api_merge_cases(source_id: int, target_id: int, payload: dict, db: Session =
     """
     import json as _json
     from datetime import datetime as _dt
+from backend.core.time import utcnow
     from backend.database.models import AuditLog, Email
 
     source = db.query(Case).filter(Case.id == source_id).first()
@@ -325,7 +326,7 @@ def api_merge_cases(source_id: int, target_id: int, payload: dict, db: Session =
 
     fc["v9_sources"] = v9_sources
     target.field_confidences_json = _json.dumps(fc, ensure_ascii=False)
-    target.updated_at = _dt.utcnow()
+    target.updated_at = utcnow()
 
     deleted = False
     if delete_source:
@@ -401,7 +402,7 @@ def api_create_case(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="tipo debe ser TUTELA o COMUNICACION")
 
     observaciones_raw = str(payload.get("observaciones") or "").strip()
-    now = datetime.utcnow()
+    now = utcnow()
 
     if tipo == "COMUNICACION":
         # Carpeta libre sin radicado — para oficios/comunicaciones que llegaron mal clasificados.
@@ -618,7 +619,7 @@ def api_rename_case_folder(case_id: int, payload: dict, db: Session = Depends(ge
         case.folder_path = str(new_path)
 
     case.folder_name = new_name
-    case.updated_at = datetime.utcnow()
+    case.updated_at = utcnow()
     db.add(AuditLog(
         case_id=case.id, field_name="folder_name", old_value=old_name, new_value=new_name,
         action="EDICION_MANUAL", source="usuario",

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
+from backend.core.time import utcnow
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -174,7 +175,7 @@ def reextract_document(db: Session, doc: Document) -> tuple[str, str]:
     text, method = extract_document_text(doc)
     doc.extracted_text = text
     doc.extraction_method = method
-    doc.extraction_date = datetime.utcnow()
+    doc.extraction_date = utcnow()
     db.commit()
     return text, method
 

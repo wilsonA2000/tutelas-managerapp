@@ -2,6 +2,7 @@
 
 import secrets
 from datetime import datetime, timedelta
+from backend.core.time import utcnow
 
 from jose import jwt, JWTError
 from passlib.context import CryptContext
@@ -28,13 +29,13 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(user_id: int, username: str) -> str:
-    expire = datetime.utcnow() + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+    expire = utcnow() + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
     payload = {"sub": str(user_id), "username": username, "exp": expire, "type": "access"}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 def create_refresh_token(user_id: int) -> str:
-    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     payload = {"sub": str(user_id), "exp": expire, "type": "refresh"}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -51,7 +52,7 @@ def authenticate_user(db: Session, username: str, password: str) -> User | None:
     user = db.query(User).filter(User.username == username).first()
     if not user or not verify_password(password, user.password_hash):
         return None
-    user.last_login = datetime.utcnow()
+    user.last_login = utcnow()
     db.commit()
     return user
 

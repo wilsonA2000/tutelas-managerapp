@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 from datetime import datetime
+from backend.core.time import utcnow
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -38,7 +39,7 @@ async def import_xlsx(
         tmp_path = tmp.name
 
     try:
-        version = datetime.utcnow().strftime("%Y-%m-%d_%H%M")
+        version = utcnow().strftime("%Y-%m-%d_%H%M")
         report = import_control_tutelas(
             db, tmp_path,
             source_version=version,
@@ -64,7 +65,7 @@ def import_xlsx_from_path(
     path = body.get("path")
     if not path or not Path(path).exists():
         raise HTTPException(400, f"Archivo no existe: {path}")
-    version = body.get("version") or datetime.utcnow().strftime("%Y-%m-%d_%H%M")
+    version = body.get("version") or utcnow().strftime("%Y-%m-%d_%H%M")
     return import_control_tutelas(
         db, path, source_version=version,
         apply_reconciliation=apply, dry_run=dry_run,

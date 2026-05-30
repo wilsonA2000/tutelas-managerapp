@@ -32,7 +32,7 @@ def run_nightly_analysis():
     db: Session = SessionLocal()
     try:
         # Últimos 30 días
-        since = datetime.utcnow() - timedelta(days=30)
+        since = utcnow() - timedelta(days=30)
         cases = (
             db.query(Case)
             .filter(Case.processing_status == "COMPLETO")
@@ -99,7 +99,7 @@ def run_nightly_analysis():
                 old_value="",
                 new_value=summary[:2000],
                 action="ACTIVE_LEARNING",
-                source=f"scheduler_{datetime.utcnow().strftime('%Y%m%d')}",
+                source=f"scheduler_{utcnow().strftime('%Y%m%d')}",
             ))
             db.commit()
             _logger.info("Active learning: %d sugerencias registradas", len(summary_parts))
@@ -114,7 +114,7 @@ def run_nightly_analysis():
             report = render_report(gaps, corrections)
             out_dir = Path(__file__).resolve().parent.parent.parent / "logs"
             out_dir.mkdir(exist_ok=True)
-            out_path = out_dir / f"active_learning_{datetime.utcnow().strftime('%Y%m%d')}.md"
+            out_path = out_dir / f"active_learning_{utcnow().strftime('%Y%m%d')}.md"
             out_path.write_text(report, encoding="utf-8")
             _logger.info("Reporte active learning: %s", out_path)
         except Exception as e:
@@ -127,6 +127,7 @@ def run_scheduler_thread():
     """Thread daemon que ejecuta active learning cada día a las 3:00 AM."""
     import time as _time
     from datetime import datetime as _dt, timedelta as _td
+from backend.core.time import utcnow
     while True:
         now = _dt.now()
         target = now.replace(hour=3, minute=0, second=0, microsecond=0)

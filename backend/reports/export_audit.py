@@ -15,6 +15,7 @@ import json
 import re
 import sys
 from datetime import datetime
+from backend.core.time import utcnow
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -153,7 +154,7 @@ def _generate_summary_sheet(wb: Workbook, cases: list[Case], db: Session):
     title = ws.cell(row=1, column=1, value="AUDITORIA INTEGRAL — TUTELAS GOBERNACION DE SANTANDER")
     title.font = Font(name="Calibri", bold=True, size=16, color="2E5C3E")
     ws.merge_cells("A1:F1")
-    ws.cell(row=2, column=1, value=f"Generado: {datetime.utcnow().isoformat(timespec='seconds')}")
+    ws.cell(row=2, column=1, value=f"Generado: {utcnow().isoformat(timespec='seconds')}")
 
     rows = [
         ("Total cases activos", kpis["summary"]["total_cases"]),
