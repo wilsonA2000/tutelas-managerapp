@@ -1,6 +1,7 @@
 """Cadena de razonamiento legal: almacena evidencia y explicación por cada decisión IA."""
 
 from dataclasses import dataclass, field
+from backend.core.time import utcnow
 from datetime import datetime
 
 from sqlalchemy import Column, Integer, String, Text, DateTime, Float
@@ -20,7 +21,7 @@ class ReasoningLog(Base):
     source = Column(String, nullable=True)  # filename or source description
     reasoning = Column(Text, nullable=True)  # explanation in Spanish
     evidence_json = Column(Text, nullable=True)  # JSON array of evidence snippets
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
 
 @dataclass

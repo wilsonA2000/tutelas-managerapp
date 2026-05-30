@@ -1,5 +1,6 @@
 """Endpoints auxiliares: Corte Constitucional, directorio de correos, export Excel."""
 from __future__ import annotations
+from backend.core.time import utcnow
 
 import io
 from datetime import datetime
@@ -115,7 +116,7 @@ def export_control_format(db: Session = Depends(get_db)):
         Case.tipo_actuacion != "COMUNICACION",
     ).all()
     from backend.alerts.early_warning import score_case
-    now = datetime.utcnow()
+    now = utcnow()
 
     def short(name):
         if not name: return ""

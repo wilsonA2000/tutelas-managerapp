@@ -10,6 +10,7 @@ Integrado al scheduler de FastAPI (backend/main.py).
 """
 
 from __future__ import annotations
+from backend.core.time import utcnow
 
 import logging
 from datetime import datetime, timedelta
@@ -32,7 +33,7 @@ def run_nightly_analysis():
     db: Session = SessionLocal()
     try:
         # Últimos 30 días
-        since = datetime.utcnow() - timedelta(days=30)
+        since = utcnow() - timedelta(days=30)
         cases = (
             db.query(Case)
             .filter(Case.processing_status == "COMPLETO")
@@ -99,7 +100,7 @@ def run_nightly_analysis():
                 old_value="",
                 new_value=summary[:2000],
                 action="ACTIVE_LEARNING",
-                source=f"scheduler_{datetime.utcnow().strftime('%Y%m%d')}",
+                source=f"scheduler_{utcnow().strftime('%Y%m%d')}",
             ))
             db.commit()
             _logger.info("Active learning: %d sugerencias registradas", len(summary_parts))
@@ -114,7 +115,7 @@ def run_nightly_analysis():
             report = render_report(gaps, corrections)
             out_dir = Path(__file__).resolve().parent.parent.parent / "logs"
             out_dir.mkdir(exist_ok=True)
-            out_path = out_dir / f"active_learning_{datetime.utcnow().strftime('%Y%m%d')}.md"
+            out_path = out_dir / f"active_learning_{utcnow().strftime('%Y%m%d')}.md"
             out_path.write_text(report, encoding="utf-8")
             _logger.info("Reporte active learning: %s", out_path)
         except Exception as e:

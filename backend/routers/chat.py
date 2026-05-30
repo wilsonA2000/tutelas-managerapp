@@ -10,6 +10,7 @@ Diseño LLM-optional:
 Seguridad: NUNCA SQL libre desde LLM. Solo queries pre-aprobadas con bind params.
 """
 from __future__ import annotations
+from backend.core.time import utcnow
 
 import logging
 import os
@@ -670,7 +671,7 @@ def _alertas_resumen(db: Session, msg: str) -> ChatResponse:
     from datetime import datetime
     from backend.alerts.early_warning import score_case
     cases = db.query(Case).filter(*_real_filter()).all()
-    now = datetime.utcnow()
+    now = utcnow()
     counts = {"ROJO": 0, "AMARILLO": 0, "VERDE": 0, "N/A": 0}
     rojos_top = []
     for c in cases:
@@ -749,7 +750,7 @@ def _plazos_proximos(db: Session, msg: str) -> ChatResponse:
     rows = db.query(ComplianceTracking).filter(
         ComplianceTracking.estado != "CUMPLIDO"
     ).all()
-    now = datetime.utcnow()
+    now = utcnow()
     vencidos, urgentes, por_vencer, en_plazo = [], [], [], []
     for r in rows:
         fl = r.fecha_limite or ""

@@ -1,6 +1,7 @@
 """Logica de negocio para casos de tutela."""
 
 import re
+from backend.core.time import utcnow
 import time
 from datetime import datetime
 from sqlalchemy.orm import Session, subqueryload
@@ -245,7 +246,7 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
             except Exception:
                 pass
 
-    case.updated_at = datetime.utcnow()
+    case.updated_at = utcnow()
     db.commit()
     return get_case(db, case_id)
 

@@ -5,6 +5,7 @@ Permite buscar cualquier texto en todo el ecosistema de datos.
 """
 
 from sqlalchemy import Column, Integer, String, Text, DateTime, event
+from backend.core.time import utcnow
 from datetime import datetime
 
 from backend.database.models import Base
@@ -21,7 +22,7 @@ class KnowledgeEntry(Base):
     source_name = Column(String, nullable=False)  # filename or field name
     content = Column(Text, nullable=False)
     content_hash = Column(String(64), nullable=True)  # SHA256 for dedup
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
 
 def init_fts5(engine):

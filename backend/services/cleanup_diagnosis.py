@@ -10,6 +10,7 @@ NO toca nada. Solo lee y agrupa.
 """
 
 from __future__ import annotations
+from backend.core.time import utcnow
 
 import logging
 import re
@@ -479,7 +480,7 @@ def diagnose(db: Session, base_dir: str | None = None) -> dict[str, Any]:
     }
 
     from datetime import datetime
-    result["timestamp"] = datetime.utcnow().isoformat()
+    result["timestamp"] = utcnow().isoformat()
 
     # --- Filtro base: solo casos activos (excluir DUPLICATE_MERGED) ---
     active_filter = [

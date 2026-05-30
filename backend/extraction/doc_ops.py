@@ -11,6 +11,7 @@ no romper a sus consumidores legacy (`unified*.py`, `ir_builder.py`, tests).
 """
 
 from __future__ import annotations
+from backend.core.time import utcnow
 
 import logging
 import re
@@ -174,7 +175,7 @@ def reextract_document(db: Session, doc: Document) -> tuple[str, str]:
     text, method = extract_document_text(doc)
     doc.extracted_text = text
     doc.extraction_method = method
-    doc.extraction_date = datetime.utcnow()
+    doc.extraction_date = utcnow()
     db.commit()
     return text, method
 

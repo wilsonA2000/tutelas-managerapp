@@ -9,6 +9,7 @@ Ejecuta análisis sobre la DB para detectar:
 """
 
 import logging
+from backend.core.time import utcnow
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, text
@@ -173,7 +174,7 @@ def dismiss_alert(db: Session, alert_id: int):
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
     if alert:
         alert.status = "DISMISSED"
-        alert.resolved_at = datetime.utcnow()
+        alert.resolved_at = utcnow()
         db.commit()
 
 

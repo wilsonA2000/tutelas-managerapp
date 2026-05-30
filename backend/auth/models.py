@@ -1,6 +1,7 @@
 """Modelo de usuario para autenticación."""
 
 from sqlalchemy import Column, Integer, String, DateTime
+from backend.core.time import utcnow
 from datetime import datetime
 
 from backend.database.models import Base
@@ -14,5 +15,5 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     full_name = Column(String, default="")
     role = Column(String, default="admin")  # admin | viewer (futuro)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     last_login = Column(DateTime, nullable=True)

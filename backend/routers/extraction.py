@@ -1,6 +1,7 @@
 """Router de extraccion."""
 
 import threading
+from backend.core.time import utcnow
 _extraction_lock = threading.Lock()
 
 from fastapi import APIRouter, Depends
@@ -1013,7 +1014,7 @@ def api_metrics_comparison(
         except (ValueError, AttributeError):
             return default
 
-    now = datetime.utcnow()
+    now = utcnow()
     since_dt = _parse_iso(since, now - timedelta(hours=24))
     until_dt = _parse_iso(until, now)
 

@@ -16,6 +16,7 @@ Se persisten TODAS las filas-actuación en `case_actuaciones` para preservar
 la bitácora completa (no se pierde información).
 """
 from __future__ import annotations
+from backend.core.time import utcnow
 
 import re
 import unicodedata
@@ -172,7 +173,7 @@ def import_control_tutelas(db: Session, xlsx_path: str, source_version: Optional
     """
     rows = parse_workbook(xlsx_path, source_version)
     if not source_version:
-        source_version = datetime.utcnow().strftime("%Y-%m-%d")
+        source_version = utcnow().strftime("%Y-%m-%d")
 
     # Indexar cases por rad_corto y rad_23
     db_cases = db.query(Case).all()
