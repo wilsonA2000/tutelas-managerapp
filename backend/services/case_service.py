@@ -1,10 +1,11 @@
 """Logica de negocio para casos de tutela."""
 
+import logging
 import re
 from backend.core.time import utcnow
 import time
 from datetime import datetime
-from sqlalchemy.orm import Session, subqueryload
+from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, case as sql_case
 
 from backend.database.database import strip_accents, ilike_unaccent
@@ -13,6 +14,8 @@ from backend.services.normalizer import (
     normalize_abogado, normalize_ciudad, categorize_decision_incidente,
     get_fallo_definitivo, group_by_normalized,
 )
+
+logger = logging.getLogger("tutelas.case_service")
 
 # Cache de KPIs (60 segundos)
 _kpi_cache: dict = {"data": None, "ts": 0}
@@ -243,8 +246,8 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
             try:
                 from backend.agent.memory import record_correction
                 record_correction(db, case.id, csv_col, old_value, new_value, case.folder_name or "")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("record_correction falló (best-effort): %s", e)
 
     case.updated_at = utcnow()
     db.commit()
