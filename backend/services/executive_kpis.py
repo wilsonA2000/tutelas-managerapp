@@ -13,7 +13,7 @@ from backend.core.time import utcnow
 
 import re
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -270,7 +270,7 @@ def compute_pipeline_funnel(cases: list[Case]) -> list[dict]:
     ]
 
 
-def compute_compliance_plazos(cases: list[Case], db_session=None) -> dict:
+def compute_compliance_plazos(cases: list[Case]) -> dict:
     """v8.3: plazos de cumplimiento de fallos CONCEDE.
 
     Detecta cases con fallo CONCEDE/AMPARA donde han pasado >5 días desde
@@ -281,7 +281,6 @@ def compute_compliance_plazos(cases: list[Case], db_session=None) -> dict:
     concedidas_pendientes = []
     concedidas_a_tiempo = 0
     en_sancion = 0
-    apercibimiento = 0
 
     for c in cases:
         senso = _norm(c.sentido_fallo_1st)
