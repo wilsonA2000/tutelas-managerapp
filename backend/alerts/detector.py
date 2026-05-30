@@ -10,7 +10,6 @@ Ejecuta análisis sobre la DB para detectar:
 
 import logging
 from datetime import datetime, timedelta
-from backend.core.time import utcnow
 
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
@@ -174,7 +173,7 @@ def dismiss_alert(db: Session, alert_id: int):
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
     if alert:
         alert.status = "DISMISSED"
-        alert.resolved_at = utcnow()
+        alert.resolved_at = datetime.utcnow()
         db.commit()
 
 

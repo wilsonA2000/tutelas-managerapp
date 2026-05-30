@@ -5,7 +5,6 @@ import asyncio
 import logging
 from pathlib import Path
 from datetime import datetime
-from backend.core.time import utcnow
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -751,7 +750,7 @@ def api_register_email_md():
                     doc_type="EMAIL_MD",
                     extracted_text=content,
                     extraction_method="email_md",
-                    extraction_date=utcnow(),
+                    extraction_date=datetime.utcnow(),
                     verificacion="OK",
                     verificacion_detalle="Email del caso (registrado retroactivamente)",
                     file_size=os.path.getsize(fpath) if os.path.exists(fpath) else 0,

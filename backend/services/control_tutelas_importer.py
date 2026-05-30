@@ -21,7 +21,6 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime
-from backend.core.time import utcnow
 from typing import Optional
 
 from openpyxl import load_workbook
@@ -173,7 +172,7 @@ def import_control_tutelas(db: Session, xlsx_path: str, source_version: Optional
     """
     rows = parse_workbook(xlsx_path, source_version)
     if not source_version:
-        source_version = utcnow().strftime("%Y-%m-%d")
+        source_version = datetime.utcnow().strftime("%Y-%m-%d")
 
     # Indexar cases por rad_corto y rad_23
     db_cases = db.query(Case).all()

@@ -13,7 +13,6 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
-from backend.core.time import utcnow
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -277,7 +276,7 @@ def compute_compliance_plazos(cases: list[Case], db_session=None) -> dict:
     fecha_fallo_1st sin cumplimiento registrado (señal de riesgo de incidente
     de desacato). Reusa heurística de R8 EarlyWarning.
     """
-    today = utcnow()
+    today = datetime.utcnow()
     concedidas_pendientes = []
     concedidas_a_tiempo = 0
     en_sancion = 0
@@ -342,7 +341,7 @@ def compute_impugnacion_rate(cases: list[Case]) -> dict:
 
 def executive_dashboard(db: Session) -> dict:
     """Consolida todos los KPIs ejecutivos en un único payload."""
-    now = utcnow()
+    now = datetime.utcnow()
 
     # Tomar solo casos no fusionados
     all_cases = db.query(Case).filter(Case.processing_status != "DUPLICATE_MERGED").all()

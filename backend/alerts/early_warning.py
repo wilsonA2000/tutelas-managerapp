@@ -14,7 +14,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from backend.core.time import utcnow
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -104,7 +103,7 @@ def _days_ago(date_str: Optional[str], now: Optional[datetime] = None) -> Option
     d = _parse_date(date_str)
     if not d:
         return None
-    now = now or utcnow()
+    now = now or datetime.utcnow()
     return max(0, (now - d).days)
 
 
@@ -125,7 +124,7 @@ def score_case(case: Case, now: Optional[datetime] = None) -> RiskReport:
     - INCIDENTE_HUERFANO sin padre identificado → AMARILLO
     - Todo lo demás → VERDE
     """
-    now = now or utcnow()
+    now = now or datetime.utcnow()
     origen = case.origen or "AMBIGUO"
     estado = case.estado_incidente or "N/A"
     reasons: list[str] = []
@@ -322,7 +321,7 @@ class EarlyWarningSummary:
 
 def run_early_warning(db: Session, now: Optional[datetime] = None) -> EarlyWarningSummary:
     """Evalúa todos los casos activos y retorna el summary."""
-    now = now or utcnow()
+    now = now or datetime.utcnow()
     cases = db.query(Case).filter(
         Case.processing_status.in_(("COMPLETO", "REVISION", "PENDIENTE", "EXTRAYENDO"))
     ).all()

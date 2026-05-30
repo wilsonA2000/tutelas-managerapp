@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import io
 from datetime import datetime
-from backend.core.time import utcnow
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -116,7 +115,7 @@ def export_control_format(db: Session = Depends(get_db)):
         Case.tipo_actuacion != "COMUNICACION",
     ).all()
     from backend.alerts.early_warning import score_case
-    now = utcnow()
+    now = datetime.utcnow()
 
     def short(name):
         if not name: return ""

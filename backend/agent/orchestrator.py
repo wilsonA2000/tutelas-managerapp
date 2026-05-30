@@ -140,8 +140,7 @@ def classify_and_clean_folder(db: Session, case, base_dir: str) -> dict:
                 doc.extracted_text = text
                 doc.extraction_method = method
                 from datetime import datetime
-from backend.core.time import utcnow
-                doc.extraction_date = utcnow()
+                doc.extraction_date = datetime.utcnow()
 
         text = (doc.extracted_text or "")[:1500]
         if text.strip():

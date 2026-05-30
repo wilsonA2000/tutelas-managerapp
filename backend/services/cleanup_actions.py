@@ -17,7 +17,6 @@ import logging
 import re
 from collections import Counter
 from datetime import datetime
-from backend.core.time import utcnow
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +53,7 @@ def backfill_content_hash(
     Returns:
         dict con estadisticas: total, hashed, skipped, missing_file, errors, duration_s
     """
-    start = utcnow()
+    start = datetime.utcnow()
     stats: dict[str, Any] = {
         "total_candidates": 0,
         "hashed": 0,
@@ -73,7 +72,7 @@ def backfill_content_hash(
     stats["total_candidates"] = len(candidates)
 
     if not candidates:
-        stats["duration_s"] = (utcnow() - start).total_seconds()
+        stats["duration_s"] = (datetime.utcnow() - start).total_seconds()
         return stats
 
     logger.info("F2 backfill: %d docs sin hash", len(candidates))
@@ -138,7 +137,7 @@ def backfill_content_hash(
         except Exception as e:
             logger.warning("F2 audit log write failed: %s", e)
 
-    stats["duration_s"] = round((utcnow() - start).total_seconds(), 1)
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
 
 
@@ -159,7 +158,7 @@ def backfill_emails_md(db: Session, dry_run: bool = False) -> dict[str, Any]:
     """
     from backend.email.gmail_monitor import save_email_md
 
-    start = utcnow()
+    start = datetime.utcnow()
     stats: dict[str, Any] = {
         "total_emails_with_case": 0,
         "generated": 0,
@@ -179,7 +178,7 @@ def backfill_emails_md(db: Session, dry_run: bool = False) -> dict[str, Any]:
     stats["total_emails_with_case"] = len(emails)
 
     if not emails:
-        stats["duration_s"] = (utcnow() - start).total_seconds()
+        stats["duration_s"] = (datetime.utcnow() - start).total_seconds()
         return stats
 
     logger.info("F4 backfill: %d emails candidatos para generar .md", len(emails))
@@ -243,7 +242,7 @@ def backfill_emails_md(db: Session, dry_run: bool = False) -> dict[str, Any]:
         except Exception as e:
             logger.warning("F4 audit log write failed: %s", e)
 
-    stats["duration_s"] = round((utcnow() - start).total_seconds(), 1)
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
 
 
@@ -273,7 +272,7 @@ def batch_move_no_pertenece(
     import re
     from backend.services.sibling_mover import move_document_or_package
 
-    start = utcnow()
+    start = datetime.utcnow()
     stats: dict[str, Any] = {
         "dry_run": dry_run,
         "total_no_pertenece": 0,
@@ -381,7 +380,7 @@ def batch_move_no_pertenece(
     if not dry_run:
         db.commit()
 
-    stats["duration_s"] = round((utcnow() - start).total_seconds(), 1)
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
 
 
@@ -410,7 +409,7 @@ def batch_move_cognitive_v6016(
     from backend.extraction.doc_ops import _verify_bayesian
     from backend.cognition.bayesian_assignment import infer_assignment
 
-    start = utcnow()
+    start = datetime.utcnow()
     cache = get_cache()
     if not cache._built:
         cache.build(db)
@@ -575,7 +574,7 @@ def batch_move_cognitive_v6016(
         wal_checkpoint("PASSIVE")
 
     stats["transitions"] = dict(stats["transitions"])
-    stats["duration_s"] = round((utcnow() - start).total_seconds(), 1)
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
 
 
@@ -610,7 +609,7 @@ def merge_duplicate_cases(
     Returns:
         dict con stats por par + total.
     """
-    start = utcnow()
+    start = datetime.utcnow()
     stats: dict[str, Any] = {
         "dry_run": dry_run,
         "total_pairs": len(pairs),
@@ -748,7 +747,7 @@ def merge_duplicate_cases(
         from backend.database.database import wal_checkpoint
         wal_checkpoint("PASSIVE")
 
-    stats["duration_s"] = round((utcnow() - start).total_seconds(), 1)
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
 
 
@@ -811,7 +810,7 @@ def merge_identity_groups(
     from backend.services.cleanup_diagnosis import diagnose
     from backend.services.sibling_mover import move_document_or_package
 
-    start = utcnow()
+    start = datetime.utcnow()
     stats: dict[str, Any] = {
         "dry_run": dry_run,
         "groups_processed": 0,
@@ -911,7 +910,7 @@ def merge_identity_groups(
             if not dry_run:
                 db.rollback()
 
-    stats["duration_s"] = round((utcnow() - start).total_seconds(), 1)
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
 
 
@@ -938,7 +937,7 @@ def purge_duplicates(
     from collections import defaultdict
     import shutil
 
-    start = utcnow()
+    start = datetime.utcnow()
     stats: dict[str, Any] = {
         "dry_run": dry_run,
         "scope": scope,
@@ -1028,7 +1027,7 @@ def purge_duplicates(
         ))
         db.commit()
 
-    stats["duration_s"] = round((utcnow() - start).total_seconds(), 1)
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
 
 
@@ -1055,7 +1054,7 @@ def merge_forest_fragments(
     CONF_RANK = {"ALTA": 3, "MEDIA": 2, "BAJA": 1}
     min_rank = CONF_RANK.get(min_confidence, 3)
 
-    start = utcnow()
+    start = datetime.utcnow()
     stats: dict[str, Any] = {
         "dry_run": dry_run,
         "min_confidence": min_confidence,
@@ -1147,7 +1146,7 @@ def merge_forest_fragments(
 
         stats["actions"].append(action)
 
-    stats["duration_s"] = round((utcnow() - start).total_seconds(), 1)
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
 
 
@@ -1170,7 +1169,7 @@ def backfill_radicado_23d(
     import re
     from backend.services.cleanup_diagnosis import detect_incomplete_radicados
 
-    start = utcnow()
+    start = datetime.utcnow()
     stats: dict[str, Any] = {
         "dry_run": dry_run,
         "auto_assigned": 0,
@@ -1265,7 +1264,7 @@ def backfill_radicado_23d(
     if not dry_run:
         db.commit()
 
-    stats["duration_s"] = round((utcnow() - start).total_seconds(), 1)
+    stats["duration_s"] = round((datetime.utcnow() - start).total_seconds(), 1)
     return stats
 
 
@@ -1294,7 +1293,7 @@ def reverify_sospechosos(
     """
     from backend.extraction.doc_ops import verify_document_belongs
 
-    start = utcnow()
+    start = datetime.utcnow()
     statuses = ["SOSPECHOSO"]
     if include_revisar:
         statuses.append("REVISAR")
@@ -1359,5 +1358,5 @@ def reverify_sospechosos(
         "errors": errors,
         "transitions": transitions,
         "sample_changes": sample_changes,
-        "duration_s": round((utcnow() - start).total_seconds(), 1),
+        "duration_s": round((datetime.utcnow() - start).total_seconds(), 1),
     }

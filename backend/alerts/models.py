@@ -2,7 +2,6 @@
 
 from sqlalchemy import Column, Integer, String, Text, DateTime
 from datetime import datetime
-from backend.core.time import utcnow
 
 from backend.database.models import Base
 
@@ -20,5 +19,5 @@ class Alert(Base):
     description = Column(Text, nullable=True)
     status = Column(String, nullable=False, default="NEW", index=True)
     # Status: NEW, SEEN, DISMISSED, RESOLVED
-    created_at = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)

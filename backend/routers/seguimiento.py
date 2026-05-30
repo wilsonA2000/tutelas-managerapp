@@ -1,7 +1,6 @@
 """Router de seguimiento de cumplimiento de fallos."""
 
 from datetime import datetime, timedelta, timezone
-from backend.core.time import utcnow
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -324,7 +323,7 @@ def api_update_seguimiento(record_id: int, body: dict, db: Session = Depends(get
         if field in body:
             setattr(record, field, body[field])
 
-    record.updated_at = utcnow()
+    record.updated_at = datetime.utcnow()
     db.flush()  # asegurar que record tiene los valores nuevos sin commitear aún
 
     # Construir contexto del evento
@@ -531,7 +530,7 @@ def api_extract_order(record_id: int, db: Session = Depends(get_db)):
             if fecha_limite:
                 record.fecha_limite = fecha_limite
             record.extraido_por_ia = f"REGEX:{regex_result.source}"
-            record.updated_at = utcnow()
+            record.updated_at = datetime.utcnow()
             db.commit()
             return {
                 "plazo_dias": regex_result.plazo_dias,
@@ -618,7 +617,7 @@ Extrae la orden judicial, plazo y responsable."""
                 except Exception:
                     pass
 
-        record.updated_at = utcnow()
+        record.updated_at = datetime.utcnow()
         db.commit()
 
         # Registrar token usage (LLM local = costo 0)

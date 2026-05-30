@@ -1,7 +1,6 @@
 """Modelos SQLAlchemy para la base de datos de tutelas."""
 
 from datetime import datetime
-from backend.core.time import utcnow
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, JSON, Index,
     LargeBinary, UniqueConstraint, Boolean, Float,
@@ -89,8 +88,8 @@ class Case(Base):
     folder_path = Column(String)
     processing_status = Column(String, default="PENDIENTE", index=True)  # PENDIENTE / EXTRAYENDO / REVISION / COMPLETO
     tipo_actuacion = Column(String, default="TUTELA")  # TUTELA / INCIDENTE
-    created_at = Column(DateTime, default=utcnow)
-    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Acumulación de tutelas (Decreto 2591/1991 art. 13 + CGP art. 159 supletorio).
     # Cuando un juez ordena acumular dos o más expedientes (tutela o desacato),
@@ -272,7 +271,7 @@ class Extraction(Base):
     source_page = Column(Integer)
     raw_context = Column(Text)  # Texto circundante para verificacion
     extraction_method = Column(String)  # regex / ai / manual
-    created_at = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
     document = relationship("Document", back_populates="extractions")
     case = relationship("Case", back_populates="extractions")
@@ -335,7 +334,7 @@ class AuditLog(Base):
     new_value = Column(Text)
     action = Column(String, index=True)  # event_type — ej. COMPLIANCE_STATE_CHANGED, DOC_ADDED, FIELD_EXTRACTED
     source = Column(String)              # actor — usuario|sistema|gmail_monitor|ai_deepseek|v9_regex
-    timestamp = Column(DateTime, default=utcnow)
+    timestamp = Column(DateTime, default=datetime.utcnow)
 
     # v95 — soporte para entidades específicas y UI del modal Historial
     entity_type = Column(String)         # case|document|email|compliance|field
@@ -377,8 +376,8 @@ class ComplianceTracking(Base):
 
     # Metadata
     extraido_por_ia = Column(String, default="NO")      # SI si la IA extrajo orden/plazo
-    created_at = Column(DateTime, default=utcnow)
-    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # v2 (extractor de órdenes — 2026-05-19): una fila representa UNA orden discreta
     # del fallo, no la sentencia agregada. Cardinalidad 1:N case→orden.
@@ -422,7 +421,7 @@ class CaseActuacion(Base):
     correo_juzgado = Column(String)                     # Para validación cruzada
     source = Column(String, default="control_tutelas_xlsx")  # Trazabilidad
     source_version = Column(String)                     # Fecha de exportación del Excel
-    imported_at = Column(DateTime, default=utcnow, index=True)
+    imported_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     case = relationship("Case", backref="actuaciones_registradas")
 
@@ -444,8 +443,8 @@ class CorteRevision(Base):
     fecha_seleccion = Column(String)
     fecha_fallo_corte = Column(String)
     sentido_fallo_corte = Column(String)
-    created_at = Column(DateTime, default=utcnow)
-    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class DirectorioCorreos(Base):
@@ -459,8 +458,8 @@ class DirectorioCorreos(Base):
     responsable = Column(String)
     notas = Column(String)
     activo = Column(Integer, default=1)
-    created_at = Column(DateTime, default=utcnow)
-    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class TokenUsage(Base):
@@ -468,7 +467,7 @@ class TokenUsage(Base):
     __tablename__ = "token_usage"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, default=utcnow, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     provider = Column(String, nullable=False)       # deepseek / anthropic (+ legacy histórico: google/openai/groq/cerebras/huggingface)
     model = Column(String, nullable=False)           # deepseek-chat / claude-haiku-4-5-20251001 / etc
     tokens_input = Column(Integer, default=0)

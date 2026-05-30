@@ -1003,7 +1003,6 @@ def api_metrics_comparison(
     Reusa backend.reports.benchmark.compute_period_metrics (logica pura).
     """
     from datetime import datetime, timedelta
-from backend.core.time import utcnow
     from backend.reports.benchmark import compute_period_metrics
 
     def _parse_iso(s: str | None, default: datetime) -> datetime:
@@ -1014,7 +1013,7 @@ from backend.core.time import utcnow
         except (ValueError, AttributeError):
             return default
 
-    now = utcnow()
+    now = datetime.utcnow()
     since_dt = _parse_iso(since, now - timedelta(hours=24))
     until_dt = _parse_iso(until, now)
 

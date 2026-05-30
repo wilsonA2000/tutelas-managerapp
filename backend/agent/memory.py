@@ -5,7 +5,6 @@ few-shot example en futuras extracciones del mismo tipo.
 """
 
 from datetime import datetime
-from backend.core.time import utcnow
 from dataclasses import dataclass
 
 from sqlalchemy import Column, Integer, String, Text, DateTime
@@ -24,7 +23,7 @@ class Correction(Base):
     ai_value = Column(Text, nullable=True)  # What AI extracted
     corrected_value = Column(Text, nullable=False)  # What user corrected to
     case_folder = Column(String, nullable=True)
-    created_at = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 def record_correction(db: Session, case_id: int, field_name: str,

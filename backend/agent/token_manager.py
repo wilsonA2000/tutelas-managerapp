@@ -13,7 +13,6 @@ import logging
 import hashlib
 import json
 from datetime import datetime, timedelta
-from backend.core.time import utcnow
 from dataclasses import dataclass
 
 from sqlalchemy import func, text
@@ -70,7 +69,7 @@ class TokenStats:
 def get_token_stats(db: Session, budget: TokenBudget | None = None) -> TokenStats:
     """Obtener estadísticas de consumo de tokens."""
     budget = budget or TokenBudget()
-    now = utcnow()
+    now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -179,7 +178,7 @@ def get_cached_response(instruction: str) -> dict | None:
     if not entry:
         return None
     # Check TTL
-    if (utcnow() - entry["timestamp"]).total_seconds() > _CACHE_TTL_SECONDS:
+    if (datetime.utcnow() - entry["timestamp"]).total_seconds() > _CACHE_TTL_SECONDS:
         del _RESPONSE_CACHE[key]
         return None
     logger.info(f"Cache hit for: '{instruction[:40]}' (saved ~{entry.get('tokens_saved', 0)} tokens)")
@@ -196,7 +195,7 @@ def cache_response(instruction: str, response: dict, tokens_used: int = 0):
     key = get_cache_key(instruction)
     _RESPONSE_CACHE[key] = {
         "response": response,
-        "timestamp": utcnow(),
+        "timestamp": datetime.utcnow(),
         "tokens_saved": tokens_used,
     }
 

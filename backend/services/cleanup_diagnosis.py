@@ -479,8 +479,7 @@ def diagnose(db: Session, base_dir: str | None = None) -> dict[str, Any]:
     }
 
     from datetime import datetime
-from backend.core.time import utcnow
-    result["timestamp"] = utcnow().isoformat()
+    result["timestamp"] = datetime.utcnow().isoformat()
 
     # --- Filtro base: solo casos activos (excluir DUPLICATE_MERGED) ---
     active_filter = [

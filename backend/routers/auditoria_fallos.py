@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime
-from backend.core.time import utcnow
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -109,7 +108,7 @@ def _case_to_audit_card(case: Case, now: datetime) -> dict:
 def auditoria_dashboard(db: Session = Depends(get_db)):
     """Dashboard agregado por etapa, abogado y dependencia."""
     cases = db.query(Case).filter(Case.processing_status == "COMPLETO").all()
-    now = utcnow()
+    now = datetime.utcnow()
 
     by_etapa = Counter()
     by_abogado = defaultdict(lambda: {"total": 0, "criticos": 0, "incidentes": 0, "vencidos": 0})
@@ -175,7 +174,7 @@ def auditoria_cases(
     if dependencia:
         q = q.filter(Case.dependencia_canonical == dependencia)
     cases = q.all()
-    now = utcnow()
+    now = datetime.utcnow()
     out = []
     for case in cases:
         card = _case_to_audit_card(case, now)
@@ -209,7 +208,7 @@ def auditoria_por_abogado(abogado_canonical: str, db: Session = Depends(get_db))
         Case.processing_status == "COMPLETO",
         Case.abogado_canonical == abogado_canonical,
     ).all()
-    now = utcnow()
+    now = datetime.utcnow()
 
     summary = {
         "abogado": abogado_canonical,

@@ -3,7 +3,6 @@
 import re
 import time
 from datetime import datetime
-from backend.core.time import utcnow
 from sqlalchemy.orm import Session, subqueryload
 from sqlalchemy import func, or_, case as sql_case
 
@@ -246,7 +245,7 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
             except Exception:
                 pass
 
-    case.updated_at = utcnow()
+    case.updated_at = datetime.utcnow()
     db.commit()
     return get_case(db, case_id)
 
