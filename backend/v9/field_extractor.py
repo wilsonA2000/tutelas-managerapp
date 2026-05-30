@@ -2453,6 +2453,26 @@ _RE_2DA_FILENAME = re.compile(
 _RE_1RA_FILENAME = re.compile(r"(?i)primera\s*inst|1[ºªea]*r?a?\s*inst|primerainstancia")
 
 
+# Verbo del PRIMER ordinal de la dispositiva — señal DECISIVA de instancia.
+# 2da: CONFIRMA/REVOCA/MODIFICA/INHIBE (decide sobre el fallo del a-quo).
+# 1ra: verbo de mérito (TUTELA/AMPARA/CONCEDE/NIEGA/DENEGA/DECLARA, incl. "NO CONCEDER").
+_RE_PRIMER_VERBO_DISP = re.compile(
+    r"(?i)\b(?:primero|[úu]nico)\b\s*[\.\:\)\-–—\s]{0,4}\s*(?:LA\s+|EL\s+|LOS\s+|LAS\s+)?"
+    r"(NO\s+(?:CONCED|TUTELA|AMPAR|PROTEG)\w*|CONFIRMA\w*|REVOCA\w*|MODIFICA\w*|INHIB\w*|"
+    r"TUTELA\w*|AMPARA\w*|AMP[ÁA]RES\w*|CONCED\w*|NEGA\w*|NIEG[AUE]\w*|DENEGA\w*|DENIEGA\w*|DECLARA\w*)"
+)
+
+
+def _instancia_por_dispositiva(disp: str) -> Optional[str]:
+    """'2da'/'1ra'/None según el verbo del primer ordinal de la dispositiva."""
+    if not disp:
+        return None
+    m = _RE_PRIMER_VERBO_DISP.search(disp[:300])
+    if not m:
+        return None
+    return "2da" if re.match(r"CONFIRMA|REVOCA|MODIFICA|INHIB", m.group(1).upper()) else "1ra"
+
+
 def _is_segunda_instancia(d) -> bool:
     fn = d.filename or ""
     fn_2da = bool(_RE_2DA_FILENAME.search(fn))
@@ -2461,6 +2481,16 @@ def _is_segunda_instancia(d) -> bool:
         return False
     if fn_2da:
         return True
+    # Señal DECISIVA: verbo del primer ordinal de la dispositiva REAL (leída del PDF).
+    # Antes se usaba solo el boilerplate del encabezado (_RE_ES_2DA), que marcaba como
+    # 2da a sentencias de 1ra que mencionan "segunda instancia"/"Tribunal Superior" en
+    # los derechos de impugnación (falso+ → se perdía su resolutiva y su sentido).
+    inst = _instancia_por_dispositiva(_dispositiva_verbatim(d) or "")
+    if inst == "2da":
+        return True
+    if inst == "1ra":
+        return False
+    # Sin verbo dispositivo claro → último recurso: marcador de cabecera.
     return _doc_es_realmente_2da(d.extracted_text or "")
 
 
