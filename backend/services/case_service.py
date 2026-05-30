@@ -1,5 +1,6 @@
 """Logica de negocio para casos de tutela."""
 
+import json
 import logging
 import re
 from backend.core.time import utcnow
@@ -236,6 +237,7 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
     if not case:
         return None
 
+    edited_attrs: list[str] = []
     for csv_col, new_value in fields.items():
         attr = Case.CSV_FIELD_MAP.get(csv_col)
         if not attr:
@@ -258,6 +260,7 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
 
         if old_value != new_value:
             setattr(case, attr, new_value)
+            edited_attrs.append(attr)
             db.add(AuditLog(
                 case_id=case.id,
                 field_name=csv_col,
@@ -272,6 +275,21 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
                 record_correction(db, case.id, csv_col, old_value, new_value, case.folder_name or "")
             except Exception as e:
                 logger.debug("record_correction falló (best-effort): %s", e)
+
+    # Marca los campos editados a mano como MANUAL en field_confidences_json.v9_sources,
+    # para que el pipeline v9 NO los pise/recompute en re-extracciones (persist respeta
+    # FieldSource.MANUAL). Crítico para campos DERIVADOS como `estado`, que ahora el
+    # persist recomputa salvo que sean manuales (protege la curación NULIDAD).
+    if edited_attrs:
+        try:
+            fc = json.loads(case.field_confidences_json) if case.field_confidences_json else {}
+        except (json.JSONDecodeError, TypeError):
+            fc = {}
+        sources = fc.get("v9_sources") or {}
+        for a in edited_attrs:
+            sources[a] = "manual"
+        fc["v9_sources"] = sources
+        case.field_confidences_json = json.dumps(fc, ensure_ascii=False)
 
     case.updated_at = utcnow()
     db.commit()

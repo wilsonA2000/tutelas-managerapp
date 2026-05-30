@@ -155,6 +155,12 @@ STICKY_FIELDS: frozenset[str] = frozenset({
     "accionante",
 })
 
+# Campos DERIVADOS de otros (no extraídos): deben RECOMPUTARSE cuando sus inputs
+# cambian, NO quedar fill-only (si no, `estado` queda stale tras una re-extracción
+# que llena nuevos sentido/impugnacion/incidente). El valor MANUAL se sigue
+# respetando (línea del check FieldSource.MANUAL, arriba del fill-only).
+_RECOMPUTE_FIELDS: frozenset[str] = frozenset({"estado"})
+
 
 def persist(
     db: Session,
@@ -242,7 +248,9 @@ def persist(
         # texto del Auto de incidente reemplazando observaciones de IA).
         # Para forzar refresh: marcar el campo MANUAL=null en v9_sources, o
         # editar a mano vía UI/UPDATE.
-        if current:
+        # Excepción: los campos DERIVADOS (_RECOMPUTE_FIELDS, ej. `estado`) SÍ se
+        # recomputan aunque ya tengan valor — su valor MANUAL ya se respetó arriba.
+        if current and v9_key not in _RECOMPUTE_FIELDS:
             continue
         if current == value:
             continue
