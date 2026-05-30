@@ -17,7 +17,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from backend.database.models import Case
+from backend.database.models import Case, Email
 from backend.v9.regex_pass import _rad_corto_from_23, _rad_corto_from_folder
 
 
@@ -187,7 +187,6 @@ def compare_cases(db: Session, source_id: int, target_id: int) -> dict:
         })
 
     n_docs_source = len(source.documents)
-    from backend.database.models import Email
     n_emails_source = db.query(Email).filter(Email.case_id == source_id).count()
     can_delete = (n_docs_source == 0 and n_emails_source == 0)
 
