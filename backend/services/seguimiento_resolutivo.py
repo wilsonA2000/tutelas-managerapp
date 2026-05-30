@@ -17,6 +17,7 @@ Reusa toda la clasificación de `seguimiento_extractor` (verbo/destinatario/plaz
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,8 @@ from typing import Optional
 
 from backend.services import seguimiento_extractor as SE
 from backend.services.seguimiento_extractor import OrdenDeCumplimiento
+
+logger = logging.getLogger("tutelas.seguimiento_resolutivo")
 
 # Umbral para considerar una página "con texto" (vs escaneada).
 _MIN_CHARS_PER_PAGE = 100
@@ -151,7 +154,8 @@ def _llm_parse_resolutivo(texto: str) -> list[dict]:
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         data = json.loads(m.group(0) if m else raw)
         return data.get("ordenes", []) or []
-    except Exception:
+    except Exception as e:
+        logger.debug("LLM resolutivo no parseable: %s", e)
         return []
 
 
@@ -201,14 +205,30 @@ def extract_ordenes_focalizado(
     El caller debe haber verificado que `file_path` es la sentencia del caso
     (no un auto). El filtro por sentido del fallo se aplica igual que en v2.
     """
-    # Filtro por sentido (reusa la lógica v2: fallos favorables a SED → sin órdenes)
+    # Filtro por sentido (réplica EXACTA del guard v2 en seguimiento_extractor:
+    # fallos favorables a SED → sin órdenes). Sin este filtro completo, un fallo
+    # que NIEGA en 1ra sin 2da instancia bajaba al LLM fallback, que inventaba
+    # órdenes (falso positivo del resolutivo).
     s1 = (sentido_fallo_1st or "").upper().strip()
     s2 = (sentido_fallo_2nd or "").upper().strip()
+    _vacio = ResultadoResolutivo([], "vacio", 0, 0, False)
     if s2:
-        if "REVOCA" in s2 and not ("NIEGA" in s1 or "IMPROCED" in s1):
-            return ResultadoResolutivo([], "vacio", 0, 0, False)
-        if ("CONFIRMA" in s2 or "MODIFICA" in s2) and ("NIEGA" in s1 or "IMPROCED" in s1):
-            return ResultadoResolutivo([], "vacio", 0, 0, False)
+        if "REVOCA" in s2:
+            # revocan rechazo → desfavorable SED (puede haber órdenes, seguir);
+            # revocan concede → favorable SED (sin órdenes)
+            if not ("NIEGA" in s1 or "IMPROCED" in s1):
+                return _vacio
+        elif "CONFIRMA" in s2 or "MODIFICA" in s2:
+            # 2da confirma/modifica → mantiene la 1ra instancia
+            if "NIEGA" in s1 or "IMPROCED" in s1:
+                return _vacio  # confirmaron rechazo → favorable SED
+            if "CONCEDE" not in s1 and "TUTELAR" not in s1 and "AMPAR" not in s1:
+                return _vacio
+        elif not SE._sentido_es_concede(s2):
+            return _vacio
+    else:
+        if not SE._sentido_es_concede(s1):
+            return _vacio
 
     tail, n_leidas, fue_ocr = read_resolutive_tail(file_path, n_tail_pages)
     if not tail.strip():
@@ -243,8 +263,8 @@ def extract_ordenes_focalizado(
                 if llm_ordenes:
                     metodo = "llm_tail_ocr" if fue_ocr else "llm_tail"
                     return ResultadoResolutivo(llm_ordenes, metodo, len(tail), n_leidas, fue_ocr)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Fallback LLM resolutivo falló: %s", e)
 
     return ResultadoResolutivo([], "vacio", len(tail), n_leidas, fue_ocr)
 
