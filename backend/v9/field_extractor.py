@@ -1541,6 +1541,13 @@ def extract_fecha_ingreso_for_case(db: Session, case: Case) -> tuple[Optional[st
             return v, "auto"
 
     # 2) recap del auto admisorio en otros docs (sentencia recapitula "mediante auto del ...")
+    #    Cota: la admisión SIEMPRE precede al fallo. Un recap posterior al fallo más
+    #    temprano conocido (1ra o 2da) NO es la fecha de admisión — suele ser una fecha
+    #    de incidente/requerimiento citada en docs de incidente. Sin esta cota, casos de
+    #    folder incidente-only quedaban con fecha_ingreso posterior (o futura) al fallo.
+    _fallos = [f for f in (_parse_ddmmyyyy(getattr(case, "fecha_fallo_1st", None)),
+                           _parse_ddmmyyyy(getattr(case, "fecha_fallo_2nd", None))) if f]
+    _earliest_fallo = min(_fallos) if _fallos else None
     for dt in ("SENTENCIA_1RA", "SENTENCIA_2DA", "NOTIFICACION", "NOTIFICACION_FALLO",
                "RESPUESTA", "OFICIO_CUMPLIMIENTO", "INCIDENTE_DESACATO"):
         for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt).all():
@@ -1549,6 +1556,9 @@ def extract_fecha_ingreso_for_case(db: Session, case: Case) -> tuple[Optional[st
                 continue
             v = _fecha_auto_recap_from_text(t, yh)
             if v:
+                vd = _parse_ddmmyyyy(v)
+                if _earliest_fallo and vd and vd > _earliest_fallo:
+                    continue  # posterior al fallo → no es la admisión
                 return v, "recap"
 
     # 3) fecha del primer email cuyo subject indica que lleva/notifica el auto admisorio.
