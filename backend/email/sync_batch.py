@@ -20,7 +20,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -49,6 +49,12 @@ from backend.email.matcher import EmailSignals, resolve_thread_parent, score_cas
 from backend.email.rad_utils import reconcile as rad_reconcile
 
 logger = logging.getLogger("tutelas.sync_batch")
+
+
+def _utcnow() -> datetime:
+    """UTC naive — reemplazo de datetime.utcnow() (deprecado en 3.12+).
+    Mantiene el contrato naive-UTC del módulo (date_received, processed_at)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -139,7 +145,7 @@ def _process_one_message(
             dt = parsedate_to_datetime(date_str)
             date_received = dt.astimezone(timezone.utc).replace(tzinfo=None)
         except Exception:
-            date_received = datetime.utcnow()
+            date_received = _utcnow()
 
         body = _extract_body_complete(msg.get("payload", {}))
         att_parts = _find_attachment_parts(msg.get("payload", {}))
@@ -286,7 +292,7 @@ def _persist_email(
         case_id=case.id if case else None,
         attachments=[],
         status=status,
-        processed_at=datetime.utcnow(),
+        processed_at=_utcnow(),
         in_reply_to=in_reply_to_hdr or None,
         references_header=references_hdr or None,
         match_score=match_score or None,
@@ -462,7 +468,7 @@ def check_inbox_batch(
     _CUMULATIVE["total_folders_created"] += len(batch_stats["new_folders"])
     _CUMULATIVE["total_attachments"] += batch_stats["attachments_downloaded"]
     _CUMULATIVE["total_md_files"] += batch_stats["md_files_created"]
-    _CUMULATIVE["last_batch_ts"] = datetime.utcnow().isoformat()
+    _CUMULATIVE["last_batch_ts"] = _utcnow().isoformat()
     _CUMULATIVE["last_cursor"] = next_cursor
 
     return {

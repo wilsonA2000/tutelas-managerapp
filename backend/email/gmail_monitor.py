@@ -11,7 +11,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -30,6 +30,14 @@ from backend.email.case_resolver import (
 )
 
 logger = logging.getLogger("tutelas.gmail")
+
+
+def _utcnow() -> datetime:
+    """UTC naive — reemplazo de datetime.utcnow() (deprecado en 3.12+).
+
+    Mantiene el contrato naive-UTC que usa el resto del módulo (date_received,
+    processed_at, etc. se guardan naive vía .replace(tzinfo=None))."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
 TOKEN_PATH = _APP_DIR / "gmail_token.json"
@@ -506,7 +514,7 @@ def _is_duplicate(db: Session, radicado_corto: str, tipo: str, date: datetime) -
     if not radicado_corto:
         return False
     from datetime import timedelta
-    since = date - timedelta(hours=24) if date else datetime.utcnow() - timedelta(hours=24)
+    since = date - timedelta(hours=24) if date else _utcnow() - timedelta(hours=24)
     existing = db.query(Email).filter(
         Email.subject.contains(radicado_corto),
         Email.date_received >= since,
@@ -789,8 +797,8 @@ def download_attachments(
     if email_id and deduped > 0 and not guardados:
         try:
             db.query(Email).filter(Email.id == email_id).update({"status": "REENVIO_SIN_NUEVOS"})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("No se pudo marcar email %s como REENVIO_SIN_NUEVOS: %s", email_id, e)
 
     return guardados, ignorados
 
@@ -809,13 +817,13 @@ def save_email_md(save_dir: Path, metadata: dict, body: str, adjuntos: list,
     if not save_dir.exists():
         return None
 
-    date_part = datetime.utcnow().strftime("%Y%m%d")
+    date_part = _utcnow().strftime("%Y%m%d")
     try:
         from email.utils import parsedate_to_datetime
         dt = parsedate_to_datetime(metadata.get("date", ""))
         date_part = dt.strftime("%Y%m%d")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Fecha de email no parseable (%r), uso fecha actual: %s", metadata.get("date", ""), e)
 
     clean_subject = re.sub(r'[<>:"/\\|?*\n\r]', '', (metadata.get("subject") or "sin_asunto")[:50]).strip()
     clean_subject = re.sub(r'\s+', '_', clean_subject)
@@ -864,7 +872,7 @@ def save_email_md(save_dir: Path, metadata: dict, body: str, adjuntos: list,
                     doc_type="EMAIL_MD",
                     extracted_text=content,
                     extraction_method="email_md",
-                    extraction_date=datetime.utcnow(),
+                    extraction_date=_utcnow(),
                     verificacion="OK",
                     verificacion_detalle="Email del caso (generado automaticamente)",
                     file_size=len(content.encode("utf-8")),
@@ -911,7 +919,7 @@ def update_case_fields(db: Session, case: Case, tipo: str, data: dict) -> list[s
         updated.append("IMPUGNACION")
 
     if updated:
-        case.updated_at = datetime.utcnow()
+        case.updated_at = _utcnow()
         for field in updated:
             db.add(AuditLog(
                 case_id=case.id, field_name=field,
@@ -1018,7 +1026,7 @@ def sync_inbox(db: Session, progress_cb=None) -> list[dict]:
                                 dt = parsedate_to_datetime(date_str)
                                 date_received = dt.astimezone(timezone.utc).replace(tzinfo=None)
                             except Exception:
-                                date_received = datetime.utcnow()
+                                date_received = _utcnow()
 
                             tipo = classify_email_type(subject, sender)
                             radicado_data = extract_radicado(f"{subject}")
@@ -1029,7 +1037,7 @@ def sync_inbox(db: Session, progress_cb=None) -> list[dict]:
                                 date_received=date_received, body_preview="",
                                 case_id=case.id if case else None,
                                 attachments=[], status="ASIGNADO" if case else "PENDIENTE",
-                                processed_at=datetime.utcnow(),
+                                processed_at=_utcnow(),
                             )
                             db.add(email_record)
                             existing_ids.add(message_id)
@@ -1103,8 +1111,8 @@ def check_inbox(db: Session) -> list[dict]:
                         service.users().messages().modify(
                             userId="me", id=msg_ref["id"], body={"removeLabelIds": ["UNREAD"]}
                         ).execute()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("No se pudo marcar leído (duplicado) %s: %s", msg_ref.get("id"), e)
                     continue
 
                 subject = _normalize_typos(headers.get("Subject", ""))
@@ -1120,8 +1128,8 @@ def check_inbox(db: Session) -> list[dict]:
                         service.users().messages().modify(
                             userId="me", id=msg_ref["id"], body={"removeLabelIds": ["UNREAD"]}
                         ).execute()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("No se pudo marcar leído (ignorado) %s: %s", msg_ref.get("id"), e)
                     results.append({"subject": subject, "accion": "IGNORADO", "error": None})
                     continue
 
@@ -1133,7 +1141,7 @@ def check_inbox(db: Session) -> list[dict]:
                     dt = parsedate_to_datetime(date_str)
                     date_received = dt.astimezone(timezone.utc).replace(tzinfo=None)
                 except Exception:
-                    date_received = datetime.utcnow()
+                    date_received = _utcnow()
 
                 # Extraer body y adjuntos
                 body = _extract_body_complete(msg.get("payload", {}))
@@ -1155,8 +1163,8 @@ def check_inbox(db: Session) -> list[dict]:
                     cc_match = CC_ACCIONANTE.pattern.search(f"{subject}\n{body[:5000]}")
                     if cc_match:
                         radicado_data["cc_accionante"] = cc_match.group(1)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Extracción de CC accionante falló: %s", e)
 
                 # v5.4.4: aplicar rad_utils.reconcile para fix zfill bug
                 # Si rad23 es válido, descartar rad_corto extraído por regex y re-derivar
@@ -1270,8 +1278,8 @@ def check_inbox(db: Session) -> list[dict]:
                         # Refrescar cache con el nuevo caso
                         try:
                             get_cache().refresh_one(db, case.id)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("refresh_one de cache falló para caso %s: %s", case.id, e)
 
                 # ── REGISTRAR EMAIL EN DB PRIMERO (v4.8 Provenance) ──
                 # Creamos el Email antes que los Documents para tener email_id
@@ -1326,7 +1334,7 @@ def check_inbox(db: Session) -> list[dict]:
                     case_id=case.id if case else None,
                     attachments=[],  # se actualiza despues de download
                     status=_email_status,
-                    processed_at=datetime.utcnow(),
+                    processed_at=_utcnow(),
                     in_reply_to=in_reply_to_hdr or None,
                     references_header=references_hdr or None,
                     match_score=match_score or None,
@@ -1373,8 +1381,8 @@ def check_inbox(db: Session) -> list[dict]:
                     service.users().messages().modify(
                         userId="me", id=msg_ref["id"], body={"removeLabelIds": ["UNREAD"]}
                     ).execute()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("No se pudo marcar leído (procesado) %s: %s", msg_ref.get("id"), e)
 
                 results.append({
                     "subject": subject,
