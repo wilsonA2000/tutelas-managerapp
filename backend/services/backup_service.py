@@ -10,6 +10,7 @@ Funcionalidades:
 import shutil
 import sqlite3
 import logging
+from contextlib import closing
 from pathlib import Path
 from datetime import datetime
 
@@ -58,12 +59,11 @@ def create_backup(reason: str = "manual") -> dict:
     backup_path = BACKUPS_DIR / backup_name
 
     try:
-        # Usar sqlite3 backup API — seguro incluso con WAL mode activo
-        source = sqlite3.connect(str(db_path))
-        dest = sqlite3.connect(str(backup_path))
-        source.backup(dest)
-        dest.close()
-        source.close()
+        # Usar sqlite3 backup API — seguro incluso con WAL mode activo.
+        # closing() garantiza cerrar ambas conexiones aunque backup() falle.
+        with closing(sqlite3.connect(str(db_path))) as source, \
+                closing(sqlite3.connect(str(backup_path))) as dest:
+            source.backup(dest)
 
         size_mb = round(backup_path.stat().st_size / (1024 * 1024), 2)
         logger.info(f"Backup creado: {backup_name} ({size_mb} MB) - {reason}")
@@ -126,9 +126,8 @@ def restore_backup(filename: str) -> dict:
 
     # Verificar integridad del backup
     try:
-        conn = sqlite3.connect(str(backup_path))
-        result = conn.execute("PRAGMA integrity_check").fetchone()
-        conn.close()
+        with closing(sqlite3.connect(str(backup_path))) as conn:
+            result = conn.execute("PRAGMA integrity_check").fetchone()
         if result[0] != "ok":
             return {"error": f"Backup corrupto: {result[0]}"}
     except Exception as e:
