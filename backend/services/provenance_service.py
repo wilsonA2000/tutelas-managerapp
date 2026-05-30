@@ -71,17 +71,6 @@ def get_package_by_email(db: Session, email_id: int) -> dict[str, Any] | None:
     }
 
 
-def get_package_by_message_id(db: Session, gmail_message_id: str) -> dict[str, Any] | None:
-    """Devuelve paquete por el gmail message_id (alternativa a email_id).
-
-    Util cuando tenemos el string del message_id pero no el id numerico de la DB.
-    """
-    email = db.query(Email).filter(Email.message_id == gmail_message_id).first()
-    if not email:
-        return None
-    return get_package_by_email(db, email.id)
-
-
 def has_siblings(db: Session, doc_id: int) -> bool:
     """True si el doc tiene al menos 1 hermano (mas alla de si mismo)."""
     siblings = get_siblings(db, doc_id)
