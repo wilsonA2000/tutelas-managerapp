@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
 from backend.database.models import Case, Document, Email
 from backend.services.provenance_service import count_linked_documents, count_orphan_documents
@@ -213,8 +212,12 @@ def detect_forest_fragments(db: Session) -> list[dict]:
                         tail1 = rad[idx1 + 4:]
                         tail2 = existing_rad[idx2 + 4:]
                         # Extraer secuencia: si tiene 7+ dígitos → seq=primeros len-2, sino → todo
-                        seq1 = int(tail1[:-2]) if len(tail1) >= 7 else int(tail1)
-                        seq2 = int(tail2[:-2]) if len(tail2) >= 7 else int(tail2)
+                        # Guard: tail vacío (radicado que termina justo en "2026") → no-match
+                        try:
+                            seq1 = int(tail1[:-2]) if len(tail1) >= 7 else int(tail1)
+                            seq2 = int(tail2[:-2]) if len(tail2) >= 7 else int(tail2)
+                        except ValueError:
+                            continue
                         if seq1 == seq2 and seq1 > 0:
                             parent_id = cid
                             break
@@ -479,7 +482,6 @@ def diagnose(db: Session, base_dir: str | None = None) -> dict[str, Any]:
         "reextraction_candidates": {},
     }
 
-    from datetime import datetime
     result["timestamp"] = utcnow().isoformat()
 
     # --- Filtro base: solo casos activos (excluir DUPLICATE_MERGED) ---
