@@ -66,7 +66,11 @@ def _find_canonical_for_merged(db: Session, merged_case: Case) -> Case | None:
             ).all()
             for c in cand_by_rad23:
                 c_digits = re.sub(r"\D", "", c.radicado_23_digitos or "")
-                if len(c_digits) >= 18 and c_digits[:20] == digits[:20]:
+                # rad21 = identidad de tutela (despacho+año+secuencia completa);
+                # los 2 dígitos finales son la instancia/recurso. Comparar [:21],
+                # NO [:20] (que descartaría el último dígito de la secuencia y
+                # fusionaría tutelas distintas, p.ej. 2026-00045 vs 2026-00046).
+                if len(c_digits) >= 21 and c_digits[:21] == digits[:21]:
                     return c
             # Fallback: folder con mismo rad_corto + juzgado matching
             cand_by_folder = db.query(Case).filter(
