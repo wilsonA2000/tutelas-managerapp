@@ -9,7 +9,6 @@ from backend.extraction.doc_ops import reextract_document
 def get_review_queue(db: Session) -> list[dict]:
     """Obtener casos que necesitan revision. Optimizado v4.0: 3 queries en vez de 1+2N."""
     from sqlalchemy.orm import selectinload
-    from sqlalchemy import func
 
     # QUERY 1: Casos con eager load de documentos (evita N lazy loads)
     cases = db.query(Case).filter(

@@ -1,7 +1,7 @@
 """Servicio de gestion de emails."""
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from backend.database.models import Email, Case
 from backend.database.database import ilike_unaccent
 
