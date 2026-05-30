@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 import os
-import signal
 import subprocess
 import time
 from pathlib import Path
@@ -134,6 +133,9 @@ def _spawn_llm() -> int:
     log_fp = open(log_path, "wb")
     proc = subprocess.Popen(cmd, stdout=log_fp, stderr=subprocess.STDOUT,
                             start_new_session=True)
+    # El hijo ya tiene su propio descriptor (dup en exec); cerrar el del padre
+    # para no fugar file descriptors en spawns repetidos.
+    log_fp.close()
     PID_FILE.write_text(str(proc.pid))
     logger.info("llama-server lanzado pid=%d log=%s", proc.pid, log_path.name)
     return proc.pid
@@ -187,8 +189,8 @@ def ensure_llm_up(wait_s: int = 60) -> bool:
             logger.info("llama-server listo tras %ds", i)
             try:
                 PAUSE_FLAG.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("No se pudo limpiar PAUSE_FLAG: %s", e)
             return True
         time.sleep(1)
     logger.warning("llama-server no listo tras %ds (puede seguir cargando)", wait_s)
