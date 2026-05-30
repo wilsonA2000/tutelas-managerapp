@@ -594,7 +594,10 @@ def _apply_cognitive_rules(case, doc_ir, ids: IdentifierSet,
         rad23_in_doc = re.findall(r"\d{18,23}", full_text[:8000])
         for raw in rad23_in_doc[:5]:
             other_norm = _norm_digits(raw)
-            if len(other_norm) < 18 or other_norm[:20] == case_rad23_norm[:20]:
+            # Mismo proceso (difieren solo en sufijo de etapa) → no es de otro
+            # expediente. Usar _same_rad23, NO [:20] (que descarta el último
+            # dígito de la secuencia y confunde 00045 con 00046).
+            if len(other_norm) < 18 or _same_rad23(other_norm, case_rad23_norm):
                 continue
             try:
                 from backend.database.database import SessionLocal
@@ -606,7 +609,7 @@ def _apply_cognitive_rules(case, doc_ir, ids: IdentifierSet,
                     ).all()
                     for oc in other:
                         ocn = _norm_digits(oc.radicado_23_digitos or "")
-                        if len(ocn) >= 18 and ocn[:20] == other_norm[:20] and oc.id != getattr(case, "id", None):
+                        if len(ocn) >= 18 and _same_rad23(ocn, other_norm) and oc.id != getattr(case, "id", None):
                             reasons_against.append(
                                 f"R12: doc menciona rad23 de case {oc.id} (pertenece a otro expediente)"
                             )
