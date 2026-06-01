@@ -131,6 +131,7 @@ _LLM_FILLABLE = (
     "derecho_vulnerado",
     "accionados",
     "vinculados",
+    "abogado_responsable",
 )
 
 
@@ -160,34 +161,50 @@ def _filter_by_consistency(fields, missing: list[str]) -> list[str]:
     return [f for f in missing if f not in excluded]
 
 
-_PROMPT = """/no_think
-Eres un extractor jurídico. Devuelve SOLO un JSON con los campos solicitados.
-Si un campo no está claro en el texto, devuelve cadena vacía "".
+# Instrucciones específicas por campo para el prompt enriquecido (3A).
+# Cada entrada: una o dos líneas que guían al modelo para ese campo.
+_FIELD_INSTRUCTIONS: dict[str, str] = {
+    "accionante":        "Nombre completo. Si actúa personero → 'PERSONERÍA MUNICIPAL DE [MUNICIPIO]'. NUNCA incluir 'VS', 'Y OTROS', correos ni cédulas.",
+    "accionados":        "Entidades/personas demandadas, separadas por coma. Casi siempre Secretaría de Educación de Santander.",
+    "vinculados":        "Entidades vinculadas al proceso pero no accionadas directamente.",
+    "derecho_vulnerado": "Derecho fundamental. En esta Secretaría casi siempre EDUCACION.",
+    "asunto":            "1 línea ≤120 chars. Qué pide el accionante (ej. REINTEGRO DOCENTE, NOMBRAMIENTO).",
+    "pretensiones":      "Transcripción resumida de lo solicitado ≤450 chars. No incluir defensas ni respuestas.",
+    "responsable_desacato": "Nombre completo del funcionario contra quien va el incidente de desacato.",
+    "responsable_desacato_2": "Nombre del responsable del segundo incidente de desacato.",
+    "responsable_desacato_3": "Nombre del responsable del tercer incidente de desacato.",
+    "decision_incidente":   "SI (sancionado) / NO (archivado) / EN_TRAMITE (abierto).",
+    "decision_incidente_2": "SI / NO / EN_TRAMITE para el segundo incidente.",
+    "decision_incidente_3": "SI / NO / EN_TRAMITE para el tercer incidente.",
+    "quien_impugno":     "ACCIONANTE / ACCIONADO / MINISTERIO_PUBLICO / AMBOS. La parte que interpuso el recurso de impugnación.",
+    "abogado_responsable": "Nombre del abogado de la SED que firmó la respuesta (solo si hay RESPUESTA SED en el expediente).",
+}
 
-Campos a extraer: {fields}
+_PROMPT_TEMPLATE = """/no_think
+Eres un extractor jurídico de tutelas colombianas (Gobernación de Santander).
+Devuelve SOLO un JSON válido con los campos pedidos. Si no encuentras un valor → "".
 
-Definiciones:
-- quien_impugno: nombre de la parte que impugnó (ACCIONANTE o ACCIONADO o "")
-- responsable_desacato: nombre completo del funcionario contra quien va el incidente
-- decision_incidente: SI / NO / EN_TRAMITE
-- asunto: 1 línea, qué pide el accionante (≤ 120 caracteres)
-- pretensiones: lista resumida de lo solicitado (≤ 200 caracteres)
-- derecho_vulnerado: derecho fundamental invocado (SALUD, EDUCACION, PETICION, ...)
-- accionados: entidades/personas demandadas, separadas por coma
-- vinculados: entidades vinculadas (no accionados directos)
+{field_block}
 
-Responde SOLO con JSON: {{"campo": "valor", ...}}
+REGLAS CRÍTICAS:
+- Si el municipio del juzgado es Bucaramanga, Floridablanca, Girón, Barrancabermeja o Piedecuesta
+  Y el accionado principal es la Secretaría de Educación de Santander → puede haber falta de legitimación pasiva.
+- pretensiones: transcribir verbatim del escrito de tutela; NO tomar defensas ni respuestas de la SED.
+- Si no encuentras el valor con certeza → devuelve cadena vacía.
 
-Texto:
+Texto del expediente:
 {text}
-"""
+
+Responde SOLO JSON: {{"campo": "valor"}}"""
 
 
 def _build_prompt(missing: list[str], text: str) -> str:
-    # El texto ya viene curado field-aware (backend/v9/field_context.py): solo las
-    # páginas relevantes al campo. Aquí solo un tope de seguridad.
+    """Construye prompt estructurado con instrucciones por campo (3A)."""
+    lines = [f"- {f}: {_FIELD_INSTRUCTIONS.get(f, 'extraer del texto')}" for f in missing]
+    field_block = "Campos a extraer:\n" + "\n".join(lines)
+    # Cap de texto a 10K chars (seguridad; el campo-affinity de 3B ya lo filtra upstream)
     t = (text or "")[:10000]
-    return _PROMPT.format(fields=", ".join(missing), text=t)
+    return _PROMPT_TEMPLATE.format(field_block=field_block, text=t)
 
 
 def _llm_disabled() -> bool:
@@ -261,12 +278,71 @@ def _parse_json_loose(raw: str) -> dict:
         return {}
 
 
-def run(fields: ExtractedFields, full_text: str) -> tuple[ExtractedFields, int]:
+# 3B: Afinidad campo → tipos de doc más relevantes para buscarlo.
+# Para cada campo faltante se incluye texto de esos doc_types prioritariamente.
+_FIELD_DOC_AFFINITY: dict[str, list[str]] = {
+    "pretensiones":           ["DEMANDA_TUTELA", "ESCRITO_TUTELA"],
+    "accionados":             ["DEMANDA_TUTELA", "ESCRITO_TUTELA", "PDF_AUTO_ADMISORIO", "AUTO_ADMISORIO"],
+    "vinculados":             ["DEMANDA_TUTELA", "ESCRITO_TUTELA", "AUTO_VINCULA"],
+    "derecho_vulnerado":      ["DEMANDA_TUTELA", "ESCRITO_TUTELA"],
+    "asunto":                 ["DEMANDA_TUTELA", "ESCRITO_TUTELA", "RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"],
+    "responsable_desacato":   ["PDF_INCIDENTE", "AUTO_INCIDENTE", "INCIDENTE_DESACATO"],
+    "responsable_desacato_2": ["PDF_INCIDENTE", "AUTO_INCIDENTE"],
+    "responsable_desacato_3": ["PDF_INCIDENTE", "AUTO_INCIDENTE"],
+    "decision_incidente":     ["AUTO_INCIDENTE", "PDF_INCIDENTE"],
+    "decision_incidente_2":   ["AUTO_INCIDENTE", "PDF_INCIDENTE"],
+    "decision_incidente_3":   ["AUTO_INCIDENTE", "PDF_INCIDENTE"],
+    "quien_impugno":          ["PDF_IMPUGNACION", "PDF_SENTENCIA_2DA", "DOCX_IMPUGNACION"],
+    "abogado_responsable":    ["RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"],
+}
+
+_CONTEXT_CAP = 8_000  # chars máximos para el texto de contexto del LLM
+
+
+def build_context_for_fields(missing: list[str], doc_texts: dict[str, str]) -> str:
+    """Construye texto de contexto para el LLM seleccionando docs por afinidad.
+
+    `doc_texts`: dict {doc_type: texto_cabeza_cola}. Puede haber varios docs del
+    mismo tipo — se separan con '---'.
+
+    Para cada campo faltante se incluyen los tipos de doc con mayor afinidad primero.
+    Se llena el presupuesto de `_CONTEXT_CAP` chars sin repetir texto ya incluido.
+    """
+    if not doc_texts:
+        return ""
+
+    # Ordenar tipos de doc por relevancia para los campos faltantes
+    type_relevance: dict[str, int] = {}
+    for field in missing:
+        for rank, dtype in enumerate(_FIELD_DOC_AFFINITY.get(field, [])):
+            type_relevance[dtype] = max(type_relevance.get(dtype, 0), len(missing) - rank)
+
+    # Ordenar por relevancia desc, luego alpha para determinismo
+    ordered = sorted(doc_texts.keys(),
+                     key=lambda dt: (-type_relevance.get(dt, 0), dt))
+
+    parts: list[str] = []
+    used = 0
+    for dtype in ordered:
+        snippet = (doc_texts[dtype] or "").strip()
+        if not snippet:
+            continue
+        remaining = _CONTEXT_CAP - used
+        if remaining <= 200:
+            break
+        chunk = snippet[:remaining]
+        parts.append(chunk)
+        used += len(chunk) + 5  # +5 for separator
+
+    return "\n---\n".join(parts)
+
+
+def run(fields: ExtractedFields, full_text: str,
+        doc_texts: Optional[dict[str, str]] = None) -> tuple[ExtractedFields, int]:
     """Llena campos faltantes con UNA llamada multi-campo. Retorna (fields, llm_calls).
 
-    `full_text` es la concatenación del texto de los docs más relevantes
-    (típicamente: auto_admisorio + sentencia + impugnación). Se cap-ea a
-    8K caracteres en el prompt.
+    `full_text`: texto de fallback si `doc_texts` no se provee.
+    `doc_texts`: dict {doc_type: texto} para selección por afinidad (3B).
     """
     if _llm_disabled():
         return fields, 0
@@ -278,11 +354,17 @@ def run(fields: ExtractedFields, full_text: str) -> tuple[ExtractedFields, int]:
     if not missing_llm:
         return fields, 0
 
-    if not full_text or len(full_text.strip()) < 100:
-        logger.info("LLM skip: texto insuficiente (%d chars)", len(full_text or ""))
+    # 3B: usar texto con afinidad por campo si está disponible; fallback a full_text
+    if doc_texts:
+        context_text = build_context_for_fields(missing_llm, doc_texts)
+    else:
+        context_text = full_text or ""
+
+    if not context_text or len(context_text.strip()) < 100:
+        logger.info("LLM skip: texto insuficiente (%d chars)", len(context_text))
         return fields, 0
 
-    prompt = _build_prompt(missing_llm, full_text)
+    prompt = _build_prompt(missing_llm, context_text)
     raw = _call_llm(prompt, missing_llm)
     if not raw:
         return fields, 0  # falló silencioso, no hay llm_call exitoso

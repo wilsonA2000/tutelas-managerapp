@@ -264,10 +264,36 @@ def extract_case(
         from backend.v9 import field_context
         missing = [f for f in fields.missing_fields() if f in llm_gap_fill._LLM_FILLABLE]
         full_text = field_context.build_field_context(db, case, missing) if missing else ""
-        if not full_text:  # fallback defensivo si no halló docs por tipo
-            full_text = "\n\n".join(d.text for d in docs_ok[:3])[:10000]
-        fields, llm_calls = llm_gap_fill.run(fields, full_text)
+        # Fallback 3B: si field_context no encontró anclas, armar doc_texts por tipo
+        # desde extracted_text en DB y dejar que build_context_for_fields elija los
+        # más relevantes para los campos faltantes (mejor que los 3 primeros genéricos).
+        doc_texts: "dict[str, str] | None" = None
+        if not full_text and docs_ok:
+            doc_texts = {}
+            for d in docs_ok:
+                dtype = (d.doc_type or "PDF_OTRO").upper()
+                snippet = (d.text or "")[:4000]
+                if snippet:
+                    doc_texts[dtype] = (doc_texts.get(dtype, "") + "\n---\n" + snippet).lstrip("\n-")
+        fields, llm_calls = llm_gap_fill.run(fields, full_text, doc_texts=doc_texts)
     timing["llm_gap_fill"] = int((time.perf_counter() - t) * 1000)
+
+    # 6.5 post_validator (reglas F1-F16) — valida y corrige antes de persistir.
+    # Conecta las reglas del validador al pipeline v9 (antes solo corría desde
+    # orchestrator.py). Usa fields.values como dict mutable; aplica correcciones.
+    t = time.perf_counter()
+    try:
+        from backend.extraction.post_validator import validate_extraction
+        case_obj = db.query(Case).filter(Case.id == case_id).first()
+        if case_obj:
+            pv_corrected, pv_warnings = validate_extraction(case_obj, dict(fields.values))
+            for campo, val in pv_corrected.items():
+                if campo in fields.values and val != fields.values.get(campo):
+                    fields.values[campo] = val or ""
+            warnings.extend(pv_warnings)
+    except Exception as _pv_exc:
+        logger.warning("post_validator falló (no-fatal): %s", str(_pv_exc)[:200])
+    timing["post_validator"] = int((time.perf_counter() - t) * 1000)
 
     # 7. persist (opcional según dry_run)
     t = time.perf_counter()

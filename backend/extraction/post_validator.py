@@ -442,6 +442,37 @@ def validate_extraction(case, fields: dict) -> tuple[dict, list[str]]:
                 f"accionada — posible falta de legitimación pasiva. "
                 f"Sugerir estado=IMPROCEDENTE y verificar competencia."
             )
+            # 1D: también agregar flag a observaciones (append-only, no pisa texto manual)
+            flag_f15 = f"Falta legitimación pasiva: {ciudad_val} es municipio certificado"
+            obs_actual = str(
+                corrected.get("observaciones") or fields.get("observaciones") or
+                getattr(case, "observaciones", "") or ""
+            )
+            if flag_f15 not in obs_actual:
+                corrected["observaciones"] = (
+                    (obs_actual.rstrip() + "\n" + flag_f15) if obs_actual else flag_f15
+                )
+
+    # ============================================================
+    # F16 (2026-06-01): Accionante con texto basura al final del nombre.
+    # El LLM o el regex a veces captura "Y PADRES DE FAMILIA...", "VS GOBERNACIÓN",
+    # "CORREO ELECTRONICO" etc. pegado al nombre. Truncar en el primer marcador.
+    # ============================================================
+    _RE_ACCIONANTE_BASURA = re.compile(
+        r"\s+(?:Y\s+PADRES?\s+DE\s+FAMILIA|Y\s+OTROS|Y\s+DEM[AÁ]S|"
+        r"Y\s+ACUMULADOS|CON\s+FOREST\b|CORREO\s+ELECTR[OÓ]NICO|"
+        r"VS\.?\s+[A-Z]|CON\s+LA\s+GOBERNACI[OÓ]N|"
+        r"QUIEN\s+ACTÚA|QUIEN\s+ACTUA|LISTA\s+DE\s+ACCIONANTES).*$",
+        re.IGNORECASE,
+    )
+    accionante_raw = str(corrected.get("accionante") or fields.get("accionante") or "")
+    if accionante_raw:
+        accionante_clean = _RE_ACCIONANTE_BASURA.sub("", accionante_raw).strip()
+        if accionante_clean != accionante_raw:
+            warnings.append(
+                f"F16: accionante truncado: {accionante_raw!r} → {accionante_clean!r}"
+            )
+            corrected["accionante"] = accionante_clean
 
     # ============================================================
     # F14 (v9.x, 2026-05-28): sentido_fallo sin fecha = sentido a la deriva.

@@ -104,13 +104,17 @@ def extract_forest_for_case(db: Session, case: Case) -> tuple[Optional[str], Opt
             if not radicado_forest:
                 radicado_forest = forest
 
-    # Fallback: header de DOCX RESPUESTA
+    # Fallback: header de DOCX RESPUESTA — ordenado por created_at ASC para
+    # anclar al FOREST de la PRIMERA respuesta enviada (1E).
     if not radicado_forest:
-        for d in (
+        respuestas = (
             db.query(Document)
-            .filter(Document.case_id == case.id, Document.doc_type == "RESPUESTA")
+            .filter(Document.case_id == case.id,
+                    Document.doc_type.in_(["RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"]))
+            .order_by(Document.created_at.asc().nullslast())
             .all()
-        ):
+        )
+        for d in respuestas:
             forest = _extract_forest(d.extracted_text or "")
             if forest:
                 radicado_forest = forest
@@ -1171,7 +1175,10 @@ def extract_juzgado_for_case(db: Session, case: Case) -> Optional[str]:
         return (rank, src, len(name))
 
     cands.sort(key=sort_key)
-    return cands[0][1]
+    raw = cands[0][1]
+    # 1B: normalizar a forma canónica (número → escrito, sin paréntesis depto)
+    from backend.v9.catalog_resolve import normalize_juzgado
+    return normalize_juzgado(raw)
 
 
 def extract_juzgado_2nd_for_case(db: Session, case: Case, juzgado_1st: Optional[str]) -> tuple[Optional[str], str]:
@@ -1197,7 +1204,8 @@ def extract_juzgado_2nd_for_case(db: Session, case: Case, juzgado_1st: Optional[
     rj_2nd = [j for j in rj if _juzgado_nivel(j) in ("CIRCUITO", "TRIBUNAL") and _fold(j) != j1_fold]
     if rj_2nd:
         rj_2nd.sort(key=lambda j: (0 if _juzgado_nivel(j) == "TRIBUNAL" else 1, len(j)))
-        return rj_2nd[0], "regex"
+        from backend.v9.catalog_resolve import normalize_juzgado
+        return normalize_juzgado(rj_2nd[0]), "regex"
 
     # 2) extracción explícita en docs de 2da instancia
     cands: list[str] = []
@@ -1211,7 +1219,8 @@ def extract_juzgado_2nd_for_case(db: Session, case: Case, juzgado_1st: Optional[
                     cands.append(c)
     if cands:
         cands.sort(key=lambda c: (0 if _juzgado_nivel(c) == "TRIBUNAL" else 1, len(c)))
-        return cands[0], "regex"
+        from backend.v9.catalog_resolve import normalize_juzgado
+        return normalize_juzgado(cands[0]), "regex"
 
     # 3) derivación con el mapa judicial canónico
     if juzgado_1st:

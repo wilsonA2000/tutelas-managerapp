@@ -291,6 +291,32 @@ def update_case(db: Session, case_id: int, fields: dict) -> dict | None:
         fc["v9_sources"] = sources
         case.field_confidences_json = json.dumps(fc, ensure_ascii=False)
 
+    # 1H: Si se editaron campos que afectan el estado procesal, recompute automático
+    # (solo si el usuario NO editó `estado` directamente en esta misma llamada).
+    _ESTADO_INPUT_ATTRS = {
+        "sentido_fallo_1st", "impugnacion", "sentido_fallo_2nd",
+        "incidente", "decision_incidente",
+        "incidente_2", "decision_incidente_2",
+        "incidente_3", "decision_incidente_3",
+    }
+    if "estado" not in edited_attrs and any(a in _ESTADO_INPUT_ATTRS for a in edited_attrs):
+        try:
+            from backend.v9.field_extractor import extract_estado_for_case
+            nuevo_estado = extract_estado_for_case(db, case)
+            if nuevo_estado and nuevo_estado != (case.estado or ""):
+                old_estado = case.estado or ""
+                case.estado = nuevo_estado
+                db.add(AuditLog(
+                    case_id=case.id,
+                    field_name="ESTADO",
+                    old_value=old_estado,
+                    new_value=nuevo_estado,
+                    action="RECOMPUTE_AUTOMATICO",
+                    source="sistema",
+                ))
+        except Exception as _e:
+            logger.debug("estado recompute (1H) falló (best-effort): %s", _e)
+
     case.updated_at = utcnow()
     db.commit()
     return get_case(db, case_id)

@@ -162,6 +162,60 @@ def derive_sed_hierarchy(dependencia_code: Optional[str]) -> tuple[Optional[str]
     return None, None, None
 
 
+# ── 1B: Normalizador canónico de juzgado ─────────────────────────────────────
+_NUM_TO_WORDS: dict[str, str] = {
+    "01": "PRIMERO",      "1":  "PRIMERO",
+    "02": "SEGUNDO",      "2":  "SEGUNDO",
+    "03": "TERCERO",      "3":  "TERCERO",
+    "04": "CUARTO",       "4":  "CUARTO",
+    "05": "QUINTO",       "5":  "QUINTO",
+    "06": "SEXTO",        "6":  "SEXTO",
+    "07": "SÉPTIMO",      "7":  "SÉPTIMO",
+    "08": "OCTAVO",       "8":  "OCTAVO",
+    "09": "NOVENO",       "9":  "NOVENO",
+    "10": "DÉCIMO",
+    "11": "UNDÉCIMO",
+    "12": "DUODÉCIMO",
+    "13": "DECIMOTERCERO",
+    "14": "DECIMOCUARTO",
+    "15": "DECIMOQUINTO",
+    "16": "DECIMOSEXTO",
+    "17": "DECIMOSÉPTIMO",
+    "18": "DECIMOOCTAVO",
+    "19": "DECIMONOVENO",
+    "20": "VIGÉSIMO",
+}
+
+_RE_DEPT_PAREN = re.compile(
+    r"\s*\(\s*(?:SANTANDER|COLOMBIA|DEPTO\.?|DEPARTAMENTO)\s*\)\s*", re.IGNORECASE
+)
+_RE_JUZGADO_NUM = re.compile(r"(?<=\bJUZGADO\s)(\d{1,2})(?=\s)", re.IGNORECASE)
+
+
+def normalize_juzgado(raw: str) -> str:
+    """Estandariza el nombre del juzgado a forma canónica.
+
+    Transformaciones:
+    - Elimina paréntesis de departamento: "(SANTANDER)" → ""
+    - Convierte número a escrito después de JUZGADO: "JUZGADO 17 CIVIL" →
+      "JUZGADO DECIMOSÉPTIMO CIVIL"
+    - Colapsa espacios, mayúsculas, máx 120 chars
+    """
+    if not raw:
+        return raw
+    s = raw.strip().upper()
+    # Eliminar paréntesis con nombre de departamento
+    s = _RE_DEPT_PAREN.sub(" ", s)
+    # Convertir número cardinal después de JUZGADO
+    def _replace_num(m: re.Match) -> str:
+        return _NUM_TO_WORDS.get(m.group(1).lstrip("0") or "0",
+                                  _NUM_TO_WORDS.get(m.group(1), m.group(1)))
+    s = _RE_JUZGADO_NUM.sub(_replace_num, s)
+    # Normalizar espacios
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:120]
+
+
 def run(fields: ExtractedFields) -> ExtractedFields:
     """Resuelve canónicos en `fields`. No toca los valores Excel — solo
     completa los campos derivados (`abogado_canonical`, `dependencia_canonical`).

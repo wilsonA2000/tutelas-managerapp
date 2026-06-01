@@ -36,6 +36,8 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import os
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
@@ -43,6 +45,73 @@ from backend.email.case_lookup_cache import CaseLookupCache
 from backend.email.rad_utils import juzgado_code, normalize_rad23, same_juzgado
 
 logger = logging.getLogger("tutelas.matcher")
+
+_QWEN_URL = os.getenv("LLM_LOCAL_URL",
+                      f"http://127.0.0.1:{os.getenv('LLM_LOCAL_PORT', '8765')}")
+
+
+def _qwen_is_running() -> bool:
+    """Comprueba si llama-server está activo en el puerto local (timeout 0.5s)."""
+    try:
+        urllib.request.urlopen(_QWEN_URL + "/health", timeout=0.5)
+        return True
+    except Exception:
+        return False
+
+
+def _try_qwen_disambiguation(
+    db,
+    signals: "EmailSignals",
+    ranked: list,
+) -> "Optional[int]":
+    """Llama a Qwen 4B para desambiguar entre 1-3 candidatos MEDIUM.
+
+    Retorna case_id si el modelo identifica con certeza, o None si ambiguo/falla.
+    Solo se invoca cuando hay 1-3 candidatos y Qwen está activo.
+    """
+    from backend.database.models import Case
+
+    if len(ranked) > 3:
+        return None
+
+    # Preparar candidatos con nombre de carpeta para el modelo
+    candidate_lines = []
+    for cid, data in ranked[:3]:
+        case = db.query(Case).filter(Case.id == cid).first()
+        folder = (case.folder_name or f"caso-{cid}") if case else f"caso-{cid}"
+        candidate_lines.append(f"- ID {cid}: {folder} (score={data['score']})")
+
+    prompt = (
+        "/no_think\n"
+        f"Remitente: {signals.sender!r}\n"
+        f"Accionante detectado: {signals.accionante_name!r}\n"
+        f"Radicado detectado: {signals.rad_corto!r}\n"
+        f"FOREST detectado: {signals.forest!r}\n\n"
+        "Casos candidatos:\n" + "\n".join(candidate_lines) +
+        "\n\n¿A qué ID corresponde este correo? "
+        "Responde SOLO el número de ID o 'AMBIGUO' si no es claro."
+    )
+    body = {
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 16, "temperature": 0,
+    }
+    try:
+        req = urllib.request.Request(
+            _QWEN_URL + "/v1/chat/completions",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        raw = urllib.request.urlopen(req, timeout=15).read().decode()
+        answer = json.loads(raw)["choices"][0]["message"]["content"].strip()
+        if answer.isdigit():
+            candidate_ids = {cid for cid, _ in ranked[:3]}
+            cid = int(answer)
+            if cid in candidate_ids:
+                logger.info("Qwen desambiguó MEDIUM → case %d (respuesta: %r)", cid, answer)
+                return cid
+    except Exception as e:
+        logger.debug("Qwen disambiguation falló: %s", str(e)[:80])
+    return None
 
 
 @dataclass
@@ -267,6 +336,24 @@ def score_case_match(
                 "ganó %s por señales no-autoritativas %s → MEDIUM (revisión)",
                 rad_case, winner_id, list(winner["signals"].keys()),
             )
+
+    # ── 3C: Qwen 4B desambiguación de MEDIUM ──
+    # Si quedamos en MEDIUM con pocos candidatos y Qwen está activo, preguntarle.
+    # Solo 1-3 candidatos; si el modelo responde un ID concreto → promover a HIGH.
+    # Nunca falla el flujo (try/except total), y nunca crea casos nuevos (eso lo hace
+    # el monitor con lógica propia).
+    if confidence == "MEDIUM" and 1 <= len(ranked) <= 3 and _qwen_is_running():
+        qwen_cid = _try_qwen_disambiguation(db, signals, ranked)
+        if qwen_cid is not None and qwen_cid == winner_id:
+            confidence = "HIGH"
+            winner["signals"]["qwen_confirmed"] = 1
+        elif qwen_cid is not None and qwen_cid != winner_id:
+            # Qwen prefiere otro candidato — reclasificar ganador
+            winner_id = qwen_cid
+            winner = candidates[qwen_cid]
+            score = winner["score"]
+            confidence = "HIGH"
+            winner["signals"]["qwen_override"] = 1
 
     alternatives = [(cid, data["score"]) for cid, data in ranked[1:4]]
 

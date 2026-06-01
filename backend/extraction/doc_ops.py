@@ -175,6 +175,107 @@ def classify_doc_type(filename: str) -> str:
     return "PDF_OTRO"
 
 
+# ── 2A: Clasificador por contenido ───────────────────────────────────────────
+# Invocado cuando classify_doc_type(filename) retorna PDF_OTRO o DESCONOCIDO
+# y el documento tiene extracted_text disponible. Mínimo 2 señales para
+# comprometerse con un tipo; de lo contrario devuelve PDF_OTRO.
+
+_CONTENT_SIGNALS: dict[str, list[str]] = {
+    "PDF_SENTENCIA": [
+        "RESUELVE:", "En mérito de lo expuesto", "Se decide la acción de tutela",
+        "PRIMERO:", "SEGUNDO:", "administrando justicia",
+    ],
+    "PDF_AUTO_ADMISORIO": [
+        "Se admite la acción de tutela", "AVÓQUESE", "NOTIFÍQUESE Y CÚMPLASE",
+        "Radicación N°", "requiérase", "se requiere a",
+    ],
+    "RESPUESTA": [
+        "AL RESPONDER CITE", "GOBERNACIÓN DE SANTANDER",
+        "Proyectó:", "con FOREST", "radicado externo",
+    ],
+    "DEMANDA_TUTELA": [
+        "ACCIONANTE:", "acudo ante usted", "acción de tutela",
+        "Señor JUEZ", "Señor JUZGADO", "derechos fundamentales",
+    ],
+    "PDF_INCIDENTE": [
+        "incidente de desacato", "artículo 27", "APERTURA DEL INCIDENTE",
+        "se da inicio al incidente",
+    ],
+    "AUTO_INCIDENTE": [
+        "incidente de desacato", "ARCHÍVESE el incidente",
+        "decreto de pruebas", "SANCIONA al",
+    ],
+    # NOTIFICACION: tipo canónico reconocido por field_extractor (no PDF_NOTIFICACION)
+    "NOTIFICACION": [
+        "me permito NOTIFICAR", "Se notifica", "OFICIO", "NOTIFICACIÓN",
+        "se notifica por estado",
+    ],
+    # PDF_IMPUGNACION: en _LEGACY_DOC_TYPES → doc_librarian lo upgradea a IMPUGNACION
+    "PDF_IMPUGNACION": [
+        "recurso de impugnación", "interpone impugnación",
+        "no compartimos el fallo", "impugnamos el fallo",
+    ],
+    "AUTO_CONCEDE_IMPUGNACION": [
+        "Se concede la impugnación", "CONCÉDASE", "Remítase al Tribunal",
+        "concede el recurso de impugnación",
+    ],
+    # SENTENCIA_2DA: tipo canónico; PDF_SENTENCIA_2DA no existe en el sistema
+    "SENTENCIA_2DA": [
+        "CONFIRMA", "MODIFICA", "REVOCA",
+        "Conoce el despacho de la impugnación", "Tribunal Superior",
+    ],
+    "ACTA_REPARTO": [
+        "Acta individual de reparto", "ACTA DE REPARTO",
+        "reparto No.", "se hace constar el reparto",
+    ],
+    "AUTO_VINCULA": [
+        "VINCULESE a", "se vincula a", "VINCÚLESE",
+        "llámese al proceso",
+    ],
+    "OFICIO_CUMPLIMIENTO": [
+        "En cumplimiento del fallo", "Dando cumplimiento",
+        "dando cumplimiento a la orden",
+    ],
+}
+
+# Guards de prioridad evaluados ANTES del scoring (formato: pred(fn, text) → tipo)
+_CONTENT_PRIORITY_GUARDS: list[tuple] = [
+    # Emails en markdown
+    (lambda fn, t: t.lstrip()[:60].startswith(("De:", "Para:", "Asunto:", "From:", "To:")), "EMAIL_MD"),
+    # Acta seguimiento no es sentencia
+    (lambda fn, t: "acta" in fn and "seguimiento" in fn, "PDF_OTRO"),
+    # Incidente con apertura explícita
+    (lambda fn, t: "apertura del incidente" in t.lower() and "incidente de desacato" in t.lower(), "PDF_INCIDENTE"),
+]
+
+
+def classify_doc_type_by_content(filename: str, text: str) -> str:
+    """Clasificar tipo de documento analizando contenido textual.
+
+    Usado como fallback cuando classify_doc_type devuelve PDF_OTRO o DESCONOCIDO
+    y el documento tiene extracted_text disponible. Requiere ≥2 señales para
+    comprometerse; de lo contrario devuelve PDF_OTRO.
+    """
+    if not text:
+        return "PDF_OTRO"
+    fn = filename.lower()
+    t = (text or "")[:3000]
+    t_lower = t.lower()
+
+    # 1. Priority guards
+    for guard_fn, result in _CONTENT_PRIORITY_GUARDS:
+        if guard_fn(fn, t):
+            return result
+
+    # 2. Signal scoring
+    scores: dict[str, int] = {}
+    for dtype, signals in _CONTENT_SIGNALS.items():
+        scores[dtype] = sum(1 for s in signals if s.lower() in t_lower)
+
+    best_type = max(scores, key=lambda k: scores[k])
+    return best_type if scores[best_type] >= 2 else "PDF_OTRO"
+
+
 def reextract_document(db: Session, doc: Document) -> tuple[str, str]:
     """Re-extraer texto de un documento especifico."""
     text, method = extract_document_text(doc)

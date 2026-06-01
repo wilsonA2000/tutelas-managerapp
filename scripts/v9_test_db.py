@@ -265,11 +265,16 @@ def check_no_clobber(db, cases: list[Case], r: Report, sample_n: int) -> None:
         try:
             res = extract_case(db, c.id, dry_run=True, use_llm=False)
             out = persist.persist(db, c.id, res.fields, dry_run=True)
-            clobbers = [
-                f"{k}: {ch.get('old')!r} -> {ch.get('new')!r}"
-                for k, ch in out.get("changes", {}).items()
-                if not str(k).startswith("__") and ch.get("old")
-            ]
+            clobbers = []
+            for k, ch in out.get("changes", {}).items():
+                if str(k).startswith("__") or not ch.get("old"):
+                    continue
+                old_val = ch.get("old") or ""
+                new_val = ch.get("new") or ""
+                # observaciones: append-only de flags automáticos NO es un clobber
+                if k == "observaciones" and old_val and new_val.startswith(old_val):
+                    continue
+                clobbers.append(f"{k}: {old_val!r} -> {new_val!r}")
             r.check(
                 not clobbers,
                 f"#{c.id} {(c.folder_name or '')[:42]:<42} ({fill_score(c)} campos, {res.docs_processed} docs)",

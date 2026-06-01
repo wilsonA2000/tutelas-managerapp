@@ -29,6 +29,55 @@ from backend.cognition.folder_renamer import normalize_homoglyphs
 logger = logging.getLogger("tutelas.v9.persist")
 
 
+# ── 1A: Anti-alucinación ─────────────────────────────────────────────────────
+# Frases que los LLMs producen cuando no encuentran un valor. Tratar como vacío.
+_HALLUCINATED: frozenset[str] = frozenset({
+    "no disponible", "no encontrado", "no aplica", "sin información",
+    "no se encuentra", "no se encuentra en el documento", "n/a", "sin dato",
+    "información no disponible", "no hay información", "no determinado",
+    "sin determinar", "no identificado", "desconocido",
+})
+
+
+def _is_hallucinated(val: str) -> bool:
+    """True si el valor es una frase de relleno inventada por el LLM."""
+    return bool(val) and val.strip().lower() in _HALLUCINATED
+
+
+# ── 1F: Flags de observaciones auto-detectados ───────────────────────────────
+# Prefijos que distinguen flags automáticos de texto manual libre.
+_OBS_AUTO_PREFIXES = (
+    "Sujeto de especial protección",
+    "Agente oficioso",
+    "Medida provisional",
+    "Falta legitimación pasiva",
+    "[DETALLE FALLO]",
+    "[ACUMULACIÓN",
+)
+
+
+def _merge_observaciones(current: str, new: str) -> Optional[str]:
+    """Retorna el valor final de observaciones aplicando append-only de flags.
+
+    - Si current es vacío → new completo.
+    - Si new está vacío → None (no tocar).
+    - Si new contiene flags auto-detectados que NO están en current → append.
+    - Si new es subconjunto de current → None (no tocar).
+    """
+    if not current:
+        return new or None
+    if not new:
+        return None
+    new_lines = [l.strip() for l in new.splitlines() if l.strip()]
+    extra = [
+        l for l in new_lines
+        if l not in current and any(l.startswith(p) for p in _OBS_AUTO_PREFIXES)
+    ]
+    if extra:
+        return current.rstrip() + "\n" + "\n".join(extra)
+    return None  # nada nuevo
+
+
 # F7 (2026-05-21): cota de año por campo fecha, relativa al año del rad (= año de radicación
 # de la tutela). Ninguna actuación procesal antecede a la radicación (lo más bajo es +0).
 # Mata el bug recurrente del extractor que toma fechas CITADAS (Decreto 2002, sentencia
@@ -211,6 +260,10 @@ def persist(
         # como `accionante` (visto en c325). Latinizar siempre es seguro.
         if isinstance(value, str):
             value = normalize_homoglyphs(value)
+        # 1A: Rechazar frases de relleno inventadas por LLM ("no disponible", "n/a", …)
+        if _is_hallucinated(value):
+            logger.debug("Case %d: %s=%r descartado (alucinación)", case_id, v9_key, value)
+            continue
         # F7: rechazar fechas cuyo año cae fuera de la ventana del rad (fecha citada mal
         # tomada como fallo/respuesta). No se persiste — deja el campo vacío.
         if _date_out_of_range(v9_key, value, rad_year):
@@ -251,6 +304,14 @@ def persist(
         # Excepción: los campos DERIVADOS (_RECOMPUTE_FIELDS, ej. `estado`) SÍ se
         # recomputan aunque ya tengan valor — su valor MANUAL ya se respetó arriba.
         if current and v9_key not in _RECOMPUTE_FIELDS:
+            # 1F: Observaciones — append-only de flags auto-detectados
+            if v9_key == "observaciones":
+                merged = _merge_observaciones(str(current), value)
+                if merged and merged != str(current):
+                    changes[v9_key] = {
+                        "column": col, "old": current, "new": merged,
+                        "source": fields.sources[v9_key].value,
+                    }
             continue
         if current == value:
             continue
