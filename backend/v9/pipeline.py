@@ -265,7 +265,7 @@ def extract_case(
         missing = [f for f in fields.missing_fields() if f in llm_gap_fill._LLM_FILLABLE]
         full_text = field_context.build_field_context(db, case, missing) if missing else ""
         if not full_text:  # fallback defensivo si no halló docs por tipo
-            full_text = "\n\n".join(d.text for d in docs_ok[:3])[:5000]
+            full_text = "\n\n".join(d.text for d in docs_ok[:3])[:10000]
         fields, llm_calls = llm_gap_fill.run(fields, full_text)
     timing["llm_gap_fill"] = int((time.perf_counter() - t) * 1000)
 

@@ -86,7 +86,7 @@ def _window(pages: list[str], section: str):
     return lo, hi
 
 
-def build_field_context(db: Session, case, missing: list[str], budget: int = 5000) -> str:
+def build_field_context(db: Session, case, missing: list[str], budget: int = 10000) -> str:
     """Arma el texto LLM con SOLO la(s) ventana(s) ancladas a las secciones que
     necesitan los campos faltantes. "" si no encuentra nada (caller no llama al LLM)."""
     if not missing:

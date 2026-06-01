@@ -105,23 +105,32 @@ def preview(
 def extract_one(
     case_id: int,
     apply: bool = Query(False, description="Si true, escribe a DB. Default: dry-run."),
+    use_llm: bool = Query(False, description="Si true y apply=true, activa el LLM gap-fill semántico."),
     db: Session = Depends(get_db),
     user: User = Depends(require_auth),
 ):
     """Extrae 1 caso con v9. Por default es dry-run (no toca DB).
 
-    Pasar `?apply=true` para aplicar cambios. Retorna el mismo shape que
-    `preview` más una sección `applied_changes` cuando apply=true.
+    Pasar `?apply=true` para aplicar cambios. Pasar `?use_llm=true` (junto con
+    apply=true) para activar el Qwen3-4B en el gap-fill semántico. Retorna el
+    mismo shape que `preview` más una sección `applied_changes` cuando apply=true.
     """
     case = db.query(Case.id).filter(Case.id == case_id).first()
     if not case:
         raise HTTPException(status_code=404, detail=f"Case {case_id} no existe")
 
+    _use_llm = use_llm and apply  # LLM solo tiene sentido cuando se persiste
+    if _use_llm:
+        from backend.services.llm_mutex import begin_extraction, end_extraction
+        begin_extraction(wait_s=90)
     try:
-        result = extract_case(db, case_id, dry_run=not apply)
+        result = extract_case(db, case_id, dry_run=not apply, use_llm=_use_llm)
     except Exception as e:
         logger.exception("v9 extract falló para case=%d apply=%s", case_id, apply)
         raise HTTPException(status_code=500, detail=f"Pipeline v9 error: {e}")
+    finally:
+        if _use_llm:
+            end_extraction()
 
     payload = _result_to_payload(result)
     payload["dry_run"] = not apply
@@ -140,7 +149,8 @@ def extract_batch(
         {
           "case_ids": [1, 2, 3],         # lista explícita (opcional)
           "limit": 10,                   # si no hay case_ids, primeros N (default 10)
-          "apply": false                 # default false
+          "apply": false,                # default false
+          "use_llm": false               # activa Qwen3-4B gap-fill (requiere apply=true)
         }
 
     Para evitar batches gigantes, limit máximo es 100. Para todos los
@@ -149,6 +159,7 @@ def extract_batch(
     case_ids: Optional[list[int]] = body.get("case_ids")
     limit: int = int(body.get("limit", 10))
     apply: bool = bool(body.get("apply", False))
+    use_llm: bool = bool(body.get("use_llm", False))
 
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=400, detail="limit debe estar entre 1 y 100")
@@ -157,15 +168,24 @@ def extract_batch(
         rows = db.query(Case.id).order_by(Case.id).limit(limit).all()
         case_ids = [r[0] for r in rows]
 
+    _use_llm = use_llm and apply
+    if _use_llm:
+        from backend.services.llm_mutex import begin_extraction, end_extraction
+        begin_extraction(wait_s=90)
+
     results: list[dict] = []
     errors: list[dict] = []
-    for cid in case_ids:
-        try:
-            r = extract_case(db, cid, dry_run=not apply)
-            results.append(_result_to_payload(r))
-        except Exception as e:
-            logger.warning("v9 batch case=%d falló: %s", cid, str(e)[:200])
-            errors.append({"case_id": cid, "error": str(e)[:200]})
+    try:
+        for cid in case_ids:
+            try:
+                r = extract_case(db, cid, dry_run=not apply, use_llm=_use_llm)
+                results.append(_result_to_payload(r))
+            except Exception as e:
+                logger.warning("v9 batch case=%d falló: %s", cid, str(e)[:200])
+                errors.append({"case_id": cid, "error": str(e)[:200]})
+    finally:
+        if _use_llm:
+            end_extraction()
 
     if results:
         avg_completitud = sum(r["completitud"] for r in results) / len(results)

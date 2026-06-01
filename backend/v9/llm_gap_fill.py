@@ -86,7 +86,7 @@ _ENUMS = {
     "decision_incidente_3": ["SI", "NO", "EN_TRAMITE", ""],
     "quien_impugno":        ["ACCIONANTE", "ACCIONADO", "MINISTERIO_PUBLICO", "AMBOS", ""],
 }
-_MAXLEN = {"asunto": 140, "pretensiones": 240, "accionados": 200, "vinculados": 200,
+_MAXLEN = {"asunto": 140, "pretensiones": 450, "accionados": 200, "vinculados": 200,
            "responsable_desacato": 120, "responsable_desacato_2": 120, "responsable_desacato_3": 120}
 
 # Vocab SED de `asunto`: cuando gap_fill llena asunto (modo V9_LLM_SINGLE_CALL, el regex
@@ -186,7 +186,7 @@ Texto:
 def _build_prompt(missing: list[str], text: str) -> str:
     # El texto ya viene curado field-aware (backend/v9/field_context.py): solo las
     # páginas relevantes al campo. Aquí solo un tope de seguridad.
-    t = (text or "")[:5200]
+    t = (text or "")[:10000]
     return _PROMPT.format(fields=", ".join(missing), text=t)
 
 
