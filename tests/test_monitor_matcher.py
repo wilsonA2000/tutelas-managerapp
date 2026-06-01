@@ -268,6 +268,67 @@ class TestF7Guard:
 
 
 # ─────────────────────────────────────────────────────────────
+# 3C — Qwen confirma (no cambia) un MEDIUM
+# ─────────────────────────────────────────────────────────────
+
+
+class TestQwenDisambiguation3C:
+    """3C: Qwen SOLO confirma al ganador determinista; nunca lo cambia.
+
+    Escenario MEDIUM: FOREST con remitente tutelas@ → score 50 (40-69), winner=case 100.
+    Clave del fix: confirmar debe subir score≥70 (is_auto_match keya en score, no en
+    confidence). Discrepancia o ambigüedad → se mantiene MEDIUM (revisión humana).
+    """
+
+    def _medium_signals(self):
+        # score 50 = MEDIUM, ganador determinista = case 100
+        return EmailSignals(forest="20260019953", sender="tutelas@santander.gov.co")
+
+    def test_qwen_confirma_promueve_a_auto_match(self, db, cache, monkeypatch):
+        import backend.email.matcher as m
+        monkeypatch.setattr(m, "_qwen_is_running", lambda: True)
+        monkeypatch.setattr(m, "_try_qwen_disambiguation", lambda db, sig, ranked: 100)
+
+        r = score_case_match(db, cache, self._medium_signals())
+        assert r.case_id == 100
+        assert r.confidence == "HIGH"
+        assert r.score >= 70          # subido para que is_auto_match funcione
+        assert r.is_auto_match is True
+        assert r.breakdown.get("qwen_confirmed") == 1
+
+    def test_qwen_discrepa_se_queda_medium(self, db, cache, monkeypatch):
+        import backend.email.matcher as m
+        monkeypatch.setattr(m, "_qwen_is_running", lambda: True)
+        # Qwen elige OTRO caso → NO auto-asignar (anti-conflación)
+        monkeypatch.setattr(m, "_try_qwen_disambiguation", lambda db, sig, ranked: 200)
+
+        r = score_case_match(db, cache, self._medium_signals())
+        assert r.case_id == 100        # ganador determinista intacto
+        assert r.confidence == "MEDIUM"
+        assert r.is_auto_match is False
+        assert r.breakdown.get("qwen_disagreed") == 200
+
+    def test_qwen_ambiguo_se_queda_medium(self, db, cache, monkeypatch):
+        import backend.email.matcher as m
+        monkeypatch.setattr(m, "_qwen_is_running", lambda: True)
+        monkeypatch.setattr(m, "_try_qwen_disambiguation", lambda db, sig, ranked: None)
+
+        r = score_case_match(db, cache, self._medium_signals())
+        assert r.case_id == 100
+        assert r.confidence == "MEDIUM"
+        assert r.is_auto_match is False
+
+    def test_qwen_apagado_no_cambia_nada(self, db, cache, monkeypatch):
+        import backend.email.matcher as m
+        monkeypatch.setattr(m, "_qwen_is_running", lambda: False)
+
+        r = score_case_match(db, cache, self._medium_signals())
+        assert r.case_id == 100
+        assert r.confidence == "MEDIUM"
+        assert r.score == 50
+
+
+# ─────────────────────────────────────────────────────────────
 # Threading resolver
 # ─────────────────────────────────────────────────────────────
 

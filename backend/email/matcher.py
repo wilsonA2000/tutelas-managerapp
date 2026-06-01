@@ -337,23 +337,25 @@ def score_case_match(
                 rad_case, winner_id, list(winner["signals"].keys()),
             )
 
-    # ── 3C: Qwen 4B desambiguación de MEDIUM ──
-    # Si quedamos en MEDIUM con pocos candidatos y Qwen está activo, preguntarle.
-    # Solo 1-3 candidatos; si el modelo responde un ID concreto → promover a HIGH.
-    # Nunca falla el flujo (try/except total), y nunca crea casos nuevos (eso lo hace
-    # el monitor con lógica propia).
+    # ── 3C: Qwen 4B confirmación de MEDIUM ──
+    # Si quedamos en MEDIUM con pocos candidatos y Qwen está activo, preguntarle SOLO
+    # para CONFIRMAR al ganador determinista (nunca para cambiarlo: el scoring por
+    # señales — rad23/FOREST/juzgado — manda, ese es el guard anti-conflación).
+    # Si Qwen confirma al mismo ganador → promover a auto-match subiendo el score a 70
+    # (is_auto_match keya en score>=70, no en confidence; si solo subiéramos confidence
+    # el email caería entre las dos ramas del monitor y terminaría creando un duplicado).
+    # Si Qwen elige OTRO candidato o es ambiguo → se mantiene MEDIUM (revisión humana).
+    # Nunca falla el flujo (try/except total en el helper) ni crea casos.
     if confidence == "MEDIUM" and 1 <= len(ranked) <= 3 and _qwen_is_running():
         qwen_cid = _try_qwen_disambiguation(db, signals, ranked)
         if qwen_cid is not None and qwen_cid == winner_id:
             confidence = "HIGH"
+            score = max(score, THRESHOLD_HIGH)  # garantiza is_auto_match → True
             winner["signals"]["qwen_confirmed"] = 1
         elif qwen_cid is not None and qwen_cid != winner_id:
-            # Qwen prefiere otro candidato — reclasificar ganador
-            winner_id = qwen_cid
-            winner = candidates[qwen_cid]
-            score = winner["score"]
-            confidence = "HIGH"
-            winner["signals"]["qwen_override"] = 1
+            # Qwen discrepa del scoring determinista → NO auto-asignar. Se queda MEDIUM
+            # (AMBIGUO/revisión humana). Solo dejamos rastro de la discrepancia.
+            winner["signals"]["qwen_disagreed"] = qwen_cid
 
     alternatives = [(cid, data["score"]) for cid, data in ranked[1:4]]
 
