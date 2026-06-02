@@ -86,7 +86,7 @@ _ENUMS = {
     "decision_incidente_3": ["SI", "NO", "EN_TRAMITE", ""],
     "quien_impugno":        ["ACCIONANTE", "ACCIONADO", "MINISTERIO_PUBLICO", "AMBOS", ""],
 }
-_MAXLEN = {"asunto": 140, "pretensiones": 450, "accionados": 200, "vinculados": 200,
+_MAXLEN = {"asunto": 140, "accionados": 200, "vinculados": 200,
            "responsable_desacato": 120, "responsable_desacato_2": 120, "responsable_desacato_3": 120}
 
 # Vocab SED de `asunto`: cuando gap_fill llena asunto (modo V9_LLM_SINGLE_CALL, el regex
@@ -118,6 +118,12 @@ def _build_schema(missing: list[str]) -> dict:
 # Solo estos campos pueden ser llenados por LLM. Los demás son datos
 # estructurales (radicado, FOREST, fechas) que si no salieron por regex,
 # probablemente están en un doc escaneado y necesitan OCR, no LLM.
+#
+# `pretensiones` se EXCLUYE a propósito (2026-06-01): es texto jurídico con valor
+# probatorio que el jurado/abogados necesitan VERBATIM. Su extracción vive en
+# field_extractor.extract_pretensiones_for_case (regex verbatim → localizador LLM
+# verbatim). Si ambas rutas fallan, el campo queda VACÍO (ausencia honesta), NUNCA
+# una paráfrasis del gap_fill. Ver field_extractor_pass.py (usa use_llm real, no fe_llm).
 _LLM_FILLABLE = (
     "quien_impugno",
     "responsable_desacato",
@@ -127,7 +133,6 @@ _LLM_FILLABLE = (
     "responsable_desacato_3",
     "decision_incidente_3",
     "asunto",
-    "pretensiones",
     "derecho_vulnerado",
     "accionados",
     "vinculados",
@@ -169,7 +174,6 @@ _FIELD_INSTRUCTIONS: dict[str, str] = {
     "vinculados":        "Entidades vinculadas al proceso pero no accionadas directamente.",
     "derecho_vulnerado": "Derecho fundamental. En esta Secretaría casi siempre EDUCACION.",
     "asunto":            "1 línea ≤120 chars. Qué pide el accionante (ej. REINTEGRO DOCENTE, NOMBRAMIENTO).",
-    "pretensiones":      "Transcripción resumida de lo solicitado ≤450 chars. No incluir defensas ni respuestas.",
     "responsable_desacato": "Nombre completo del funcionario contra quien va el incidente de desacato.",
     "responsable_desacato_2": "Nombre del responsable del segundo incidente de desacato.",
     "responsable_desacato_3": "Nombre del responsable del tercer incidente de desacato.",
@@ -281,7 +285,6 @@ def _parse_json_loose(raw: str) -> dict:
 # 3B: Afinidad campo → tipos de doc más relevantes para buscarlo.
 # Para cada campo faltante se incluye texto de esos doc_types prioritariamente.
 _FIELD_DOC_AFFINITY: dict[str, list[str]] = {
-    "pretensiones":           ["DEMANDA_TUTELA", "ESCRITO_TUTELA"],
     "accionados":             ["DEMANDA_TUTELA", "ESCRITO_TUTELA", "PDF_AUTO_ADMISORIO", "AUTO_ADMISORIO"],
     "vinculados":             ["DEMANDA_TUTELA", "ESCRITO_TUTELA", "AUTO_VINCULA"],
     "derecho_vulnerado":      ["DEMANDA_TUTELA", "ESCRITO_TUTELA"],

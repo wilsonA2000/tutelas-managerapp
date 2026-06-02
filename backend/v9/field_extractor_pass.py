@@ -116,10 +116,13 @@ def run(db: Session, case, fields: ExtractedFields, *, use_llm: bool = False) ->
                 _set("categoria_tematica", cat or "SIN_DETERMINAR")
             except Exception as e:  # noqa: BLE001
                 logger.debug("categoria_tematica derivada falló: %s", e)
-    pret = _try("pretensiones", lambda: fe.extract_pretensiones_for_case(db, case, use_llm=fe_llm))
+    # pretensiones usa use_llm REAL (no fe_llm): el localizador LLM extrae VERBATIM del
+    # original (no parafrasea), así que es independiente del flag SINGLE_CALL. Si regex y
+    # localizador fallan → val=None → campo VACÍO. pretensiones NO está en _LLM_FILLABLE,
+    # así que el gap_fill nunca lo parafrasea (requisito jurídico: transcripción literal).
+    pret = _try("pretensiones", lambda: fe.extract_pretensiones_for_case(db, case, use_llm=use_llm))
     if pret:
         val, s = pret
-        # single_call: si el regex no localizó (val=None) ya no se setea → gap_fill lo llena.
         _set("pretensiones", val, _src(s))
 
     # ── asignación interna ──
