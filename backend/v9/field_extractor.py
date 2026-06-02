@@ -3528,7 +3528,7 @@ def extract_estado_for_case(db: Session, case: Case) -> str:
     return "INACTIVO"
 
 
-_RESPUESTA_DOC_TYPES = frozenset({"RESPUESTA", "DOCX_RESPUESTA"})
+_RESPUESTA_DOC_TYPES = frozenset({"RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"})
 
 
 def _is_respuesta_doc(d: Document) -> bool:
