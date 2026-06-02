@@ -249,6 +249,25 @@ _CONTENT_PRIORITY_GUARDS: list[tuple] = [
 ]
 
 
+# Marcadores que delatan que el doc NO es la demanda original del accionante, sino
+# una PROVIDENCIA del juzgado (auto/sentencia) o un INFORME/OFICIO que CITA la tutela.
+# El accionante escribe la demanda en 1ª persona ("acudo/instauro"); autos/informes los
+# escribe el juzgado/funcionario con verbos DISPOSITIVOS o de reporte. "ACCIONANTE:" y
+# "acción de tutela" aparecen en AMBOS → NO discriminan; el discriminador fiable es la
+# presencia de estos marcadores. Idea de field_extractor._CLAIM_NOT_DEMANDA y
+# doc_librarian._RE_ES_PROVIDENCIA (fusionando providencia + informe/oficio).
+_RE_NOT_DEMANDA = re.compile(
+    r"(?i)\bRESUELVE\b|\bAV[ÓO]QUESE\b|\bAVOCAR?\s+CONOCIMIENTO\b|"
+    r"\bADMINISTRANDO\s+JUSTICIA\b|\bEN\s+M[ÉE]RITO\s+DE\s+LO\s+EXPUESTO\b|"
+    r"\bARCH[ÍI]VESE\b|\bNOTIF[ÍI]QUESE\s+Y\s+C[ÚU]MPLASE\b|"
+    r"\bINCIDENTE\s+DE\s+DESACATO\b|\bINFORME\s+DE\s+CUMPLIMIENTO\b|"
+    r"\bVISITA\s+(?:DE\s+INSPECCI[ÓO]N\s+)?OCULAR\b|\bINSPECCI[ÓO]N\s+OCULAR\b|"
+    r"\bREQUERIMIENTO\s+PREVIO\b|\bSE\s+REQUIERE\s+A\b|\bREQUI[ÉE]RASE\b|"
+    r"\bDECIDE\s+SANCI|\bNO\s+SANCIONA\b|\bSANCIONA\s+AL?\b|"
+    r"\bAPERTURA.{0,8}PRUEBAS\b"
+)
+
+
 def classify_doc_type_by_content(filename: str, text: str) -> str:
     """Clasificar tipo de documento analizando contenido textual.
 
@@ -271,6 +290,15 @@ def classify_doc_type_by_content(filename: str, text: str) -> str:
     scores: dict[str, int] = {}
     for dtype, signals in _CONTENT_SIGNALS.items():
         scores[dtype] = sum(1 for s in signals if s.lower() in t_lower)
+
+    # 2b. Anti-DEMANDA: un auto/sentencia/informe/oficio que CITA la tutela acumula
+    # señales de DEMANDA_TUTELA ("ACCIONANTE:", "acción de tutela", "derechos
+    # fundamentales") porque reporta el caso. Si trae marcadores DISPOSITIVOS o de
+    # reporte (RESUELVE/AVÓQUESE/INFORME DE CUMPLIMIENTO/VISITA OCULAR/…) NO es la
+    # demanda original → se anula solo su puntaje para que gane el tipo real (o caiga
+    # a PDF_OTRO). La demanda real NO trae estos marcadores → no se ve afectada.
+    if scores.get("DEMANDA_TUTELA", 0) and _RE_NOT_DEMANDA.search(t):
+        scores["DEMANDA_TUTELA"] = 0
 
     best_type = max(scores, key=lambda k: scores[k])
     return best_type if scores[best_type] >= 2 else "PDF_OTRO"

@@ -496,8 +496,19 @@ def _disambiguate(scores: dict[DocType, float], text: str, filename: str = "") -
             and not _RE_ES_PROVIDENCIA.search(text or "")
             and not _RE_ES_RESPUESTA.search(_t8)
             and not _RE_ES_INCIDENTE.search((filename or "") + " " + _t8)
+            and not _RE_ES_INFORME.search((filename or "") + " " + _t8)
             and max(scores.values(), default=0.0) < 0.5):
         scores[DocType.DEMANDA_TUTELA] = max(scores.get(DocType.DEMANDA_TUTELA, 0.0), 0.65)
+
+    # Anti-informe/providencia en el SCORING principal: un informe/oficio/providencia que
+    # CITA la tutela (sin escritura en 1ª persona del accionante "interpongo/acudo") NO
+    # debe puntuar como DEMANDA — empataba ~0.3 con SENTENCIA y a veces ganaba (32 docs
+    # mal rotulados). La demanda real (1ª persona) nunca se suprime.
+    if (scores.get(DocType.DEMANDA_TUTELA, 0.0) > 0.0
+            and not _RE_DEMANDA_1P.search(_t8)
+            and (_RE_ES_INFORME.search((filename or "") + " " + _t8)
+                 or _RE_ES_PROVIDENCIA.search(text or ""))):
+        scores[DocType.DEMANDA_TUTELA] = 0.0
 
     return scores
 
@@ -525,6 +536,14 @@ _RE_ES_RESPUESTA = re.compile(
 )
 # Escrito/auto de incidente de desacato (estructura de petición similar a demanda).
 _RE_ES_INCIDENTE = re.compile(r"(?i)\bINCIDENTE\s+DE\s+DESACATO\b|\bABRIR\s+INCIDENTE\b|\bincidente\b")
+# Informe/oficio de cumplimiento o visita ocular: REPORTA el caso (cita ACCIONANTE +
+# acción de tutela) pero NO es la demanda del accionante. El rescate de DEMANDA no lo
+# cubría → 32 informes quedaron mal rotulados DEMANDA_TUTELA.
+_RE_ES_INFORME = re.compile(
+    r"(?i)\bINFORME\s+DE\s+CUMPLIMIENTO\b|\bVISITA\s+(?:DE\s+INSPECCI[ÓO]N\s+)?OCULAR\b|"
+    r"\bINSPECCI[ÓO]N\s+OCULAR\b|\bOFICIO\s+REMISORIO\b|"
+    r"\bme\s+permito\s+(?:remitir|enviar)\b[^\n]{0,40}\b(?:informe|auto|el)\b"
+)
 # El doc ES una providencia del juez (NO una demanda): frases inequívocas de auto/sentencia.
 _RE_ES_PROVIDENCIA = re.compile(
     r"(?i)\bAVOCAR?\s+CONOCIMIENTO\b|\bSE\s+ADMITE\s+(?:LA\s+)?(?:PRESENTE\s+)?ACCI[ÓO]N\b|"

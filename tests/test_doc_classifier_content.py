@@ -94,6 +94,38 @@ from backend.extraction.doc_ops import classify_doc_type_by_content
         "",
         "PDF_OTRO",
     ),
+    # ── Anti-DEMANDA (2026-06-02): autos/informes que CITAN la tutela NO son la demanda.
+    # Auto del incidente que cita ACCIONANTE + acción de tutela pero NO SANCIONA →
+    # el marcador anula DEMANDA; gana AUTO_INCIDENTE por sus propias señales.
+    (
+        "027AutoNoSanciona.pdf",
+        "JUZGADO PROMISCUO MUNICIPAL. ACCIONANTE: Personeria. Resolver el presente "
+        "incidente de desacato sobre la accion de tutela por los derechos fundamentales. "
+        "Por lo expuesto NO SANCIONA al accionado. ARCHIVESE.",
+        "AUTO_INCIDENTE",
+    ),
+    # Informe de visita ocular que reporta el caso → PDF_OTRO (no DEMANDA_TUTELA).
+    (
+        "011_CAS-InformeVisitaOcular.pdf",
+        "INFORME DE CUMPLIMIENTO - VISITA DE INSPECCION OCULAR. ACCIONANTE: Juan Perez. "
+        "Me permito enviar informe de cumplimiento de la accion de tutela sobre los "
+        "derechos fundamentales radicado 68001.",
+        "PDF_OTRO",
+    ),
+    # Providencia que decide la tutela: DEMANDA se anula pero PDF_SENTENCIA gana solo.
+    (
+        "providencia.pdf",
+        "ACCIONANTE: Maria. Decide de fondo la accion de tutela. En merito de lo "
+        "expuesto, administrando justicia. RESUELVE: PRIMERO: SEGUNDO:",
+        "PDF_SENTENCIA",
+    ),
+    # Regresión EXPLÍCITA: la demanda real (sin marcadores dispositivos) sigue DEMANDA.
+    (
+        "EscritoTutela_real.pdf",
+        "ACCIONANTE: Maria Garcia. acudo ante usted para instaurar accion de tutela. "
+        "Senor JUEZ derechos fundamentales.",
+        "DEMANDA_TUTELA",
+    ),
 ])
 def test_classify_doc_type_by_content(filename, text, expected):
     result = classify_doc_type_by_content(filename, text)
