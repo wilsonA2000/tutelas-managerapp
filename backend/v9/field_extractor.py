@@ -2191,8 +2191,15 @@ def extract_abogado_responsable_for_case(db: Session, case: Case) -> tuple[Optio
     ) if r}
     candidates: list[tuple[str, str]] = []  # (valor_resuelto, fuente)
     for d in db.query(Document).filter(
-        Document.case_id == case.id, Document.doc_type == "RESPUESTA"
+        Document.case_id == case.id
     ).order_by(Document.id.asc()).all():
+        # FIX 2026-06-01: usar _is_respuesta_doc (no doc_type=="RESPUESTA" exacto) para
+        # captar respuestas mal clasificadas (DOCX_RESPUESTA / PDF con "respuesta" en el
+        # nombre). Excluye incidente/desacato (esos resuelven abogado_incidente, no éste).
+        # El footer "Proyectó:" + roster de 17 canónicos evita falsos positivos de
+        # respuestas de OTRAS entidades (ej. contestación de un banco no resuelve).
+        if not _is_respuesta_doc(d):
+            continue
         t = d.extracted_text or ""
         if not t:
             continue
