@@ -23,11 +23,16 @@ const HIDDEN_BY_DEFAULT = new Set([
   'VINCULADOS', 'PRETENSIONES', 'FOREST_IMPUGNACION', 'JUZGADO_2ND', 'FECHA_FALLO_2ND',
 ])
 
+// Orden armonizado con el Excel (excel_generator.COLUMN_CONFIG) — 2026-06-01.
+// Mismo orden y mismas columnas que el reporte descargable, para que el cuadro
+// virtual y el Excel COINCIDAN. Los derivados (canónico, L1/L2/L3, %) son no-editables.
 const ALL_COLUMNS = [
   { key: 'tipo_actuacion', label: 'Tipo', width: 85, editable: false },
   { key: 'completitud', label: '%', width: 45, editable: false },
   { key: 'RADICADO_23_DIGITOS', label: 'Radicado 23D', width: 160 },
   { key: 'RADICADO_FOREST', label: 'Forest', width: 100 },
+  { key: 'ABOGADO_RESPONSABLE', label: 'Abogado', width: 140 },
+  { key: 'ABOGADO_CANONICAL', label: 'Abogado (Canónico)', width: 150, editable: false },
   { key: 'ACCIONANTE', label: 'Accionante', width: 180 },
   { key: 'ACCIONADOS', label: 'Accionados', width: 160 },
   { key: 'VINCULADOS', label: 'Vinculados', width: 140 },
@@ -38,8 +43,11 @@ const ALL_COLUMNS = [
   { key: 'ASUNTO', label: 'Asunto', width: 200 },
   { key: 'PRETENSIONES', label: 'Pretensiones', width: 200 },
   { key: 'OFICINA_RESPONSABLE', label: 'Oficina', width: 140 },
+  { key: 'DEPENDENCIA_CANONICAL', label: 'Dependencia (Canónica)', width: 170, editable: false },
+  { key: 'DIRECCION', label: 'Dirección (L1)', width: 160, editable: false },
+  { key: 'GRUPO', label: 'Grupo (L2)', width: 150, editable: false },
+  { key: 'EQUIPO', label: 'Equipo (L3)', width: 130, editable: false },
   { key: 'CATEGORIA_TEMATICA', label: 'Categoría', width: 140 },
-  { key: 'ABOGADO_RESPONSABLE', label: 'Abogado', width: 140 },
   { key: 'ESTADO', label: 'Estado', width: 70 },
   { key: 'FECHA_RESPUESTA', label: 'F.Respuesta', width: 90 },
   { key: 'SENTIDO_FALLO_1ST', label: 'Fallo 1ra', width: 90 },
@@ -55,14 +63,17 @@ const ALL_COLUMNS = [
   { key: 'INCIDENTE', label: 'Incid.', width: 55 },
   { key: 'FECHA_APERTURA_INCIDENTE', label: 'F.Incidente', width: 90 },
   { key: 'RESPONSABLE_DESACATO', label: 'Resp.Desacato', width: 130 },
+  { key: 'ABOGADO_INCIDENTE', label: 'Abogado Inc.', width: 140 },
   { key: 'DECISION_INCIDENTE', label: 'Decision Inc.', width: 140 },
   { key: 'INCIDENTE_2', label: 'Inc.2', width: 50 },
   { key: 'FECHA_APERTURA_INCIDENTE_2', label: 'F.Inc.2', width: 90 },
   { key: 'RESPONSABLE_DESACATO_2', label: 'Resp.Des.2', width: 130 },
+  { key: 'ABOGADO_INCIDENTE_2', label: 'Abogado Inc.2', width: 140 },
   { key: 'DECISION_INCIDENTE_2', label: 'Decision Inc.2', width: 140 },
   { key: 'INCIDENTE_3', label: 'Inc.3', width: 50 },
   { key: 'FECHA_APERTURA_INCIDENTE_3', label: 'F.Inc.3', width: 90 },
   { key: 'RESPONSABLE_DESACATO_3', label: 'Resp.Des.3', width: 130 },
+  { key: 'ABOGADO_INCIDENTE_3', label: 'Abogado Inc.3', width: 140 },
   { key: 'DECISION_INCIDENTE_3', label: 'Decision Inc.3', width: 140 },
   { key: 'OBSERVACIONES', label: 'Observaciones', width: 220 },
 ]
