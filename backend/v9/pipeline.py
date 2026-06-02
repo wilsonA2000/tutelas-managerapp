@@ -270,8 +270,11 @@ def extract_case(
         doc_texts: "dict[str, str] | None" = None
         if not full_text and docs_ok:
             doc_texts = {}
+            # DocText no lleva doc_type; se resuelve desde la fila de DB por path.
+            _rbp = locals().get("_row_by_path", {})
             for d in docs_ok:
-                dtype = (d.doc_type or "PDF_OTRO").upper()
+                _row = _rbp.get(d.path)
+                dtype = ((getattr(_row, "doc_type", None) if _row else None) or "PDF_OTRO").upper()
                 snippet = (d.text or "")[:4000]
                 if snippet:
                     doc_texts[dtype] = (doc_texts.get(dtype, "") + "\n---\n" + snippet).lstrip("\n-")
