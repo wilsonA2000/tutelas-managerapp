@@ -27,6 +27,7 @@ from enum import Enum
 from typing import Optional
 
 from backend.v9.doc_io import DocText
+from backend.extraction.doc_ops import _RE_NOT_DEMANDA
 
 logger = logging.getLogger("tutelas.v9.librarian")
 
@@ -500,14 +501,15 @@ def _disambiguate(scores: dict[DocType, float], text: str, filename: str = "") -
             and max(scores.values(), default=0.0) < 0.5):
         scores[DocType.DEMANDA_TUTELA] = max(scores.get(DocType.DEMANDA_TUTELA, 0.0), 0.65)
 
-    # Anti-informe/providencia en el SCORING principal: un informe/oficio/providencia que
-    # CITA la tutela (sin escritura en 1ª persona del accionante "interpongo/acudo") NO
-    # debe puntuar como DEMANDA — empataba ~0.3 con SENTENCIA y a veces ganaba (32 docs
-    # mal rotulados). La demanda real (1ª persona) nunca se suprime.
+    # Anti-providencia/informe en el SCORING principal: un auto/sentencia/informe/oficio
+    # que CITA la tutela (sin escritura en 1ª persona del accionante "interpongo/acudo")
+    # NO debe puntuar como DEMANDA — empataba ~0.3 con SENTENCIA y a veces ganaba (docs
+    # mal rotulados). Usa el mismo marcador `_RE_NOT_DEMANDA` que doc_ops (DRY, cubre
+    # RESUELVE/AVÓQUESE/INFORME/REQUERIMIENTO/SANCIONA/INCIDENTE…). La demanda real
+    # (1ª persona) NUNCA se suprime — aunque sus anexos traigan un 'RESUELVE'.
     if (scores.get(DocType.DEMANDA_TUTELA, 0.0) > 0.0
             and not _RE_DEMANDA_1P.search(_t8)
-            and (_RE_ES_INFORME.search((filename or "") + " " + _t8)
-                 or _RE_ES_PROVIDENCIA.search(text or ""))):
+            and _RE_NOT_DEMANDA.search((filename or "") + " " + _t8)):
         scores[DocType.DEMANDA_TUTELA] = 0.0
 
     return scores
