@@ -2607,13 +2607,32 @@ _FALLO_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
 )
 
 
+# Concesión SUSTANTIVA del amparo (verbo de amparo ligado a derecho/amparo/pretensión),
+# para detectar coexistencia con NIEGA en fallos MIXTOS. NO incluye órdenes procesales
+# ("ordénese notificar") para evitar falsos CONCEDE_PARCIAL sobre NIEGA puros.
+_RE_CONCEDE_SUSTANTIVO = re.compile(
+    r"(?i)\b(?:tutelar|tut[ée]les[ea]|conced[eaiou]\w*|conceder|amparar?\w*|amp[áa]rese|"
+    r"protege\w*|prot[ée]jase)\b[^.\n]{0,45}?\b(?:derecho|amparo|tutela|pretensi|acci[óo]n)"
+)
+
+
 def _classify_sentido_fallo(zone: str) -> Optional[str]:
     if not zone:
         return None
+    result = None
     for tag, pat in _FALLO_PATTERNS:
         if pat.search(zone):
-            return tag
-    return None
+            result = tag
+            break
+    # Fallo MIXTO: el RESUELVE NIEGA un derecho pero CONCEDE otro (sin decir "parcial").
+    # Regla: leer todo el RESUELVE. Una concesión SUSTANTIVA NO negada (que no sea
+    # "NO TUTELAR / NO CONCEDER") coexistiendo con la negación → CONCEDE_PARCIAL.
+    if result == "NIEGA":
+        for m in _RE_CONCEDE_SUSTANTIVO.finditer(zone):
+            prefix = zone[max(0, m.start() - 14):m.start()].lower()
+            if not re.search(r"\b(?:no|deneg\w*|niega\w*|niegan|negar)\s*$", prefix):
+                return "CONCEDE_PARCIAL"  # concesión real (no negada) → fallo mixto
+    return result
 
 
 # Recap del sentido del 1RA dentro de una sentencia de 2da (u otro doc): "Mediante
