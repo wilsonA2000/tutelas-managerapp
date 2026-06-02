@@ -35,16 +35,21 @@ def _strip_accents(s: str) -> str:
     return "".join(c for c in s if unicodedata.category(c) != "Mn").upper().strip()
 
 
+# Lookup sin acentos → canónico. Evita falsos negativos por ñ/tildes (ej. "EL PEÑÓN",
+# "CURITÍ"): el input se compara sin acentos contra el set también sin acentos. 2026-06-01.
+_MUNI_STRIPPED: dict[str, str] = {_strip_accents(m): m for m in MUNICIPIOS_SANTANDER}
+
+
 def is_municipio_santander(name: str) -> bool:
     """True si el string es un municipio válido de Santander (con o sin acentos)."""
     if not name:
         return False
     norm = _strip_accents(name)
-    if norm in MUNICIPIOS_SANTANDER:
+    if norm in _MUNI_STRIPPED:
         return True
     # Match con espacios/guiones tolerantes
     norm_alpha = "".join(c for c in norm if c.isalpha() or c == " ").strip()
-    return norm_alpha in MUNICIPIOS_SANTANDER
+    return norm_alpha in _MUNI_STRIPPED
 
 
 def find_municipio_in_text(text: str) -> str | None:
@@ -52,8 +57,8 @@ def find_municipio_in_text(text: str) -> str | None:
     if not text:
         return None
     norm_text = _strip_accents(text)
-    # Ordenar por longitud descendente para preferir nombres compuestos
-    for muni in sorted(MUNICIPIOS_SANTANDER, key=len, reverse=True):
-        if f" {muni} " in f" {norm_text} ":
-            return muni
+    # Comparar sin acentos (set y texto), preferir nombres compuestos (más largos).
+    for muni_stripped in sorted(_MUNI_STRIPPED, key=len, reverse=True):
+        if f" {muni_stripped} " in f" {norm_text} ":
+            return _MUNI_STRIPPED[muni_stripped]
     return None
