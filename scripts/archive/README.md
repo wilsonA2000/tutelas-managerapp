@@ -27,9 +27,20 @@ duplicados fusionados, 509 docs marcados DUPLICADO, purity 68.71 → 74.74.
 - `catalog_variants.py` — Análisis variantes carpetas
 - `db_purity_audit.py` — Auditoría DB purity v5.3.3
 
+## Diagnóstico semántico asunto/derecho (sesión 2026-06-02)
+One-shots usados para diagnosticar/validar el fix de `asunto`/`derecho_vulnerado`
+LLM-first (commits cdd1cc2/531efec). Ya cumplieron su función:
+- `sem_classify_derecho.py` — clasificador standalone temprano (peor que el pipeline real;
+  no usaba json_schema). Destapó que el error dominante era el ASUNTO, no el derecho.
+- `sem_validate_llm_first.py` — harness que llama a los `_llm_classify_*` reales del
+  pipeline para comparar contra la DB antes de cambiar código.
+
 ## Scripts ACTIVOS (no archivados, en `scripts/`)
 - `active_learning.py` — Scheduler activo
 - `diagnosis.py` — Diagnóstico recurrente
 - `reconcile_by_accionante.py` — Reconciliación periódica
 - `reocr_pending.py` — Re-OCR de docs PENDIENTE_OCR
 - `reverify_sospechosos.py` — Re-verificación de docs SOSPECHOSO
+- `sem_before_after.py` — Preview antes/después de asunto/derecho con las funciones reales (reutilizable)
+- `sem_apply_93.py` — Aplica el preview con filtro de confianza (asunto sí, derecho alta-conf)
+- `reclassify_demanda_falsa.py` — Reclasifica DEMANDA_TUTELA falsas (autos/informes), idempotente
