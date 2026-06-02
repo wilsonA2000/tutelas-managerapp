@@ -865,16 +865,20 @@ def run(
 
     # Última excepción para radicado_23_digitos: si NINGÚN doc trae el CUP de 23
     # dígitos (muchos juzgados municipales solo imprimen "RADICADO: 2026-00083"),
-    # caer al rad corto del FOLDER (Wilson cura las carpetas como "rad corto +
-    # accionante", así que es la fuente fiable — el doc puede citar rads ajenos).
-    # Guardia anti-número-interno: un consecutivo >= 10000 suele ser el nº INTERNO
-    # de la Gobernación (no el del juzgado) → no fiable, dejar vacío para revisar.
-    # Decisión Wilson 2026-06-01: "trabajamos con lo que tenemos" — el corto queda
-    # como fallback de todo el regex. Formato AAAA-NNNNN (distinguible del CUP).
+    # caer al rad corto del FOLDER, pero CORROBORADO contra un doc JUDICIAL.
+    # El discriminador NO es la magnitud (los Juzgados de Pequeñas Causas usan
+    # consecutivos > 10000 legítimos, ej. c175 "2026-10070") sino que el rad del
+    # folder aparezca junto a "radicado" en el auto/sentencia/demanda del juzgado.
+    # Eso confirma que es el rad real del juzgado y descarta el nº interno de la
+    # Gobernación (que solo aparece en las RESPUESTA de la SED) y los rads citados.
+    # Decisión Wilson 2026-06-01: "trabajamos con lo que tenemos". Formato AAAA-NNNNN.
     if fields.is_empty("radicado_23_digitos") and rad_anchor is not None:
         _yr, _cons = rad_anchor
-        if _cons.isdigit() and 0 < int(_cons) < 10000:
-            fields.set("radicado_23_digitos", f"{_yr}-{_cons}", FieldSource.REGEX)
+        _rad_rx = re.compile(r"radicad[oa]\b[^\d]{0,40}" + _yr + r"\s*[-.\s]\s*0*" + _cons.lstrip("0") + r"\b", re.IGNORECASE)
+        for _d, _dt in judicial_first:
+            if _dt in _JUDICIAL_DOCTYPES and _d.text and _rad_rx.search(_d.text):
+                fields.set("radicado_23_digitos", f"{_yr}-{_cons}", FieldSource.REGEX)
+                break
 
     # ----- Juzgado, ciudad, fechas (más débiles, requieren más cuidado) -----
     for d in _docs_in_order(docs, "juzgado"):
