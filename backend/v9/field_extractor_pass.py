@@ -170,6 +170,11 @@ def run(db: Session, case, fields: ExtractedFields, *, use_llm: bool = False) ->
         inc.pop("_n_incidentes", None)
         for k, v in inc.items():
             _set(k, v)
+    # transcripción verbatim del RESUELVE del auto que sanciona el desacato (0 LLM)
+    pri = _try("parte_resolutiva_incidente", lambda: fe.extract_parte_resolutiva_incidente_for_case(db, case))
+    if pri:
+        val, _s = pri
+        _set("parte_resolutiva_incidente", val)
 
     # ── estado (derivado) — sobre `fields` + lo ya persistido en DB ──
     try:

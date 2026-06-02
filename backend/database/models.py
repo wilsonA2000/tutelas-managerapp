@@ -69,6 +69,9 @@ class Case(Base):
     responsable_desacato_3 = Column(String)
     abogado_incidente_3 = Column(String)
     decision_incidente_3 = Column(String)
+    # Transcripción verbatim del RESUELVE del auto que SANCIONA el desacato (órdenes +
+    # plazo de cumplimiento) — permite saber si se está en término. 2026-06-02.
+    parte_resolutiva_incidente = Column(Text)
 
     observaciones = Column(Text)
     categoria_tematica = Column(String, default="", index=True)
@@ -152,15 +155,11 @@ class Case(Base):
         "RESPONSABLE_DESACATO_3": "responsable_desacato_3",
         "ABOGADO_INCIDENTE_3": "abogado_incidente_3",
         "DECISION_INCIDENTE_3": "decision_incidente_3",
+        # Transcripción verbatim del RESUELVE del auto que SANCIONA el desacato
+        # (contiene órdenes + plazo de cumplimiento). 2026-06-02.
+        "PARTE_RESOLUTIVA_INCIDENTE": "parte_resolutiva_incidente",
         "OBSERVACIONES": "observaciones",
         "CATEGORIA_TEMATICA": "categoria_tematica",
-        # v8.0: jerarquía organigrama SED
-        "DIRECCION": "direccion",
-        "GRUPO": "grupo",
-        "EQUIPO": "equipo",
-        # v8.2: campos canónicos resueltos contra abogados_sed.json + sed_org.py
-        "ABOGADO_CANONICAL": "abogado_canonical",
-        "DEPENDENCIA_CANONICAL": "dependencia_canonical",
     }
 
     def to_dict(self, include_doc_count: bool = False):

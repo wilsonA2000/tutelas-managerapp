@@ -32,7 +32,6 @@ const ALL_COLUMNS = [
   { key: 'RADICADO_23_DIGITOS', label: 'Radicado 23D', width: 160 },
   { key: 'RADICADO_FOREST', label: 'Forest', width: 100 },
   { key: 'ABOGADO_RESPONSABLE', label: 'Abogado', width: 140 },
-  { key: 'ABOGADO_CANONICAL', label: 'Abogado (Canónico)', width: 150, editable: false },
   { key: 'ACCIONANTE', label: 'Accionante', width: 180 },
   { key: 'ACCIONADOS', label: 'Accionados', width: 160 },
   { key: 'VINCULADOS', label: 'Vinculados', width: 140 },
@@ -43,10 +42,6 @@ const ALL_COLUMNS = [
   { key: 'ASUNTO', label: 'Asunto', width: 200 },
   { key: 'PRETENSIONES', label: 'Pretensiones', width: 200 },
   { key: 'OFICINA_RESPONSABLE', label: 'Oficina', width: 140 },
-  { key: 'DEPENDENCIA_CANONICAL', label: 'Dependencia (Canónica)', width: 170, editable: false },
-  { key: 'DIRECCION', label: 'Dirección (L1)', width: 160, editable: false },
-  { key: 'GRUPO', label: 'Grupo (L2)', width: 150, editable: false },
-  { key: 'EQUIPO', label: 'Equipo (L3)', width: 130, editable: false },
   { key: 'CATEGORIA_TEMATICA', label: 'Categoría', width: 140 },
   { key: 'ESTADO', label: 'Estado', width: 70 },
   { key: 'FECHA_RESPUESTA', label: 'F.Respuesta', width: 90 },
@@ -75,6 +70,7 @@ const ALL_COLUMNS = [
   { key: 'RESPONSABLE_DESACATO_3', label: 'Resp.Des.3', width: 130 },
   { key: 'ABOGADO_INCIDENTE_3', label: 'Abogado Inc.3', width: 140 },
   { key: 'DECISION_INCIDENTE_3', label: 'Decision Inc.3', width: 140 },
+  { key: 'PARTE_RESOLUTIVA_INCIDENTE', label: 'Resolutiva Desacato', width: 300 },
   { key: 'OBSERVACIONES', label: 'Observaciones', width: 220 },
 ]
 

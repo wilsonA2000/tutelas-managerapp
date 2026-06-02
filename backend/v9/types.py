@@ -77,6 +77,7 @@ EXCEL_FIELDS: tuple[str, ...] = (
     "responsable_desacato_3",
     "abogado_incidente_3",
     "decision_incidente_3",
+    "parte_resolutiva_incidente",  # RESUELVE verbatim del auto que sanciona (órdenes + plazo)
     # Observaciones (texto libre — usualmente edición manual o llenado por Excel)
     "observaciones",
 )

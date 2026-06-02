@@ -172,6 +172,8 @@ _CASE_FIELD_MAP = {
     "responsable_desacato_3": "responsable_desacato_3",
     "abogado_incidente_3": "abogado_incidente_3",
     "decision_incidente_3": "decision_incidente_3",
+    # RESUELVE verbatim del auto que sanciona el desacato (órdenes + plazo)
+    "parte_resolutiva_incidente": "parte_resolutiva_incidente",
     # Texto libre
     "observaciones": "observaciones",
     # Fallo 1ra y 2da viven en Case (también en ComplianceTracking pero son distintos)

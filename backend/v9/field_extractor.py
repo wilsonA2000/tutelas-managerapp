@@ -2438,6 +2438,33 @@ def _dispositiva_verbatim(d) -> Optional[str]:
     return _resuelve_verbatim(d.extracted_text or "")
 
 
+def extract_parte_resolutiva_incidente_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
+    """Transcribe verbatim el RESUELVE del auto que DECIDE el incidente de desacato
+    (SANCIONA / CIERRA / NO_SANCIONA) — contiene las órdenes y el plazo de cumplimiento,
+    para saber si se está en término. Solo se llena cuando el incidente ya tiene una
+    decisión terminal (no EN_TRAMITE). Prioriza el auto que SANCIONA.
+    Returns (texto|None, fuente∈{"auto_incidente","none"})."""
+    autos = [
+        d for d in db.query(Document).filter(
+            Document.case_id == case.id,
+            Document.doc_type.in_(["AUTO_INCIDENTE", "INCIDENTE_DESACATO"]),
+        ).all() if (d.extracted_text or "") and len(d.extracted_text) > 300
+    ]
+    # Solo autos con decisión terminal; prioriza SANCIONA, luego CIERRA/NO_SANCIONA.
+    _PRIO = {"SANCIONA": 0, "CIERRA": 1, "NO_SANCIONA": 2}
+    decided = []
+    for d in autos:
+        dec = _classify_decision_incidente(d.extracted_text or "")
+        if dec in _PRIO:
+            decided.append((_PRIO[dec], -len(d.extracted_text or ""), d))
+    decided.sort(key=lambda x: (x[0], x[1]))
+    for _p, _l, d in decided:
+        v = _dispositiva_verbatim(d)
+        if v:
+            return v, "auto_incidente"
+    return None, "none"
+
+
 def extract_parte_resolutiva_1ra_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
     """Transcribe verbatim la parte resolutiva de la SENTENCIA_1RA (misma selección de doc
     que `extract_sentido_fallo_1ra_for_case`: descarta 2da mal etiquetada, fallback a
