@@ -25,6 +25,32 @@ def make_case(**kw):
 
 
 # ============================================================
+# F2: FOREST formato nuevo (con guiones) NO se borra
+# ============================================================
+
+def test_F2_forest_formato_nuevo_sobrevive():
+    """El FOREST 2026+ '2-2026-104200-001763' tiene guiones y ES válido."""
+    case = make_case()
+    corrected, _ = validate_extraction(case, {"radicado_forest": "2-2026-104200-001763"})
+    # No debe aparecer en corrected (no se toca) o, si aparece, no vacío.
+    assert corrected.get("radicado_forest", "2-2026-104200-001763") != ""
+
+
+def test_F2_forest_viejo_11digitos_sobrevive():
+    case = make_case()
+    corrected, _ = validate_extraction(case, {"radicado_forest": "20260019953"})
+    assert corrected.get("radicado_forest", "20260019953") != ""
+
+
+def test_F2_forest_con_guiones_no_nuevo_se_borra():
+    """Un rad judicial con guiones mal tomado como FOREST sí se borra."""
+    case = make_case()
+    corrected, warnings = validate_extraction(case, {"radicado_forest": "68-001-31-03-001"})
+    assert corrected.get("radicado_forest") == ""
+    assert any("guiones" in w for w in warnings)
+
+
+# ============================================================
 # F11: impugnacion=NO ⇒ fallo_2nd vacio
 # ============================================================
 

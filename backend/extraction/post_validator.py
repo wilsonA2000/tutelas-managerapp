@@ -62,7 +62,10 @@ def validate_extraction(case, fields: dict) -> tuple[dict, list[str]]:
             if clean in FOREST_BLACKLIST:
                 corrected[forest_field.lower()] = ""
                 warnings.append(f"{forest_field} '{forest_val}' esta en blacklist — eliminado")
-            elif "-" in forest_val:
+            elif "-" in forest_val and not re.match(r"^2-20\d{2}-\d{6}-\d{6}$", forest_val.strip()):
+                # FOREST formato NUEVO (2026+): "2-2026-104200-001763" tiene guiones y ES
+                # válido. Solo se borran los que tienen guiones Y NO son el formato nuevo
+                # (composiciones espurias / rads judiciales mal tomados como FOREST).
                 corrected[forest_field.lower()] = ""
                 warnings.append(f"{forest_field} '{forest_val}' tiene guiones (no es FOREST) — eliminado")
             elif len(clean) < 7:
