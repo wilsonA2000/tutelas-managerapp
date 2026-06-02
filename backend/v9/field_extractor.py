@@ -1207,18 +1207,25 @@ def _clean_juzgado(raw: str) -> Optional[str]:
 
 def _rj_sender_candidates(db: Session, case_id: int) -> list[str]:
     """Todos los juzgados normalizados que aparecen como remitente/destinatario
-    Rama Judicial en los .md de los emails del case (la fuente más limpia)."""
+    Rama Judicial (cendoj/notificacionesrj) en el case — la fuente más limpia.
+
+    Escanea CUALQUIER doc (no solo EMAIL_JUDICIAL/EMAIL_INTERNO) + el `sender` de los
+    emails: el remitente RJ suele venir embebido en un PDF de demanda/auto forwarded
+    o en el header del email, no solo en los .md (gap que dejaba juzgados incompletos
+    en c411/c369/c219/… — fix 2026-06-02). El ranking del caller (MUNICIPAL>CIRCUITO)
+    resuelve los casos con varios remitentes (p.ej. 1ra inst. municipal vs 2da circuito)."""
     out: list[str] = []
-    for d in db.query(Document).filter(
-        Document.case_id == case_id,
-        Document.doc_type.in_(["EMAIL_JUDICIAL", "EMAIL_INTERNO"]),
-    ).all():
-        t = _read_doc_text(d)
-        if not t:
-            continue
+    blobs: list[str] = []
+    for d in db.query(Document).filter(Document.case_id == case_id).all():
+        t = d.extracted_text if d.extracted_text else _read_doc_text(d)
+        if t:
+            blobs.append(t[:8000])  # cota: el remitente va en el encabezado
+    for e in db.query(Email).filter(Email.case_id == case_id).all():
+        if e.sender:
+            blobs.append(e.sender)
+    for t in blobs:
         for m in _RE_RJ_SENDER.finditer(t):
-            full = m.group(0)
-            j = _juzgado_from_rj_sender(full)
+            j = _juzgado_from_rj_sender(m.group(0))
             if j and j not in out:
                 out.append(j)
     return out
