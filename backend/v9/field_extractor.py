@@ -751,6 +751,32 @@ _DERECHO_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("buen nombre", "INTIMIDAD"),
 )
 
+# Derechos "raros" que el LLM 4B tiende a ALUCINAR (sobre-etiqueta sistemática
+# medida 2026-06-02: ~50% de los cambios de derecho del 4B agregaban estos sin
+# respaldo). Solo se conservan si la demanda los EVIDENCIA textualmente; los "core"
+# (EDUCACION/SALUD/VIDA/TRABAJO/PETICION/DEBIDO_PROCESO/IGUALDAD) pasan sin filtro.
+# La evidencia REUSA `_DERECHO_KEYWORDS` (+ sinónimos inequívocos).
+_SPECULATIVE_DERECHOS = frozenset({"INTIMIDAD", "HABEAS_DATA", "MINIMO_VITAL", "SEGURIDAD_SOCIAL"})
+_SPEC_EVIDENCE: dict[str, tuple[str, ...]] = {
+    tag: tuple(kw for kw, t in _DERECHO_KEYWORDS if t == tag)
+    for tag in _SPECULATIVE_DERECHOS
+}
+_SPEC_EVIDENCE["SEGURIDAD_SOCIAL"] += ("pension", "pensional")
+_SPEC_EVIDENCE["MINIMO_VITAL"] += ("subsistencia",)
+
+
+def _ground_speculative_derechos(tags: list[str], text: str) -> list[str]:
+    """Descarta los derechos especulativos que el LLM propuso pero que la demanda
+    NO respalda textualmente (anti-alucinación del 4B). Determinista. Los tags core
+    pasan intactos."""
+    folded = _fold(text or "")
+    out: list[str] = []
+    for t in tags:
+        if t in _SPECULATIVE_DERECHOS and not any(kw in folded for kw in _SPEC_EVIDENCE.get(t, ())):
+            continue  # tag especulativo sin evidencia → descartar (alucinación)
+        out.append(t)
+    return out
+
 # Marcadores que CIERRAN la enumeración de derechos: lo que sigue ya no son
 # derechos del reclamo, sino quién los vulneró / a quién pertenecen / etc.
 # Se busca sobre el texto ORIGINAL de la región (con tildes, case-insensitive).
@@ -928,6 +954,10 @@ def _llm_classify_derecho(text: str) -> Optional[str]:
     # 3. fallback: si el modelo respondió en prosa, mapear keywords del dominio
     if not tags:
         tags = _tags_in_region(" " + raw + " ")
+    if not tags:
+        return None
+    # Grounding: descartar derechos especulativos que el LLM alucinó sin evidencia.
+    tags = _ground_speculative_derechos(tags, text)
     if not tags:
         return None
     if "OTRO" in tags and len(tags) > 1:
