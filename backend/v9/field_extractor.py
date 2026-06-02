@@ -3299,14 +3299,16 @@ def extract_incidentes_cluster_for_case(db: Session, case: Case) -> dict:
         t2 = escrito_dates[1][1].extracted_text[:8000]
         m = _RE_RESPONSABLE_DESACATO.search(t2)
         out["responsable_desacato_2"] = _clean_responsable_desacato(m.group(1), doc_text=t2) if m else None
-        out["decision_incidente_2"] = "EN_TRAMITE"
+        # FIX 2026-06-02: derivar la decisión del doc del slot (SANCIONA/CIERRA/etc.)
+        # si tiene marcador; antes estaba hardcoded a EN_TRAMITE → falso ACTIVO.
+        out["decision_incidente_2"] = _classify_decision_incidente(t2) or "EN_TRAMITE"
     if len(escrito_dates) >= 3:
         out["incidente_3"] = "SI"
         out["fecha_apertura_incidente_3"] = escrito_dates[2][0] if escrito_dates[2][0] != "9999/99/9999" else None
         t3 = escrito_dates[2][1].extracted_text[:8000]
         m = _RE_RESPONSABLE_DESACATO.search(t3)
         out["responsable_desacato_3"] = _clean_responsable_desacato(m.group(1), doc_text=t3) if m else None
-        out["decision_incidente_3"] = "EN_TRAMITE"
+        out["decision_incidente_3"] = _classify_decision_incidente(t3) or "EN_TRAMITE"
     return out
 
 
