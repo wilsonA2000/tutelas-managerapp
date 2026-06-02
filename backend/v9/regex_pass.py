@@ -863,6 +863,19 @@ def run(
             if v:
                 fields.set("accionante", v, FieldSource.REGEX)
 
+    # Última excepción para radicado_23_digitos: si NINGÚN doc trae el CUP de 23
+    # dígitos (muchos juzgados municipales solo imprimen "RADICADO: 2026-00083"),
+    # caer al rad corto del FOLDER (Wilson cura las carpetas como "rad corto +
+    # accionante", así que es la fuente fiable — el doc puede citar rads ajenos).
+    # Guardia anti-número-interno: un consecutivo >= 10000 suele ser el nº INTERNO
+    # de la Gobernación (no el del juzgado) → no fiable, dejar vacío para revisar.
+    # Decisión Wilson 2026-06-01: "trabajamos con lo que tenemos" — el corto queda
+    # como fallback de todo el regex. Formato AAAA-NNNNN (distinguible del CUP).
+    if fields.is_empty("radicado_23_digitos") and rad_anchor is not None:
+        _yr, _cons = rad_anchor
+        if _cons.isdigit() and 0 < int(_cons) < 10000:
+            fields.set("radicado_23_digitos", f"{_yr}-{_cons}", FieldSource.REGEX)
+
     # ----- Juzgado, ciudad, fechas (más débiles, requieren más cuidado) -----
     for d in _docs_in_order(docs, "juzgado"):
         if fields.is_empty("juzgado"):

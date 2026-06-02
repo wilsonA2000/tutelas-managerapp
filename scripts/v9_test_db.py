@@ -238,14 +238,14 @@ def check_consistency(cases: list[Case], r: Report) -> None:
                 "derecho_vulnerado tags ∈ vocab", split_sep=" - ")
     vocab_check("tipo_actuacion", {"TUTELA", "INCIDENTE", "IMPUGNACION", "COMUNICACION"}, "tipo_actuacion ∈ vocab")
 
-    # C-bis — radicado_23_digitos: vacío o EXACTAMENTE 23 dígitos puros (sin separadores).
-    # Un radicado judicial colombiano tiene 23 dígitos; valores truncados (21/22) o con
-    # separadores o malformados (24+) indican un bug de ingesta/edición (ver fix endpoint PUT).
+    # C-bis — radicado_23_digitos: vacío, 23 dígitos puros, O el rad corto AAAA-NNNNN
+    # (última excepción/fallback, 2026-06-01: cuando el juzgado solo imprimió el corto).
+    # Valores truncados (21/22), con separadores raros o malformados (24+) siguen siendo bug.
     import re as _re
     bad_rad = [f"#{c.id}={c.radicado_23_digitos!r}" for c in cases
                if (c.radicado_23_digitos or "").strip()
-               and not _re.fullmatch(r"\d{23}", c.radicado_23_digitos.strip())]
-    r.check(not bad_rad, "radicado_23_digitos vacío o 23 dígitos puros",
+               and not _re.fullmatch(r"\d{23}|20\d{2}-\d{5}", c.radicado_23_digitos.strip())]
+    r.check(not bad_rad, "radicado_23_digitos vacío, 23 díg, o rad corto AAAA-NNNNN",
             "" if not bad_rad else f"{len(bad_rad)} malformados: " + "; ".join(bad_rad[:5]))
 
 

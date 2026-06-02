@@ -104,14 +104,15 @@ def extract_forest_for_case(db: Session, case: Case) -> tuple[Optional[str], Opt
             if not radicado_forest:
                 radicado_forest = forest
 
-    # Fallback: header de DOCX RESPUESTA — ordenado por created_at ASC para
-    # anclar al FOREST de la PRIMERA respuesta enviada (1E).
+    # Fallback: header de DOCX RESPUESTA — ordenado por id ASC (orden de inserción,
+    # mejor proxy disponible de "primera respuesta": Document no tiene created_at) para
+    # anclar al FOREST de la PRIMERA respuesta enviada (1E, fix 2026-06-01).
     if not radicado_forest:
         respuestas = (
             db.query(Document)
             .filter(Document.case_id == case.id,
                     Document.doc_type.in_(["RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"]))
-            .order_by(Document.created_at.asc().nullslast())
+            .order_by(Document.id.asc())
             .all()
         )
         for d in respuestas:
