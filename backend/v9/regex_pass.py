@@ -626,8 +626,13 @@ def _extract_incidente_flag(text: str, doctype: str) -> Optional[str]:
 # En muchas plantillas el supervisor (la jefa del Grupo de Apoyo Jurídico) se lista PRIMERO,
 # así que un .search() simple agarraba a la supervisora. Queremos al REDACTOR.
 _FOOTER_ROLE_WORDS = r"proyect[oó]|elabor[oó]|redact[oó]|aprob[oó]|revis[oó]|vist[oa]\s+bueno|vo\.?\s*bo\.?"
+# El dos-puntos es OPCIONAL: la plantilla SED escribe el REDACTOR sin colon
+# ("PROYECTÓ VICTOR COLMENARES...", "ELABORO VICTOR...") pero el supervisor con colon
+# ("APROBÓ: MARIA CRISTINA..."). Sin colon-opcional solo se capturaba al supervisor. El
+# valor debe empezar en MAYÚSCULA (un nombre) para no capturar prosa ("proyectó la
+# respuesta..."). La cola corta en el siguiente rol (con o sin colon).
 _RE_FOOTER_ROLE = re.compile(
-    rf"(?im)\b({_FOOTER_ROLE_WORDS})\s*[:.]\s*(.+?)(?=$|\b(?:{_FOOTER_ROLE_WORDS})\s*[:.]|Aport[oó]\b|Anexo)"
+    rf"(?im)\b({_FOOTER_ROLE_WORDS})\s*[:.]?\s+([A-ZÁÉÍÓÚÑ].+?)(?=$|\b(?:{_FOOTER_ROLE_WORDS})\b|Aport[oó]\b|Anexo)"
 )
 _DRAFTER_ROLE_PREFIXES = ("proyect", "elabor", "redact")
 # tokens que indican cargo / dependencia (todo lo que sigue se descarta del nombre)
@@ -660,22 +665,21 @@ def _footer_name_from_value(raw: str) -> Optional[str]:
 
 
 def _extract_abogado_footer(text: str) -> Optional[str]:
-    """Del footer del DOCX de respuesta: nombre del REDACTOR ('Proyectó/Elaboró: NOMBRE'),
-    prefiriéndolo sobre el SUPERVISOR ('Aprobó/Revisó: NOMBRE') cuando ambos aparecen.
-    Devuelve None si no hay ningún nombre limpio (mejor vacío que atribuir a la supervisora)."""
+    """Del footer del DOCX de respuesta: SOLO el nombre del REDACTOR
+    ('Proyectó/Elaboró/Redactó NOMBRE'). El SUPERVISOR ('Aprobó/Revisó: NOMBRE') NUNCA
+    se devuelve: en la SED la Dra. María Cristina (coordinadora) firma como revisora TODAS
+    las respuestas — atribuirle el caso es el error (regla Wilson 2026-06-02). Si no hay
+    redactor limpio → None (mejor vacío que la coordinadora)."""
     tail = text[-3500:] if len(text) > 3500 else text  # el footer está al final
     drafters: list[str] = []
-    supervisors: list[str] = []
     for m in _RE_FOOTER_ROLE.finditer(tail):
         role = m.group(1).lower()
+        if not any(role.startswith(p) for p in _DRAFTER_ROLE_PREFIXES):
+            continue  # supervisor (Aprobó/Revisó/Vo.Bo.) → ignorar, no es el abogado
         name = _footer_name_from_value(m.group(2))
-        if not name:
-            continue
-        (drafters if any(role.startswith(p) for p in _DRAFTER_ROLE_PREFIXES) else supervisors).append(name)
-    for bucket in (drafters, supervisors):
-        if bucket:
-            return bucket[0]
-    return None
+        if name:
+            drafters.append(name)
+    return drafters[0] if drafters else None
 
 
 _CITY_NOISE = {
