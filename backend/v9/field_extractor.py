@@ -3249,7 +3249,8 @@ def _clean_responsable_desacato(raw: str, doc_text: str = "") -> Optional[str]:
     if not raw:
         return None
     v = re.sub(r"\s+", " ", raw).strip(" ,.;:-").strip()
-    v = re.sub(r"(?i)^(?:se[ñn]ora?\s+|doctora?\s+|dra?\.?\s+|funcionari[oa]\s+|ciudadan[oa]\s+)+", "", v).strip()
+    v = re.sub(r"(?i)^(?:se[ñn]ora?\s+|doctora?\s+|dra?\.?\s+|funcionari[oa]\s+|ciudadan[oa]\s+"
+               r"|al?\s+|el\s+|la\s+|los\s+|las\s+|lo\s+)+", "", v).strip()
     if not (4 <= len(v) <= 80):
         return None
     f = _fold(v)
@@ -3262,10 +3263,16 @@ def _clean_responsable_desacato(raw: str, doc_text: str = "") -> Optional[str]:
     # INCIDENTE…", "LAS MENCIONADAS EN EL NUMERAL ANTERIOR…", "PARA QUE…").
     if re.search(r"\b(?:apertura|incidente|desacato|mencionad|numeral|anterior|previa|"
                  r"requerimiento|cumplimiento|para que|providencia|t[ée]rmino|"
-                 r"accionad[oa]s?|vinculad[oa]s?|entidades)\b", f):
+                 r"accionad[oa]s?|vinculad[oa]s?|entidades|responsabl\w*|encargad[oa]s?|"
+                 r"persona\s+encargada|superior\s+jer[áa]rquic|qued[óo])\b", f):
         return None
     # Rechazar SOLO si el valor es puramente un conector (no un nombre que empieza por él).
     if re.fullmatch(r"(?i)(?:para que|que|de la|del|al|y|en su)\s*", v):
+        return None
+    # Guard anti-fragmento: una entidad/nombre real tiene ≥1 palabra de ≥4 letras.
+    # Capturas malformadas del regex tipo "AL MR. GR" (solo iniciales/abreviaturas ≤3
+    # letras) son basura y NO deben persistirse (caso c92/c230, 2026-06-02).
+    if not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]{4,}", v):
         return None
     # Rector / institución / nombre propio del funcionario sancionado → conservar.
     return v.upper()[:80]

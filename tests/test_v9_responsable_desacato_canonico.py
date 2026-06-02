@@ -52,3 +52,25 @@ def test_longitud_fuera_rango():
     """Strings muy cortos (<4 chars) o muy largos (>80 chars) rechazados."""
     assert _clean_responsable_desacato("AB") is None
     assert _clean_responsable_desacato("X" * 90) is None
+
+
+def test_fragmento_basura_rechazado():
+    """Capturas malformadas del regex (solo iniciales/abreviaturas ≤3 letras) → None.
+    Caso real c92/c230 (2026-06-02): el regex capturaba 'AL MR. GR'."""
+    assert _clean_responsable_desacato("AL MR. GR") is None
+    assert _clean_responsable_desacato("MR. GR") is None
+    assert _clean_responsable_desacato("S.A. DE C") is None
+
+
+def test_rol_generico_rechazado():
+    """'responsable'/'encargado'/'persona encargada' son boilerplate genérico, no el
+    sancionado nombrado → None. El conector líder 'al/el/la' se descarta primero."""
+    assert _clean_responsable_desacato("AL RESPONSABLE") is None
+    assert _clean_responsable_desacato("EL RESPONSABLE DEL CUMPLIMIENTO") is None
+    assert _clean_responsable_desacato("la persona encargada de dar cumplimiento") is None
+
+
+def test_conector_lider_se_descarta_pero_conserva_nombre():
+    """'EL RECTOR ...' conserva el cargo real tras quitar el conector líder."""
+    assert _clean_responsable_desacato("EL RECTOR DE LA INSTITUCION") == "RECTOR DE LA INSTITUCION"
+    assert _clean_responsable_desacato("MEDARDO MURILLO TIRADO") == "MEDARDO MURILLO TIRADO"
