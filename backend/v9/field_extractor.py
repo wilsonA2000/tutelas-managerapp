@@ -143,7 +143,10 @@ import unicodedata as _ud
 # El escrito de tutela y el auto lo nombran limpio; la RESPUESTA de la SED trae una tabla
 # REF/ACCIONANTE muy fiable; las sentencias/autos/incidentes lo recapitulan ("promovida por …").
 _ACCIONANTE_DOC_PRIORITY = [
-    "AUTO_ADMISORIO", "DEMANDA_TUTELA", "ANEXO_DEMANDA", "SENTENCIA_1RA", "RESPUESTA",
+    # PDF_AUTO_ADMISORIO: tipo legacy equivalente a AUTO_ADMISORIO (1ra inst inequívoca).
+    # Sin él, autos admisorios mal etiquetados quedaban invisibles al extractor (c519).
+    "AUTO_ADMISORIO", "PDF_AUTO_ADMISORIO", "DEMANDA_TUTELA", "ANEXO_DEMANDA",
+    "SENTENCIA_1RA", "RESPUESTA",
     "IMPUGNACION",
     "INCIDENTE_DESACATO", "AUTO_INCIDENTE", "NOTIFICACION", "NOTIFICACION_FALLO",
     "OFICIO_CUMPLIMIENTO", "DESCONOCIDO",
@@ -411,10 +414,21 @@ def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str],
         if m_pers:
             muni = _norm_municipio(m_pers.group(1))
             muni = re.sub(r"\s+SANTANDER\.?$", "", muni).strip()
-            if muni and muni not in _ACC_STOPWORDS and len(muni) >= 3:
-                accionante = f"PERSONERÍA MUNICIPAL DE {muni}"
+            # FIX 2026-06-01: el regex sobre-captura boilerplate tras el municipio
+            # ("CONFINES CORDIAL SALUDO", "MOGOTES CON EL FIN DE QUE", "ESTA LOCALIDAD
+            # PARA QUE"). Validar/recortar contra la lista oficial de municipios: solo
+            # aceptamos un municipio RECONOCIDO → forma canónica. La lista es el
+            # componente parametrizable por entidad/departamento (generalización).
+            from backend.agent.extractors.municipios_santander import (
+                find_municipio_in_text, is_municipio_santander,
+            )
+            canon = find_municipio_in_text(muni) or (muni if is_municipio_santander(muni) else None)
+            if canon and canon not in _ACC_STOPWORDS and len(canon) >= 3:
+                accionante = f"PERSONERÍA MUNICIPAL DE {canon}"
                 nota = _build_nota(head)
                 break  # personería tiene prioridad máxima
+            # municipio no reconocido (basura capturada) → NO crear personería sucia;
+            # seguir a otros casos/docs (la carpeta curada suele tenerlo bien).
 
         # --- Caso 2: agente oficioso / representante legal → accionante = quien firma; nota = agenciado ---
         nota_cand = _build_nota(head)
