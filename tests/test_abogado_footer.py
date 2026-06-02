@@ -12,6 +12,30 @@ Bugs corregidos:
    Dra. María Cristina (coordinadora que firma TODAS las respuestas) se atribuía el caso.
 """
 from backend.v9.regex_pass import _extract_abogado_footer
+from backend.v9.field_extractor import _RE_EXT_ABOG
+
+
+def test_externo_nombre_adyacente_a_rol_se_captura():
+    # Abogado externo CPS: nombre INMEDIATAMENTE seguido del rol → se captura.
+    for txt in [
+        "Proyectó: Jaime Iván Restrepo Gómez – Abogado Contratista Externo SED",
+        "Proyectó: Jorge Andrés Contreras / Abogado CPS",
+        "Elaboró: Laura Marcela Camelo Montagut - Contratista Grupo de Apoyo Jurídico",
+    ]:
+        m = _RE_EXT_ABOG.search(txt)
+        assert m, txt
+        assert len(m.group(1).split()) >= 2
+
+
+def test_externo_prosa_no_se_captura():
+    # "proyectó <prosa>" sin rol adyacente → NO se captura (evita basura como
+    # "CELEBRADA CON EL", "ES REMITIDO A LA", "OBTENER VIABILIDAD").
+    for txt in [
+        "se proyectó CELEBRADA CON EL contrato de obra para el colegio",
+        "el oficio es remitido a la dependencia para lo pertinente",
+        "se proyectó obtener viabilidad técnica y financiera del proyecto",
+    ]:
+        assert _RE_EXT_ABOG.search(txt) is None, txt
 
 
 def test_redactor_sin_colon_gana_a_supervisor_con_colon():

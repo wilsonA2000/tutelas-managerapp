@@ -2307,17 +2307,34 @@ from backend.v9.regex_pass import (
 )  # noqa: E402
 
 
-def extract_abogado_responsable_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
-    """`abogado_responsable` = quien firma el DOCX de respuesta ("Proyectó: NOMBRE").
-    Reglas (feedback Wilson 2026-05-18):
-    (1) Solo cuentan docs `doc_type == "RESPUESTA"` en la carpeta.
-    (2) La firma debe resolver al roster del Grupo Jurídico / catálogo de 17 oficiales.
-    (3) El doc debe pertenecer al case: o (a) menciona ≥2 tokens significativos del
-        accionante, o (b) cita uno de los radicados del case (rad23/forest/corto) en
-        texto o filename. Evita que firmas oficiales de docs prestados (insumos de
-        otras tutelas que terminan en la misma carpeta) se atribuyan al case actual.
-    Si hay varias respuestas válidas, el firmante más frecuente (empate → la más
-    reciente por id). Returns (valor, fuente)."""
+# Firmante EXTERNO (contratista CPS no-roster): se acepta SOLO si el footer trae el
+# nombre INMEDIATAMENTE seguido del rol de abogado ("Proyectó: Jaime Restrepo – Abogado
+# Contratista CPS"). La adyacencia nombre↔rol evita capturar prosa ("proyectó CELEBRADA
+# CON EL contrato…"): un fragmento de prosa no va seguido de "Abogado/CPS".
+_RE_EXT_ABOG = re.compile(
+    r"(?i)\b(?:proyect[oó]|elabor[oó]|redact[oó])\s*[:.]?\s+"
+    r"([A-ZÁÉÍÓÚÑ][A-Za-záéíóúñÁÉÍÓÚÑ.]+(?:\s+[A-ZÁÉÍÓÚÑ][A-Za-záéíóúñÁÉÍÓÚÑ.]+){1,3})"
+    r"\s*[-–/,]\s*"
+    r"(?:abogad[oa]|contratista|cps\b|profesional\s+especializ|grupo\s+(?:de\s+)?apoyo\s+jur)"
+)
+
+
+def extract_abogado_responsable_for_case(
+    db: Session, case: Case, *, allow_external: bool = True
+) -> tuple[Optional[str], str]:
+    """`abogado_responsable` = el REDACTOR ('Proyectó/Elaboró NOMBRE') de la respuesta SED.
+
+    Reglas (feedback Wilson 2026-05-18 / 06-02):
+    (1) Solo cuentan docs de respuesta SED (`_is_respuesta_doc`: RESPUESTA/DOCX_RESPUESTA
+        o filename con 'respuesta'/'contesta'); excluye judiciales/incidente/email.
+    (2) El doc debe pertenecer al case (accionante O radicado) — anti-insumo-prestado.
+    (3) El firmante resuelve al roster de 17; si NO resuelve pero el footer trae un rol
+        de ABOGADO claro (Abogado/CPS/Contratista/Grupo Apoyo Jurídico) y `allow_external`,
+        se conserva su nombre — es un contratista externo SED, el responsable real (antes
+        se descartaba y dejaba el caso sin abogado pese a tener respuesta).
+    (4) El SUPERVISOR (Aprobó/Revisó = la coordinadora) nunca cuenta (ver _rp_abogado_footer).
+    Roster preferido sobre externo; dentro de cada grupo el más frecuente (empate → último).
+    Returns (valor, fuente) ∈ {roster_*/catalogo, externo_cps, none}."""
     from collections import Counter
     acc_tokens = _accionante_tokens(case.accionante)
     rads = {r for r in (
@@ -2326,21 +2343,16 @@ def extract_abogado_responsable_for_case(db: Session, case: Case) -> tuple[Optio
         _rad_corto_from_23(getattr(case, "radicado_23_digitos", None)),
         _rad_corto_from_folder(getattr(case, "folder_name", None)),
     ) if r}
-    candidates: list[tuple[str, str]] = []  # (valor_resuelto, fuente)
+    roster_c: list[tuple[str, str]] = []
+    ext_c: list[str] = []
     for d in db.query(Document).filter(
         Document.case_id == case.id
     ).order_by(Document.id.asc()).all():
-        # FIX 2026-06-01: usar _is_respuesta_doc (no doc_type=="RESPUESTA" exacto) para
-        # captar respuestas mal clasificadas (DOCX_RESPUESTA / PDF con "respuesta" en el
-        # nombre). Excluye incidente/desacato (esos resuelven abogado_incidente, no éste).
-        # El footer "Proyectó:" + roster de 17 canónicos evita falsos positivos de
-        # respuestas de OTRAS entidades (ej. contestación de un banco no resuelve).
         if not _is_respuesta_doc(d):
             continue
         t = d.extracted_text or ""
         if not t:
             continue
-        # Regla (3): el doc debe pertenecer al case (accionante O radicado)
         if (acc_tokens or rads) and not _doc_belongs_to_case(
             acc_tokens, rads, t, getattr(d, "filename", "") or ""
         ):
@@ -2350,16 +2362,22 @@ def extract_abogado_responsable_for_case(db: Session, case: Case) -> tuple[Optio
             continue
         val, src = _resolve_abogado_combined(f, doc_text=t)
         if val:
-            candidates.append((val, src))
-    if not candidates:
-        return None, "none"
-    vals = [v for v, _ in candidates]
-    cnt = Counter(vals)
-    top_n = cnt.most_common(1)[0][1]
-    # más frecuente; empate → el último (respuesta más reciente)
-    chosen_val = next(v for v in reversed(vals) if cnt[v] == top_n)
-    chosen_src = next(s for v, s in reversed(candidates) if v == chosen_val)
-    return chosen_val, chosen_src
+            roster_c.append((val, src))
+        elif allow_external:
+            m = _RE_EXT_ABOG.search(t[-3000:])  # nombre adyacente a rol abogado
+            if m:
+                cleaned = _clean_abogado_name(m.group(1))
+                if cleaned and len(cleaned.split()) >= 2:
+                    ext_c.append(cleaned.upper())  # abogado externo CPS
+    if roster_c:
+        vals = [v for v, _ in roster_c]
+        cnt = Counter(vals); top = cnt.most_common(1)[0][1]
+        chosen = next(v for v in reversed(vals) if cnt[v] == top)
+        return chosen, next(s for v, s in reversed(roster_c) if v == chosen)
+    if ext_c and allow_external:
+        cnt = Counter(ext_c); top = cnt.most_common(1)[0][1]
+        return next(v for v in reversed(ext_c) if cnt[v] == top), "externo_cps"
+    return None, "none"
 
 
 # asunto (categoría) → Dirección L1 de la SED — derivado de legal_schema.SED_TEMA_MAPPING
