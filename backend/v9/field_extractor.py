@@ -656,6 +656,27 @@ def extract_accionados_for_case(db: Session, case: Case) -> Optional[str]:
     return None
 
 
+# Preámbulo de vinculación a recortar: el extractor (regex/LLM) suele capturar el
+# verbo + conectores antes de la 1ra entidad ("VINCULAR la presente acción a la
+# SECRETARÍA…", "trámite tutelar a; FUNDACIÓN…", "de manera oficiosa a…"). Se
+# recorta hasta el inicio de la entidad real. 2026-06-01.
+_RE_VINC_LEAD = re.compile(
+    r"(?i)^(?:\s*[-:;,]\s*)*"
+    r"(?:(?:la|el|los|las|al|a|de|del|en|por|y|este|esta|presente|tr[áa]mite|tutelar|"
+    r"tutela|demanda|asunto|actuaci[óo]n|acci[óo]n|accionar|litis|resguardo|"
+    r"constitucional|manera|oficios[ao]|pasiva|calidad|accionad[oa]s|intermedio|sus|"
+    r"representantes|legales|adem[áa]s|oficio|orden[ae]se|v[íi]ncul\w*|cont[ée]stese|"
+    r"p[óo]ngase|conocimiento|se|se[ñn]or|director)\b[\s.,;:-]*)+"
+)
+
+
+def _clean_vinculados_lead(v: str) -> str:
+    """Recorta el preámbulo de vinculación. Devuelve "" si no queda entidad."""
+    s = (v or "").strip()
+    s = _RE_VINC_LEAD.sub("", s).strip(" .,;:-")
+    return s if len(s) >= 4 else ""
+
+
 def extract_vinculados_for_case(db: Session, case: Case) -> Optional[str]:
     """Extrae los vinculados del cuerpo del auto admisorio (frases 'se vincula a...')."""
     autos = db.query(Document).filter(Document.case_id == case.id, Document.doc_type == "AUTO_ADMISORIO").all()
@@ -671,6 +692,7 @@ def extract_vinculados_for_case(db: Session, case: Case) -> Optional[str]:
             v = re.sub(r"\s+", " ", v).strip().rstrip(",.;")
             # Cortar antes de cláusulas de cierre
             v = re.split(r"(?i)\b(?:toda\s+vez|por\s+cuanto|quienes|para\s+que|en\s+atenci[óo]n|a\s+fin\s+(?:de|que)|al\s+considerar)\b", v)[0].strip().rstrip(",.;")
+            v = _clean_vinculados_lead(v)  # recortar preámbulo "VINCULAR a la …"
             if 8 <= len(v) <= 300:
                 return v[:250]
     return None
