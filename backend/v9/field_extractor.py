@@ -3080,35 +3080,41 @@ def _classify_decision_incidente(text: str) -> Optional[str]:
 
 
 def _clean_responsable_desacato(raw: str, doc_text: str = "") -> Optional[str]:
-    """Limpia y VALIDA el responsable_desacato contra el catálogo de los 17 abogados
-    canónicos / roster del Grupo Jurídico. Devuelve canónico (UPPER) o None.
+    """Limpia y normaliza el responsable_desacato = la AUTORIDAD/PERSONA NOMBRADA en
+    el incidente (contra quien va el desacato y sobre quien recaería la sanción).
 
-    Regla c456 (feedback_abogado_responsable, mem 2026-05-18): responsable_desacato
-    es el abogado SED que proyectó la respuesta al incidente — debe ser uno de los
-    17 oficiales en `backend/data/abogados_canonicos.json`. Cargos (Secretaria de
-    Educación, Director, Gobernador, etc.) e instituciones (GOBERNACIÓN, SED,
-    Ministerio) → None. Coherente con `_resolve_abogado_combined` para
-    `abogado_responsable`.
+    CORRECCIÓN 2026-06-02 (Wilson): responsable_desacato NO es el abogado — es el
+    sancionado: el Gobernador, la Secretaria de Educación, un rector, etc. (lo que el
+    auto requiere/sanciona). El abogado que proyecta la respuesta al desacato va en la
+    casilla aparte `abogado_incidente`. Antes este helper validaba contra el catálogo
+    de 17 abogados y rechazaba las instituciones — exactamente al revés.
 
-    El argumento `doc_text` opcional permite el match-por-correo (paso 1 del
-    roster) cuando el call site lo tiene disponible.
+    Normaliza autoridades comunes a su forma canónica; conserva rectores / nombres
+    propios / otras entidades en MAYÚSCULAS. `doc_text` ya no se usa (queda por compat).
     """
     if not raw:
         return None
     v = re.sub(r"\s+", " ", raw).strip(" ,.;:-").strip()
     v = re.sub(r"(?i)^(?:se[ñn]ora?\s+|doctora?\s+|dra?\.?\s+|funcionari[oa]\s+|ciudadan[oa]\s+)+", "", v).strip()
-    if not (6 <= len(v) <= 80):
+    if not (4 <= len(v) <= 80):
         return None
-    # Pre-rechazo barato: instituciones puras y cargos sin nombre nunca son canónicos.
     f = _fold(v)
-    if re.search(r"\b(?:gobernacion|secretaria de educacion|ministerio|alcaldia|"
-                 r"departamento de santander|fomag|fiduprevisora|despacho|"
-                 r"juzgado|tribunal|institucion)\b", f) and len(v.split()) <= 6:
+    # Autoridades SED/Gobernación → forma canónica del cuadro.
+    if "secretaria de educacion" in f or ("secretaria" in f and "educacion" in f):
+        return "SECRETARÍA DE EDUCACIÓN DE SANTANDER"
+    if "gobernacion" in f or "departamento de santander" in f or "gobernador" in f:
+        return "GOBERNACIÓN DE SANTANDER"
+    # Boilerplate del auto capturado sin entidad real → None ("PREVIA APERTURA FORMAL
+    # INCIDENTE…", "LAS MENCIONADAS EN EL NUMERAL ANTERIOR…", "PARA QUE…").
+    if re.search(r"\b(?:apertura|incidente|desacato|mencionad|numeral|anterior|previa|"
+                 r"requerimiento|cumplimiento|para que|providencia|t[ée]rmino|"
+                 r"accionad[oa]s?|vinculad[oa]s?|entidades)\b", f):
         return None
-    # Delegar al resolver compartido: roster Grupo Jurídico → catálogo canónicos.
-    # Si no hay match, devuelve None (regla cerrada: el campo queda vacío).
-    canonical, _src = _resolve_abogado_combined(v, doc_text=doc_text)
-    return canonical.upper() if canonical else None
+    # Rechazar SOLO si el valor es puramente un conector (no un nombre que empieza por él).
+    if re.fullmatch(r"(?i)(?:para que|que|de la|del|al|y|en su)\s*", v):
+        return None
+    # Rector / institución / nombre propio del funcionario sancionado → conservar.
+    return v.upper()[:80]
 
 
 def extract_incidentes_cluster_for_case(db: Session, case: Case) -> dict:
