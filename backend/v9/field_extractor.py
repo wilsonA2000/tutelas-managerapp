@@ -936,26 +936,82 @@ def _llm_classify_derecho(text: str) -> Optional[str]:
     return " - ".join(tags)
 
 
+# ============================================================
+# Selección de doc fuente para campos SEMÁNTICOS (asunto / derecho)
+# ============================================================
+# El asunto y el derecho describen el RECLAMO ORIGINAL del accionante. Si se lee
+# el doc equivocado —un auto de desacato, un informe de cumplimiento, o un PDF
+# mal rotulado como DEMANDA_TUTELA que en realidad es un AutoNoSanciona— el
+# clasificador (regex o LLM) describe la ETAPA PROCESAL en vez del reclamo.
+# `_best_claim_text` elige el doc que mejor refleja el reclamo original.
+_CLAIM_DEM_MARK = [r"BAJO LA GRAVEDAD DEL JURAMENTO", r"NO HE PRESENTADO OTRA",
+                   r"PRETENSIONES", r"\bHECHOS\b", r"JURAMENTO", r"ACCION DE TUTELA",
+                   r"instaur", r"interpong", r"agente oficios", r"en mi calidad de"]
+# Head que delata una etapa procesal POSTERIOR (no la demanda original).
+_CLAIM_NOT_DEMANDA = re.compile(
+    r"INCIDENTE DE DESACATO|\bAUTO\b|INFORME DE CUMPLIMIENTO|VISITA OCULAR|"
+    r"REQUERIMIENTO PREVIO|DECIDE SANCI|APERTURA.{0,8}PRUEBAS|NO SANCIONA", re.I)
+
+
+def _best_claim_text(db: Session, case: Case, max_chars: int = 9000) -> tuple[str, bool]:
+    """Devuelve (texto, es_demanda_real) del doc que mejor refleja el reclamo
+    original del accionante. Penaliza autos/desacato/informes (etapa procesal).
+    `es_demanda_real=False` ⇒ no hay demanda fiable → el caller debe ser honesto
+    (SIN_DETERMINAR/flag) en vez de clasificar una etapa procesal."""
+    scored: list[tuple[int, str]] = []
+    for d in db.query(Document).filter(Document.case_id == case.id).all():
+        t = d.extracted_text if d.extracted_text else (_read_doc_text(d) or "")
+        if len(t) < 250:
+            continue
+        head = t[:6000]
+        sc = sum(2 for m in _CLAIM_DEM_MARK if re.search(m, head, re.I))
+        dt = d.doc_type or "OTRO"
+        if dt in ("DEMANDA_TUTELA", "ANEXO_DEMANDA"):
+            sc += 2
+        if dt == "AUTO_ADMISORIO":
+            sc += 3  # el auto admisorio reenuncia el reclamo original limpio
+        if dt in ("RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"):
+            sc -= 4   # defensa de la SED, NO el reclamo del accionante
+        if _CLAIM_NOT_DEMANDA.search(t[:1400]):
+            sc -= 6   # head de etapa procesal posterior → NO es la demanda
+        scored.append((sc, t[:max_chars]))
+    if not scored:
+        return "", False
+    scored.sort(key=lambda x: (-x[0], -len(x[1])))
+    sc, t = scored[0]
+    return t, sc >= 4
+
+
 def extract_derecho_vulnerado_for_case(
     db: Session, case: Case, *, use_llm: bool = True
 ) -> tuple[Optional[str], str]:
-    """Extrae derecho_vulnerado del case.
+    """Extrae derecho_vulnerado del case. Campo SEMÁNTICO → autoridad = LLM.
 
-    Estrategia:
-      1. Regex de tags por DOCTYPE en orden de prioridad (AUTO_ADMISORIO >
-         DEMANDA_TUTELA > SENTENCIA_1RA > SENTENCIA_2DA > otros). En cuanto un
-         doctype produce ≥1 tag, ESE es el resultado — no se mezcla con los
-         demás, porque el auto admisorio enuncia el reclamo limpio mientras que
-         la demanda lista todo y la sentencia trae boilerplate jurisprudencial.
-         Dentro de un mismo doctype sí se fusionan varios docs.
-      2. Si regex no encuentra nada y `use_llm`: una llamada al LLM local con un
-         prompt clasificador al vocabulario controlado.
+    Estrategia (2026-06, LLM-first):
+      1. Si `use_llm` y el LLM local está disponible: lee la demanda real
+         (`_best_claim_text`, que excluye autos/desacato/informes) y clasifica
+         al vocabulario controlado. ESTA es la autoridad — el regex de keywords
+         sobre-aplica EDUCACION (lo dispara el nombre del accionado
+         "Secretaría de Educación" o una mención de paso) y no distingue el
+         derecho del ESTUDIANTE del reclamo LABORAL del docente.
+      2. FALLBACK regex (determinista; airgapped / `V9_DISABLE_LLM=true` / el LLM
+         no concluyó): tags por DOCTYPE en orden de prioridad; el primero con
+         señal gana.
       3. Si todo falla: ("SIN_DETERMINAR", "default").
 
-    Returns: (valor, fuente)  — fuente ∈ {"regex", "llm", "default"}.
+    Returns: (valor, fuente)  — fuente ∈ {"llm", "regex", "default"}.
     """
-    # 1. Regex por doctype, en orden de prioridad — el primero con señal gana
-    seen_priority_text: list[str] = []
+    # 1. LLM-first (autoridad del campo semántico)
+    if use_llm and os.getenv("V9_DISABLE_LLM", "false").lower() != "true":
+        claim_text, _is_real = _best_claim_text(db, case)
+        if claim_text and len(claim_text) >= 150:
+            val = _llm_classify_derecho(claim_text)
+            # "OTRO" pelado = el LLM no identificó un derecho del vocab → inconcluso;
+            # preferir el regex (no regresar un EDUCACION correcto a OTRO).
+            if val and val not in (DERECHO_SIN_DETERMINAR, "OTRO"):
+                return val, "llm"
+
+    # 2. FALLBACK regex por doctype, en orden de prioridad — el primero con señal gana
     docs_by_type: dict[str, list[Document]] = {}
     for d in db.query(Document).filter(Document.case_id == case.id).all():
         docs_by_type.setdefault(d.doc_type or "OTRO", []).append(d)
@@ -967,32 +1023,12 @@ def extract_derecho_vulnerado_for_case(
             text = d.extracted_text if d.extracted_text else _read_doc_text(d)
             if not text or len(text) < 200:
                 continue
-            if dt in _DERECHO_DOC_PRIORITY:
-                seen_priority_text.append(text[:9000])
             for tag in _extract_derechos_from_text(text):
                 if tag not in found:
                     found.append(tag)
         if found:
             found.sort(key=lambda t: _DERECHO_PRIORITY.get(t, 999))
             return _format_derechos(found), "regex"
-
-    # 2. LLM fallback
-    if use_llm:
-        # Texto de los docs prioritarios (auto + demanda + sentencia), recortado
-        llm_text = "\n\n".join(seen_priority_text[:3])
-        if len(llm_text) < 150:
-            # ningún doc prioritario; tomar el doc más largo del case
-            longest = (
-                db.query(Document)
-                .filter(Document.case_id == case.id, Document.extracted_text.isnot(None))
-                .all()
-            )
-            longest = sorted(longest, key=lambda d: len(d.extracted_text or ""), reverse=True)
-            if longest:
-                llm_text = (longest[0].extracted_text or "")[:9000]
-        val = _llm_classify_derecho(llm_text)
-        if val and val != DERECHO_SIN_DETERMINAR:
-            return val, "llm"
 
     # 3. Default
     return DERECHO_SIN_DETERMINAR, "default"
@@ -1736,26 +1772,68 @@ def _llm_classify_asunto(text: str, vocab: list[str]) -> Optional[str]:
 ASUNTO_SIN_DETERMINAR = "SIN_DETERMINAR"
 
 
+# Categorías de asunto LABORAL-DOCENTE: el accionante es el DOCENTE y el derecho
+# en juego es TRABAJO/SALUD/SEGURIDAD_SOCIAL — no la educación de un menor.
+_ASUNTO_DOCENTE_LABORAL = {
+    "NOMBRAMIENTO", "TRASLADO", "SALUD_DOCENTE", "PENSION", "SALARIO", "CESANTIAS",
+    "REINTEGRO", "TESORERIA", "CNSC_CONCURSO", "HISTORIA_LABORAL", "ACOSO_LABORAL", "FSE",
+}
+# Categorías genéricas/débiles que conviene refinar con el LLM.
+_ASUNTO_GENERICAS = {"EDUCACION", "TUTELA_GENERICA", "INCIDENTE_DESACATO"}
+# Señales de que el verdadero afectado es un ESTUDIANTE/MENOR (no el docente) —
+# el caso típico mal clasificado (estudiante etiquetado como asunto de docente).
+_ASUNTO_MENOR_MARK = re.compile(
+    r"\b(mi\s+hij[oa]|menor\s+de\s+edad|ni[ñn][oa]\b|estudiante|alumn[oa]|"
+    r"NNA\b|discapacidad|autism|\bTEA\b|inclusi[óo]n\s+educativ|matr[íi]cul|"
+    r"cupo\s+escolar|sustituci[óo]n\s+de\s+docente|tutor\s+sombra)\b", re.I)
+
+
+def _asunto_needs_llm(regex_cat: Optional[str], claim_text: str) -> bool:
+    """Arbitraje: ¿consultar al LLM en vez de quedarse con el regex? Sí cuando
+    (a) el regex no clasificó, (b) la categoría es genérica/débil, o (c) el regex
+    dice 'docente-laboral' pero el texto habla de un menor/estudiante — la
+    confusión estudiante↔docente que el keyword matcher no distingue."""
+    if not regex_cat:
+        return True
+    if regex_cat in _ASUNTO_GENERICAS:
+        return True
+    if regex_cat in _ASUNTO_DOCENTE_LABORAL and claim_text and _ASUNTO_MENOR_MARK.search(claim_text):
+        return True
+    return False
+
+
 def extract_asunto_for_case(db: Session, case: Case, *, use_llm: bool = True) -> tuple[Optional[str], str]:
-    """`asunto` = etiqueta del vocabulario controlado SED. Returns (valor, fuente)
-    con fuente ∈ {"regex", "llm", "default"}."""
+    """`asunto` = etiqueta del vocabulario controlado SED. Campo SEMÁNTICO con
+    arbitraje LLM. Returns (valor, fuente) con fuente ∈ {"regex","llm","default"}.
+
+    regex-first (rápido y suele acertar el docente real) PERO consulta al LLM
+    cuando el regex es dudoso: vacío, genérico, o 'docente-laboral' sobre un texto
+    que habla de un menor/estudiante. Ver `_asunto_needs_llm`. El LLM lee la
+    demanda real vía `_best_claim_text` (no los subjects de email ni los autos de
+    desacato). Con `V9_DISABLE_LLM` o `use_llm=False` → solo regex."""
     vocab = _asunto_vocab()
+    regex_cat: Optional[str] = None
     try:
         from backend.cognition.legal_schema import clasificar_sed_tematica
         # PASE 1: solo el reclamo del accionante (sin la defensa SED).
         _l1, _l2, _l3, cat = clasificar_sed_tematica(_asunto_case_text(db, case, primary_only=True))
-        if cat:
-            return cat, "regex"
-        # PASE 2 (fallback): todos los docs — recupera cases sin demanda archivada.
-        _l1, _l2, _l3, cat = clasificar_sed_tematica(_asunto_case_text(db, case))
-        if cat:
-            return cat, "regex"
+        if not cat:
+            # PASE 2 (fallback): todos los docs — recupera cases sin demanda archivada.
+            _l1, _l2, _l3, cat = clasificar_sed_tematica(_asunto_case_text(db, case))
+        regex_cat = cat or None
     except Exception:
         pass
-    if use_llm:
-        v = _llm_classify_asunto(_asunto_case_text(db, case), vocab)
-        if v:
-            return v, "llm"
+
+    # Arbitraje LLM: solo cuando el regex es dudoso (no gasta LLM si el regex es firme).
+    if use_llm and os.getenv("V9_DISABLE_LLM", "false").lower() != "true":
+        claim_text, _is_real = _best_claim_text(db, case)
+        if _asunto_needs_llm(regex_cat, claim_text) and claim_text and len(claim_text) >= 150:
+            v = _llm_classify_asunto(claim_text, vocab)
+            if v and v != "OTRO":
+                return v, "llm"
+
+    if regex_cat:
+        return regex_cat, "regex"
     return ASUNTO_SIN_DETERMINAR, "default"
 
 
