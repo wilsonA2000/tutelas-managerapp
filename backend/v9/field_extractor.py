@@ -2351,20 +2351,29 @@ def extract_abogado_responsable_for_case(
         if not _is_respuesta_doc(d):
             continue
         t = d.extracted_text or ""
-        if not t:
+        # ANCLA DE FOOTER: el footer ('Proyectó NOMBRE') va al FINAL y el extracted_text
+        # legacy está capado a ~30k = solo cabeza → sin footer. Re-leemos la cola del
+        # disco. El chequeo de pertenencia usa la CABEZA (accionante/rad); la extracción
+        # del footer usa la COLA. (Espejo de cómo el sentido_fallo usa _dispositiva_zone.)
+        footer = _footer_zone(d)
+        belong_text = t or footer or ""
+        if not belong_text:
             continue
         if (acc_tokens or rads) and not _doc_belongs_to_case(
-            acc_tokens, rads, t, getattr(d, "filename", "") or ""
+            acc_tokens, rads, belong_text, getattr(d, "filename", "") or ""
         ):
             continue
-        f = _rp_abogado_footer(t)
+        foot_text = footer or t
+        if not foot_text:
+            continue
+        f = _rp_abogado_footer(foot_text)
         if not f:
             continue
-        val, src = _resolve_abogado_combined(f, doc_text=t)
+        val, src = _resolve_abogado_combined(f, doc_text=foot_text)
         if val:
             roster_c.append((val, src))
         elif allow_external:
-            m = _RE_EXT_ABOG.search(t[-3000:])  # nombre adyacente a rol abogado
+            m = _RE_EXT_ABOG.search(foot_text[-3000:])  # nombre adyacente a rol abogado
             if m:
                 cleaned = _clean_abogado_name(m.group(1))
                 if cleaned and len(cleaned.split()) >= 2:
@@ -2495,6 +2504,35 @@ _RE_PRIMERO_DECISION = re.compile(
     r"(?=DENEGAR|NEGAR|NIEG|NO\s+(?:TUTELAR|AMPARAR|CONCEDER|SE)|CONCED|CONCÉD|TUTEL|AMPAR|"
     r"DECLAR|ORDEN|PROTEG|OTORG|REVOCAR|CONFIRMAR)"
 )
+
+
+def _footer_zone(d) -> Optional[str]:
+    """ANCLA DE FOOTER: cola del documento leída del DISCO (donde va el bloque de firma
+    administrativo: 'Proyectó/Elaboró/Revisó/Aprobó <NOMBRE>'). Espejo de
+    `_dispositiva_zone` pero para el footer de las RESPUESTAS SED.
+
+    Por qué existe: el `extracted_text` legacy está capado a ~30k chars = solo la CABEZA;
+    el footer va al FINAL → se perdía y `abogado_responsable` quedaba vacío en respuestas
+    largas. Esta ancla re-lee la cola del disco, así NO depende del texto capado.
+
+    Returns la cola (texto) o None si no hay file_path legible.
+    """
+    fp = getattr(d, "file_path", None)
+    if not fp or not os.path.exists(fp):
+        return None
+    suf = str(fp).lower()
+    try:
+        if suf.endswith(".pdf"):
+            from backend.extraction.pdf_extractor import extract_pdf
+            return (extract_pdf(fp, first_pages=0, last_pages=3).text or "") or None
+        if suf.endswith((".docx", ".doc")):
+            from backend.v9 import doc_io
+            full = doc_io.read_one(fp).text or ""
+            # El footer va al final; devolvemos la cola (con margen de sobra).
+            return (full[-6000:] if full else "") or None
+    except Exception as e:  # pragma: no cover
+        logger.debug("footer_zone falló (doc#%s): %s", getattr(d, "id", "?"), e)
+    return None
 
 
 def _dispositiva_zone(d) -> Optional[str]:
