@@ -2481,7 +2481,9 @@ def _last_resuelve_zone(text: str) -> Optional[str]:
 # media página, sin el verbo dispositivo real (bug caso 20: decía NEGAR y salía CONCEDE;
 # casos 98/247: zona sin verbo). Por eso para clasificar el sentido leemos la dispositiva
 # desde el FINAL del PDF (últimas páginas completas, sin depender del texto capado).
-_TEXT_CAP = 30000
+# (El antiguo cap de 30000 chars se ELIMINÓ — doc_io lee head+tail completo. Quedó dato
+#  legacy en DB con extracted_text capado a 30k que pierde el footer/RESUELVE del final;
+#  se re-extrae con scripts/recap_30k.py. Ver reference: cap 30k.)
 
 
 # La dispositiva empieza con "PRIMERO: <VERBO>" aunque el keyword RESUELVE/FALLA no quede
