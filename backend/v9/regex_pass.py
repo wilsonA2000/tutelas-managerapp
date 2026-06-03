@@ -417,6 +417,10 @@ _FOREST_CANONICO = re.compile(
 _FOREST_ES = re.compile(r"(?i)el\s+n[úu]mero\s+de\s+radicado\s+es\s*[:\.]?\s*(\d{7,13})")
 # RADICACIÓN # : X — marca de agua en el header de los DOCX de respuesta
 _FOREST_DOCX_HEADER = re.compile(r"(?i)RADICACI[ÓO]N\s*#?\s*[:\.]?\s*(\d{8,13})")
+# Un FOREST de SED (formato continuo) SIEMPRE empieza con el año: 20YY... Esto
+# distingue el FOREST real ("20260091898") del radicado judicial ("6800122130002")
+# y de Proc#/IDs legacy ("2821568") que se colaban por "RADICACIÓN #".
+_FOREST_YEAR_PREFIX = re.compile(r"^20[12]\d")
 # Keyword FOREST/Forest seguido de número
 _FOREST_KEYWORD = re.compile(r"(?i)(?:FOREST|forest)\s*(?:N[°o]\.?\s*)?:?\s*(\d{7,13})")
 # NUEVO formato FOREST Gobernación (2026+, formato único con guiones):
@@ -454,10 +458,15 @@ def _extract_forest(text: str) -> Optional[str]:
     blacklist = _FOREST_ENTITY_BLACKLIST | _EXTRA_BLACKLIST
 
     for pat in (_FOREST_CANONICO, _FOREST_ES, _FOREST_DOCX_HEADER, _FOREST_KEYWORD):
-        m = pat.search(text)
-        if m:
+        # finditer (no search): un mismo doc puede traer VARIAS "RADICACIÓN #" — la
+        # judicial (68...) y la del FOREST de SED (2026...). Devolvemos la primera que
+        # VALIDA, no la primera que aparece, para no quedarnos con el radicado judicial.
+        for m in pat.finditer(text):
             v = m.group(1)
-            if 7 <= len(v) <= 13 and v not in blacklist:
+            # El FOREST de SED es SIEMPRE year-prefixed (20YY...). Descarta radicados
+            # judiciales (68...) y Proc#/IDs legacy (28.../33...) que NO empiezan con
+            # el año — esos son la causa de los FOREST = prefijo del rad23.
+            if 7 <= len(v) <= 13 and v not in blacklist and _FOREST_YEAR_PREFIX.match(v):
                 return v
     return None
 
