@@ -50,9 +50,14 @@ class TestForestValidation:
     def test_all_zeros(self):
         assert is_valid_forest("0000000") is False
 
-    def test_seven_digit_valid(self):
-        """Números de 7 dígitos que no empiezan con 68 son válidos."""
-        assert is_valid_forest("2695882") is True
+    def test_seven_digit_proc_no_es_forest(self):
+        """Números de 7 díg NO year-prefixed son el Proc#/ID del documento (header DOCX),
+        NO el radicado FOREST de SED. Criterio (2026-06): el FOREST continuo SIEMPRE
+        empieza con el año (20YY); el GESTA va con guiones. Ver reference_forest_criterios."""
+        assert is_valid_forest("2695882") is False
+        assert is_valid_forest("2821568") is False
+        # year-prefixed sí es válido
+        assert is_valid_forest("20260030890") is True
 
     def test_blacklist_contents(self):
         assert "3634740" in FOREST_BLACKLIST

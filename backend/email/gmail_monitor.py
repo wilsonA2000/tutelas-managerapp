@@ -314,7 +314,7 @@ def extract_forest(body: str, attachment_names: list[str]) -> str:
     FOREST válido SOLO proviene de tutelas@santander.gov.co.
     Returns: número FOREST (10-13 dígitos o formato nuevo con guiones) o '' si no se encuentra."""
     from backend.agent.forest_extractor import (
-        FOREST_PATTERN, FOREST_NUEVO_PATTERN, FOREST_BLACKLIST,
+        FOREST_PATTERN, FOREST_NUEVO_PATTERN, FOREST_BLACKLIST, is_valid_forest,
     )
 
     # Prioridad: nuevo formato Gobernación con guiones (p.ej. "2-2026-104200-001912").
@@ -322,8 +322,11 @@ def extract_forest(body: str, attachment_names: list[str]) -> str:
     if mn and mn.group(1) not in FOREST_BLACKLIST:
         return mn.group(1)
 
+    # FOREST_PATTERN dispara con frases como "Ref:" / "número de radicación:" que pueden
+    # preceder al radicado JUDICIAL (68...) — validar con is_valid_forest (exige año-prefijo)
+    # para no escribir el rad23 ni un Proc# en el campo FOREST.
     m = FOREST_PATTERN.search(body or "")
-    if m and m.group(1) not in FOREST_BLACKLIST:
+    if m and m.group(1) not in FOREST_BLACKLIST and is_valid_forest(m.group(1)):
         return m.group(1)
 
     # NO buscar en nombres de archivos DOCX — esos números son radicados internos de salida

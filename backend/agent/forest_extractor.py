@@ -58,8 +58,15 @@ def is_valid_forest(num: str) -> bool:
     digits = re.sub(r'\D', '', num)
     if len(digits) < 7:
         return False
-    # Los radicados judiciales empiezan por 68 (código Santander)
+    # Los radicados judiciales empiezan por 68 (código Santander) → NO son FOREST.
     if digits.startswith('68'):
+        return False
+    # Un FOREST de SED (formato continuo) SIEMPRE empieza con el AÑO (20YY). Esto
+    # descarta el radicado judicial (68...) Y los Proc#/IDs de 7 díg (28.../33...), que
+    # son el número del DOCUMENTO en el header DOCX, no el radicado FOREST de SED. El
+    # formato nuevo GESTA ("2-2026-104200-...") va con guiones por FOREST_NUEVO_PATTERN
+    # (no pasa por aquí). Ver reference_forest_criterios.
+    if not re.match(r'^20[12]\d', digits):
         return False
     # Rechazar numeros con todos digitos iguales (0000000, 1111111, etc.)
     if len(set(digits)) <= 1:
