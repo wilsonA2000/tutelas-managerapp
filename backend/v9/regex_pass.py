@@ -266,6 +266,11 @@ def _anchored_rad23(text: str, anchor: tuple[str, str]) -> Optional[str]:
     pos_order: list[tuple[int, str]] = []
     for m in _RAD23_CAND.finditer(text):
         cand = re.sub(r"\D", "", m.group(0))
+        # Algunos autos imprimen SOLO 21 díg (juzgado12+año4+consec5) y omiten el
+        # recurso "00" de 1ra instancia, p.ej. "681794089001 – 2026 – 00053–T".
+        # Completamos el recurso implícito. (Si trae el recurso real, ya son 23.)
+        if len(cand) == 21:
+            cand = cand + "00"
         if len(cand) != 23:
             continue
         if cand[12:16] != year or cand[16:21] != consec:
@@ -337,7 +342,6 @@ def _extract_radicado_23(
         # Recorrer la ventana char por char acumulando dígitos.
         # Si encuentro un char que NO sea dígito ni separador válido → abortar.
         digits_buf = []
-        valid = True
         for ch in window:
             if ch.isdigit():
                 digits_buf.append(ch)
@@ -346,10 +350,15 @@ def _extract_radicado_23(
             elif ch in _RAD23_VALID_SEPARATORS:
                 continue
             else:
-                # Letra u otro símbolo entre dígitos → composición espuria
-                valid = False
+                # Letra u otro símbolo: TERMINA el número. Si ya juntamos 21 ó 23
+                # dígitos lo aceptamos (un "–T" tras 21 díg = sufijo "Tutela", el
+                # recurso "00" va implícito); si menos, era composición espuria.
                 break
-        if not valid or len(digits_buf) < 23:
+
+        # Recurso "00" implícito: algunos autos imprimen solo 21 díg (sin recurso).
+        if len(digits_buf) == 21:
+            digits_buf = digits_buf + ["0", "0"]
+        if len(digits_buf) < 23:
             continue
 
         candidate = "".join(digits_buf)
