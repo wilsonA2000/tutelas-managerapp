@@ -279,9 +279,24 @@ def _clean_acc_value(raw: str) -> Optional[str]:
         r"R\.?\s?L\.?|representante\s+legal|A\.?\s?O\.?\b|"
         r"agente\s+oficios|menor(?:es)?\b|hij[oa]s?\b|mayor\s+de\s+edad|"
         r"vecin[oa]\s+de|residente|domiciliad[oa]|"
+        # FIX (2026-06-03): datos de contacto que la cabecera de la tutela imprime
+        # tras el nombre ("ACCIONANTE: NOMBRE  CORREO ELECTRÓNICO: x@y.com / TEL ...").
+        # Sin esto el accionante quedaba "NOMBRE CORREO ELECTRONICO" (c160/c229).
+        r"correo\s+electr[óo]nico|correo\b|e-?mail|tel[ée]fono|celular|"
+        r"n[úu]mero\s+de\s+(?:contacto|celular|tel[ée]fono)|direcci[óo]n\b|notificaci[óo]n(?:es)?\b|@|"
         r"y\s+(?:otros?\b|dem[áa]s\b|padres\s+de\b|los\s+(?:padres|dem[áa]s)\b|en\s+representaci|en\s+nombre\b))\b", v
     )[0].strip()
     v = v.strip(" |:;,.·•").strip()
+    # FIX (2026-06-03): handles/usuarios de email pegados tras el nombre, en MINÚSCULA,
+    # cuando la cabecera viene en mayúscula inicial ("Lucinda Antolinez Maldonado
+    # lucymaldonado" → cae "lucymaldonado"). Solo si hay mezcla de casing (señal de
+    # que las minúsculas son un handle, no parte del nombre); preserva nombres que
+    # vienen todos en minúscula (no se toca si NINGÚN token es Mayúscula/UPPER).
+    _ws = v.split()
+    if len(_ws) > 2 and any(w[:1].isupper() for w in _ws):
+        while len(_ws) > 2 and _ws[-1].isalpha() and _ws[-1].islower():
+            _ws.pop()
+        v = " ".join(_ws)
     if 5 <= len(v) <= 70 and _looks_like_name(v):
         return v.upper()
     return None

@@ -246,6 +246,7 @@ def _checks_field_extractor() -> list[tuple]:
             _ASUNTO_TO_L1, _classify_sentido_fallo, _resuelve_verbatim,
             _RE_OBS_MEDIDA_PROVISIONAL, _RE_OBS_SEP,
             _normalize_entity_list, _canon_entity, _looks_like_accionado_value,
+            _clean_acc_value,
         )
         from backend.cognition.legal_schema import clasificar_sed_tematica, categoria_tematica_de_asunto
         from backend.v9.regex_pass import _extract_ciudad as _regex_ciudad
@@ -660,6 +661,28 @@ def _checks_field_extractor() -> list[tuple]:
         "obs: texto neutro → sin banderas SEP",
         [],
         _sep_labels("El docente solicita su traslado por necesidad del servicio."),
+    ))
+
+    # --- ACCIONANTE (campo 5): limpieza de basura de cola (fix 2026-06-03) ---
+    out.append((
+        "acc: corta 'CORREO ELECTRONICO' + email tras el nombre",
+        "RUTH AMPARO SÁNCHEZ PEÑA",
+        _clean_acc_value("RUTH AMPARO SÁNCHEZ PEÑA CORREO ELECTRONICO ruth@x.com"),
+    ))
+    out.append((
+        "acc: corta handle de email en minúscula tras nombre Mayúscula",
+        "LUCINDA ANTOLINEZ MALDONADO",
+        _clean_acc_value("Lucinda Antolinez Maldonado lucymaldonado"),
+    ))
+    out.append((
+        "acc: control — nombre limpio no se toca",
+        "JUAN PABLO MATEUZ",
+        _clean_acc_value("JUAN PABLO MATEUZ"),
+    ))
+    out.append((
+        "acc: control — nombre todo minúscula NO pierde tokens",
+        "MARIA FERNANDA LOPEZ",
+        _clean_acc_value("maria fernanda lopez"),
     ))
     return out
 
