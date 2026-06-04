@@ -1416,11 +1416,84 @@ def _ciudad_clean(raw: Optional[str]) -> Optional[str]:
     return v
 
 
-def extract_ciudad_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
-    """Extrae `ciudad` = municipio del juzgado de 1ra instancia (≈ lugar de los hechos).
+def _strip_accents(s: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", s or "") if unicodedata.category(c) != "Mn")
 
-    Returns: (valor, fuente) — fuente ∈ {"juzgado", "auto", "demanda", "none"}.
-    """
+
+# Municipio de AFECTACIÓN: la I.E./sede donde labora el docente (o el colegio del
+# estudiante), NO la sede del juzgado. Para traslados se ancla a la PLAZA DE ORIGEN
+# ("labora/adscrito/asignado/presta servicios en ... municipio de X"), no al destino
+# solicitado. Regla confirmada por el usuario; corrige el sesgo histórico de tomar
+# el municipio del juzgado (que suele ser Bucaramanga por reparto).
+_RE_PLAZA_ORIGEN = re.compile(
+    r"(?i)\b(?:labor[oa]|me desempe\w+|se desempe\w+|adscrit[oa]|asignad[oa]|"
+    r"nombrad[oa]\s+en|presta\s+(?:sus\s+)?servicios|vinculad[oa]\s+a|plaza\s+de\s+origen|"
+    r"donde\s+labora|titular\s+de\s+la\s+plaza)\b"
+    # span corto: permite puntos de abreviaturas ('I.E.') y saltos de línea del PDF
+    r"[\s\S]{0,140}?\bmunicipio\s+de\s+(?:la\s+)?([A-Za-zÁÉÍÓÚÑáéíóúñ][A-Za-zÁÉÍÓÚÑáéíóúñ .']{2,40})"
+)
+
+
+def _longest_valid_municipio(cand: str, valid_keys: set) -> Optional[str]:
+    """De un span capturado ('Valle de San José y solicita...'), devuelve el PREFIJO de
+    palabras más largo que sea un municipio válido ('VALLE DE SAN JOSÉ'). Maneja
+    municipios de varias palabras sin truncar ni sobre-capturar."""
+    words = re.split(r"\s+", (cand or "").strip())
+    for n in range(min(len(words), 5), 0, -1):
+        pref = " ".join(words[:n])
+        v = _ciudad_clean(pref)
+        if v and _strip_accents(v).upper() in valid_keys:
+            return v
+    return None
+
+
+# Contexto de DESTINO/solicitud: si "municipio de X" viene tras estas palabras, X es
+# el destino pedido (traslado), NO la plaza de origen → se rechaza.
+_RE_DESTINO_CTX = re.compile(
+    r"(?i)\b(?:traslad\w*\s+(?:a|al|hacia)|solicit\w*\s+(?:el\s+)?traslad|reubic\w*\s+(?:a|en)|"
+    r"pretend\w+|aspira\b|preferiblemente|cercan\w+\s+a|al\s+municipio\s+de|"
+    r"a\s+una\s+(?:plaza|instituci))\s*$"
+)
+
+
+def _extract_municipio_afectacion(db: Session, case: Case) -> Optional[str]:
+    """Municipio de la I.E./plaza donde se afecta el derecho (no la sede del juzgado).
+    CONSERVADOR (alta precisión, baja cobertura): solo el ancla fuerte de PLAZA DE ORIGEN
+    ("labora/adscrito/asignado ... municipio de X"), rechazando contextos de DESTINO
+    ("traslado a ... municipio de Z"). El 80% restante cae al juzgado (provisional) y la
+    afectación real la resuelve el pase semántico (LLM gap-fill) que SÍ razona origen vs
+    destino. Valida contra MUNICIPIOS_SANTANDER (normaliza acentos: la lista va sin tildes)."""
+    try:
+        from backend.cognition.legal_schema import MUNICIPIOS_SANTANDER
+        valid_keys = {_strip_accents(m).upper() for m in MUNICIPIOS_SANTANDER}
+    except Exception:
+        return None
+
+    for dt in ("RESPUESTA_SED", "DOCX_RESPUESTA", "RESPUESTA", "DEMANDA_TUTELA", "ANEXO_DEMANDA"):
+        for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt).all():
+            t = d.extracted_text or ""
+            if len(t) < 300:
+                continue
+            for m in _RE_PLAZA_ORIGEN.finditer(t):
+                pre = t[max(0, m.start(1) - 45):m.start(1)]
+                if _RE_DESTINO_CTX.search(pre):
+                    continue  # el municipio es el destino solicitado, no el origen
+                v = _longest_valid_municipio(m.group(1), valid_keys)
+                if v:
+                    return v
+    return None
+
+
+# El municipio del juzgado SOLO se desacopla de la afectación en estos HUBS de reparto
+# (municipios certificados con muchos juzgados, donde caen tutelas de toda la provincia).
+# En juzgados de pueblo la tutela se radica localmente → el juzgado ES la afectación.
+_REPARTO_HUBS = {"BUCARAMANGA", "FLORIDABLANCA", "GIRON", "BARRANCABERMEJA", "PIEDECUESTA"}
+
+
+def _ciudad_del_juzgado(db: Session, case: Case) -> tuple[Optional[str], str]:
+    """Municipio embebido en el nombre del juzgado / header del auto / demanda.
+    Returns (valor, fuente∈{"juzgado","auto","demanda","none"})."""
     juz = getattr(case, "juzgado", None) or ""
 
     # 1) municipio embebido en el nombre del juzgado ya extraído (conserva tildes)
@@ -1463,6 +1536,25 @@ def extract_ciudad_for_case(db: Session, case: Case) -> tuple[Optional[str], str
             if v:
                 return v, "demanda"
 
+    return None, "none"
+
+
+def extract_ciudad_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
+    """`ciudad` = municipio de AFECTACIÓN (la I.E./plaza del docente o el colegio del
+    estudiante). El municipio del juzgado se usa como valor, SALVO cuando el juzgado es un
+    HUB de reparto (Bucaramanga/Floridablanca/Girón/Barrancabermeja/Piedecuesta) — ahí se
+    desacopla de la afectación y prima la lectura de la PLAZA DE ORIGEN en la demanda/
+    respuesta (regla del usuario). Valor PROVISIONAL/auditable (fuente registrada); la
+    afectación fina en casos ambiguos (origen vs destino) la resuelve el operador o el
+    pase semántico. Returns (valor, fuente∈{"afectacion","juzgado","auto","demanda","none"})."""
+    juz_muni, juz_src = _ciudad_del_juzgado(db, case)
+    # El juzgado solo NO sirve como afectación en los hubs de reparto (o si no se obtuvo).
+    if juz_muni is None or _strip_accents(juz_muni).upper() in _REPARTO_HUBS:
+        muni = _extract_municipio_afectacion(db, case)
+        if muni:
+            return muni, "afectacion"
+    if juz_muni:
+        return juz_muni, juz_src
     return None, "none"
 
 
