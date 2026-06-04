@@ -8,6 +8,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **v9.1 — Pipeline plano (mayo 2026), modernizado.** Branch de trabajo: `experiment-v5.5`. Rama de respaldo: `backup/pre-modernizacion`.
 
+### Estado al cierre 2026-06-03 (curación de datos + curación de CÓDIGO)
+
+Tras varias sesiones de curación campo-por-campo del cuadro (~440 casos), esta
+jornada **curó los patrones de código que regeneraban errores** y desenredó las
+conflaciones históricas. **441 casos · scan_conflación = 0 · red de seguridad toda
+verde** (91/91 standalone · 52/52 v9_test_db · 90 backend · 17 frontend).
+
+**8 commits en `experiment-v5.5`** (tareas #20-#28), cada uno con test que lo blinda:
+
+| # | Fix de código | Commit |
+|---|---|---|
+| #20 | `ciudad` = municipio de afectación (plaza origen del docente / colegio del menor), NO sede del juzgado; override solo en juzgados de reparto (Bucaramanga/Floridablanca/Girón/Barrancabermeja/Piedecuesta) | `fe2fda0` |
+| #21 | doc-classifier: **resolución administrativa SED** ("RESUELVE: ARTÍCULO…", "POR LA CUAL SE EFECTÚA TRASLADO") ≠ **fallo judicial** ("administrando justicia"); `_es_resolucion_admin` en `doc_ops.py` evita que el sentido/parte_resolutiva lea una resolución como fallo | `07e5305` |
+| #23 | `estado`: NULIDAD de 2da instancia → ACTIVO (reabre el proceso) | `cb7071d` |
+| #24 | matcher anti-conflación: si el email trae rad23 sin caso, NO cae a rad corto; filtra candidatos por juzgado (3 tests nuevos) | `8028daf` |
+| #25 | `audit_log.timestamp` en formato canónico `%Y-%m-%d %H:%M:%S.%f` (no isoformat con T/+00:00 — SQLAlchemy lo lee como datetime) | `ffc6ba3` |
+| #26 | ingesta Gmail: descarga de adjuntos con retry 3× + warning "ADJUNTOS PERDIDOS" | `8028daf` |
+| #22 | `accionante`: cortar basura de cola (CORREO ELECTRÓNICO, handles de email) en `_clean_acc_value` (4 tests) | `9db5a98` |
+| — | NULL-safe en filtros de reports/KPIs + auditor calibrado | `5ec265b` |
+
+**Desconflaciones históricas** (#27, solo datos, auditadas): **c44** separó Elsa Ibeth
+Cortes (Bucaramanga) de María Lucía Sarmiento (Personería Oiba) → recreó **c541**,
+re-apuntó la acumulación colgante de c143; **c298** borró 3 duplicados de Ana Milena
+(reasignó su correo a c535). Cases 540 → **541**.
+
+**Techo honesto (NO regresable a regex — requiere criterio humano):** `accionante`
+Personería-vs-persona / litisconsorcio de 2 nombres / beneficiario-vs-filer (~10 casos);
+`fecha_ingreso` recap (3 casos); `asunto`/`derecho` SIN_DETERMINAR honestos (casos sin
+demanda archivada). El cuadro curado está **protegido por el `persist.py` no-clobber**
+(solo rellena vacíos) — re-extraer no pisa la curación. Diagnóstico reproducible:
+extractor-vs-curado sobre los 441 casos (ver `project_fix_accionante_fecha_2026-06-03`).
+
 > **⚠️ MODERNIZACIÓN 2026-05-11 (Fases 0-8 — ver `docs/V9_RETOMAR_SESION.md` y `~/.claude/plans/bueno-ahora-lo-mas-kind-steele.md`):**
 > El "v8 legacy en coexistencia" se retiró. **Toda la extracción es v9** — `/api/extraction/*` y el monitor de Gmail llaman a `backend.v9.pipeline.extract_case` (que ahora corre `field_extractor_pass` → los 22 `extract_<campo>_for_case`); `persist.py` solo rellena campos vacíos, no pisa el cuadro. El motor v8 (`extraction/{pipeline,unified,unified_cognitive}.py`, varios `cognition/*`, `extraction/remote_client.py`) está **borrado**. Las utilidades de documentos viven en **`backend/extraction/doc_ops.py`**. `routers/cognitive.py` y `routers/dashboard.py::/chat` y `cases.py::/validate` retirados; el botón flotante "Asistente jurídico" usa `POST /api/chat/` (`routers/chat.py`). Sigue vivo en `cognition/`: `legal_schema.py`, `bayesian_assignment.py`, `canonical_identifiers.py`, `confidence.py`, `folder_renamer.py`, y el "fill cognitivo determinista" (`cognitive_fill`+chain) — lo usa `services/active_learning_scheduler.py` y `ner_spacy._get_nlp`. Red de seguridad: `bash scripts/run_safety_net.sh`. Arrancar backend con `V9_DISABLE_LLM=true`. **Las secciones de abajo sobre "coexistencia v8↔v9" y "cuándo borrar v5.5/v8" son históricas.**
 
