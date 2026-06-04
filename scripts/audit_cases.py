@@ -52,7 +52,8 @@ EXPORTS = Path(__file__).resolve().parents[1] / "data" / "exports"
 ENUM_FALLO_1ST = {"CONCEDE", "CONCEDE_PARCIAL", "NIEGA", "IMPROCEDENTE", "DESISTIMIENTO",
                   "CARENCIA_OBJETO", "HECHO_SUPERADO",
                   "DESISTIDO", "TRAMITE", "RECHAZA"}
-ENUM_FALLO_2ND = {"CONFIRMA", "REVOCA", "MODIFICA", "INHIBE", "NULIDAD", "DECLARA_NULIDAD"}
+ENUM_FALLO_2ND = {"CONFIRMA", "CONFIRMA_PARCIAL", "CONFIRMA_MODIFICANDO", "REVOCA",
+                  "MODIFICA", "INHIBE", "NULIDAD", "DECLARA_NULIDAD"}
 DATE_RE = re.compile(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})")
 
 
@@ -141,21 +142,34 @@ def rule_R3(case: Case) -> list[Finding]:
     return out
 
 
+# Solo estos estados implican un AUTO DE APERTURA formal del incidente; en
+# EN_TRAMITE (requerimiento previo) y NIEGA_APERTURA/NO_SANCIONA (el juzgado se
+# abstuvo de abrir) la fecha_apertura_incidente es legitimamente vacia.
+_DECISION_CON_APERTURA = {"SANCIONA", "CIERRA"}
+
+
 def rule_R4(case: Case) -> list[Finding]:
     if (case.incidente or "").upper() != "SI":
         return []
     out = []
-    if _is_empty(case.fecha_apertura_incidente):
+    decision = (case.decision_incidente or "").upper()
+    if decision in _DECISION_CON_APERTURA and _is_empty(case.fecha_apertura_incidente):
         out.append(Finding("R4", "fecha_apertura_incidente", "ERROR",
-                           "incidente=SI pero fecha_apertura_incidente vacia"))
+                           f"incidente {decision} pero fecha_apertura_incidente vacia"))
     if _is_empty(case.responsable_desacato):
         out.append(Finding("R4", "responsable_desacato", "ERROR",
                            "incidente=SI pero responsable_desacato vacio"))
     return out
 
 
+_RAD_CORTO_RE = re.compile(r"^\s*\d{4}-\d{5}\s*$")  # fallback AAAA-NNNNN aceptado (rad corto del folder)
+
+
 def rule_R5(case: Case) -> list[Finding]:
     if _is_empty(case.radicado_23_digitos):
+        return []
+    # El fallback al rad corto AAAA-NNNNN es válido (juzgado no imprimió el CUP de 23 díg).
+    if _RAD_CORTO_RE.match(str(case.radicado_23_digitos)):
         return []
     digits = normalize_rad23(case.radicado_23_digitos)
     if len(digits) < 18:
@@ -166,14 +180,17 @@ def rule_R5(case: Case) -> list[Finding]:
 
 
 def rule_R6(case: Case) -> list[Finding]:
-    """Orden cronologico: fecha_ingreso <= fecha_fallo_1st <= fecha_fallo_2nd <= fecha_apertura_incidente."""
+    """Orden cronologico: fecha_ingreso <= fecha_fallo_1st <= fecha_fallo_2nd.
+    La fecha_apertura_incidente se valida aparte: el incidente de desacato nace del
+    INCUMPLIMIENTO de la orden de PRIMERA instancia, por lo que solo debe ser
+    posterior al fallo MAS TEMPRANO (no necesariamente al fallo de 2da, que puede
+    resolverse despues de abierto el incidente)."""
+    out = []
     seq = [
         ("fecha_ingreso", _parse_date(case.fecha_ingreso)),
         ("fecha_fallo_1st", _parse_date(case.fecha_fallo_1st)),
         ("fecha_fallo_2nd", _parse_date(case.fecha_fallo_2nd)),
-        ("fecha_apertura_incidente", _parse_date(case.fecha_apertura_incidente)),
     ]
-    out = []
     prev_name, prev_date = None, None
     for name, dt in seq:
         if dt is None:
@@ -183,6 +200,14 @@ def rule_R6(case: Case) -> list[Finding]:
                                f"{name}={dt:%Y-%m-%d} es anterior a {prev_name}={prev_date:%Y-%m-%d}",
                                {"actual": str(dt.date()), "previo": prev_name, "previo_fecha": str(prev_date.date())}))
         prev_name, prev_date = name, dt
+    apert = _parse_date(case.fecha_apertura_incidente)
+    fallos = [d for d in (_parse_date(case.fecha_fallo_1st), _parse_date(case.fecha_fallo_2nd)) if d]
+    if apert is not None and fallos:
+        earliest = min(fallos)
+        if apert < earliest:
+            out.append(Finding("R6", "fecha_apertura_incidente", "WARN",
+                               f"fecha_apertura_incidente={apert:%Y-%m-%d} es anterior al fallo mas temprano {earliest:%Y-%m-%d}",
+                               {"actual": str(apert.date()), "fallo_mas_temprano": str(earliest.date())}))
     return out
 
 

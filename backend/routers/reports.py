@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.config import EXPORTS_DIR
@@ -20,11 +21,13 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 @router.post("/excel")
 def api_generate_excel(db: Session = Depends(get_db)):
     """Generar archivo Excel con todos los datos activos (excluye DUPLICATE_MERGED y el shell de huérfanos)."""
+    # NULL-safe: en SQL `col != 'X'` es NULL (no TRUE) cuando col es NULL, lo que
+    # descartaba silenciosamente casos con tipo_actuacion/processing_status vacíos.
     cases = db.query(Case).filter(
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
         Case.folder_name != "__SIN_RADICADO__",
-        Case.processing_status != "DUPLICATE_MERGED",
-        Case.tipo_actuacion != "COMUNICACION",
+        or_(Case.processing_status.is_(None), Case.processing_status != "DUPLICATE_MERGED"),
+        or_(Case.tipo_actuacion.is_(None), Case.tipo_actuacion != "COMUNICACION"),
     ).all()
     if not cases:
         raise HTTPException(status_code=404, detail="No hay casos en la base de datos")
@@ -70,10 +73,12 @@ def api_list_exports():
 
 @router.get("/metrics")
 def api_metrics(db: Session = Depends(get_db)):
+    # NULL-safe: en SQL `col != 'X'` es NULL (no TRUE) cuando col es NULL, lo que
+    # descartaba silenciosamente casos con tipo_actuacion/processing_status vacíos.
     cases = db.query(Case).filter(
         Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
         Case.folder_name != "__SIN_RADICADO__",
-        Case.processing_status != "DUPLICATE_MERGED",
-        Case.tipo_actuacion != "COMUNICACION",
+        or_(Case.processing_status.is_(None), Case.processing_status != "DUPLICATE_MERGED"),
+        or_(Case.tipo_actuacion.is_(None), Case.tipo_actuacion != "COMUNICACION"),
     ).all()
     return calculate_metrics(cases)

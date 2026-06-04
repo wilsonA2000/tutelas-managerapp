@@ -382,8 +382,9 @@ def _count_derecho_tags(rows) -> list[tuple[str, int]]:
 
 def _real_cases_filter(valid_ids: set | None = None):
     """Filtro para excluir casos fantasma (sin carpeta real) y opcionalmente por IDs validos."""
+    # NULL-safe: `col != 'X'` es NULL (no TRUE) si col es NULL → descartaría casos.
     filters = [Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
-               Case.processing_status != "DUPLICATE_MERGED"]
+               or_(Case.processing_status.is_(None), Case.processing_status != "DUPLICATE_MERGED")]
     if valid_ids is not None:
         filters.append(Case.id.in_(valid_ids))
     return filters
@@ -422,8 +423,8 @@ def _get_valid_case_ids(db: Session, min_completitud: float = MIN_COMPLETITUD_PE
     """
     # Comunicaciones / carpetas libres no son tutelas: excluidas de KPIs y métricas.
     base_filters = [Case.folder_name.isnot(None), Case.folder_name != "None", Case.folder_name != "",
-                    Case.processing_status != "DUPLICATE_MERGED",
-                    Case.tipo_actuacion != "COMUNICACION"]
+                    or_(Case.processing_status.is_(None), Case.processing_status != "DUPLICATE_MERGED"),
+                    or_(Case.tipo_actuacion.is_(None), Case.tipo_actuacion != "COMUNICACION")]
     all_cases = db.query(Case).filter(*base_filters).all()
 
     valid_ids = set()
@@ -532,8 +533,9 @@ def get_dashboard_kpis(db: Session) -> dict:
     # Total REAL de expedientes en el sistema (no-fusionados, con carpeta) — distinto
     # de `total`, que es solo los válidos para métricas (sin shells / incompletos).
     total_carpetas = db.query(func.count(Case.id)).filter(
-        Case.processing_status != "DUPLICATE_MERGED",
+        or_(Case.processing_status.is_(None), Case.processing_status != "DUPLICATE_MERGED"),
         Case.folder_name.isnot(None), Case.folder_name != "", Case.folder_name != "None",
+        Case.folder_name != "__SIN_RADICADO__",
     ).scalar() or 0
 
     result = {
