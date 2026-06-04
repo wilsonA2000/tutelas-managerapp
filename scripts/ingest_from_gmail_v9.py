@@ -563,10 +563,21 @@ def process_email(service, msg_summary: dict, db, base_dir: Path,
         ext = Path(fname).suffix.lower()
         if ext not in VALID_EXTENSIONS:
             continue
+        # Reintentar la descarga (errores transitorios de la API de Gmail) — antes un
+        # fallo perdía el adjunto en SILENCIO y el .md citaba un archivo que no se guardó.
+        att_data = None
+        for intento in range(3):
+            try:
+                att_data = service.users().messages().attachments().get(
+                    userId="me", messageId=msg_id, id=att["attachmentId"]
+                ).execute()
+                break
+            except Exception as e:
+                if intento == 2:
+                    stats.errors.append(f"attach {fname}: {e} (3 intentos)")
+        if att_data is None:
+            continue
         try:
-            att_data = service.users().messages().attachments().get(
-                userId="me", messageId=msg_id, id=att["attachmentId"]
-            ).execute()
             data = base64.urlsafe_b64decode(att_data["data"])
             staged_path = staging / fname
             counter = 1
@@ -580,6 +591,12 @@ def process_email(service, msg_summary: dict, db, base_dir: Path,
             stats.bytes_downloaded += len(data)
         except Exception as e:
             stats.errors.append(f"attach {fname}: {e}")
+
+    # No-silencio: si el correo TRAÍA adjuntos válidos pero NINGUNO se descargó, avisar
+    # fuerte (antes el .md citaba adjuntos fantasma sin que nadie lo notara).
+    _validos = [a for a in att_parts if Path(_norm_filename(a["filename"])).suffix.lower() in VALID_EXTENSIONS]
+    if _validos and not staged_files:
+        stats.errors.append(f"ADJUNTOS PERDIDOS msg {msg_id}: citaba {len(_validos)} adjunto(s) válido(s), 0 guardados")
 
     # ----- Extraer rad23 del email + cada adjunto -----
     rad_candidates: list[str] = []

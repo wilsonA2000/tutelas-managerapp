@@ -190,6 +190,37 @@ class TestScoringUnica:
 
 
 # ─────────────────────────────────────────────────────────────
+# Anti-conflación cross-juzgado (task #24) — el rad_corto (AAAA-NNNNN) NO es único:
+# cada juzgado lleva su propia secuencia. El matcher NUNCA debe asignar por rad_corto
+# a un caso de OTRO juzgado. Cases del fixture: 100 (rad_corto 2026-00100, juzgado 68001)
+# y 300 (rad_corto 2026-00100, juzgado 54001=Cúcuta) — comparten el consecutivo.
+# ─────────────────────────────────────────────────────────────
+
+
+class TestAntiConflacionCrossJuzgado:
+    def test_rad23_sin_case_NO_cae_a_rad_corto(self, db, cache):
+        """Email con rad23 de un juzgado SIN caso en KB, que comparte rad_corto 2026-00100
+        con cases 100/300 → NO se asigna a ninguno (su identidad real está en otro lado)."""
+        s = EmailSignals(rad23="68-679-40-89-001-2026-00100-00")  # juzgado 68679, sin case
+        r = score_case_match(db, cache, s)
+        assert r.case_id is None  # NO confla con 100 (Bcga) ni 300 (Cúcuta)
+
+    def test_rad_corto_ambiguo_sin_rad23_NO_asigna(self, db, cache):
+        """Email con solo rad_corto 2026-00100 (compartido por 2 juzgados) y sin rad23 →
+        ambiguo → NO auto-asigna (esto causaba la conflación al volcar al primero)."""
+        s = EmailSignals(rad_corto="2026-00100")
+        r = score_case_match(db, cache, s)
+        assert r.case_id is None
+
+    def test_rad_corto_mas_rad23_del_juzgado_correcto(self, db, cache):
+        """Email con rad_corto 2026-00100 + rad23 del juzgado de Cúcuta (54001) → matchea
+        el case 300 (Cúcuta) por su rad23, NUNCA el 100 (Bucaramanga)."""
+        s = EmailSignals(rad23="54-001-41-05-002-2026-00100-00", rad_corto="2026-00100")
+        r = score_case_match(db, cache, s)
+        assert r.case_id == 300  # el de Cúcuta, no el de Bucaramanga
+
+
+# ─────────────────────────────────────────────────────────────
 # Scoring — múltiples criterios
 # ─────────────────────────────────────────────────────────────
 
