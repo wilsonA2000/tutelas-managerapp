@@ -3655,9 +3655,11 @@ def extract_estado_for_case(db: Session, case: Case) -> str:
         return "ACTIVO"  # sin fallo de 1ra (en curso, o no archivado → tratar como pendiente)
     impug = (getattr(case, "impugnacion", "") or "").upper()
     sentido2 = getattr(case, "sentido_fallo_2nd", None)
-    # Nota: NULIDAD de 2da NO se deriva a ACTIVO automáticamente — reabre el proceso pero
-    # el rehacer puede haber concluido ya (cf. c5/c136 cerrados vs c240 en curso). Quien
-    # tenga un rehacer pendiente se marca processing_status=REVISION para revisión humana.
+    # NULIDAD de 2da REABRE el proceso (el superior anula lo actuado sin decidir el mérito)
+    # → ACTIVO hasta que un NUEVO fallo de mérito lo concluya (al capturarlo, sentido_fallo_2nd
+    # deja de ser NULIDAD y estado re-deriva a INACTIVO). Regla del usuario; determinista.
+    if (sentido2 or "").upper() in ("NULIDAD", "DECLARA_NULIDAD"):
+        return "ACTIVO"
     if impug == "SI" and not sentido2:
         return "ACTIVO"  # impugnación interpuesta, 2da aún sin fallo
     for n in ("", "_2", "_3"):
