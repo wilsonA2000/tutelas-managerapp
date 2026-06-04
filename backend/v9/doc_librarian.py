@@ -447,6 +447,21 @@ def _disambiguate(scores: dict[DocType, float], text: str, filename: str = "") -
         scores[DocType.SENTENCIA_1RA] = scores.get(DocType.SENTENCIA_1RA, 0.0) * 0.3
         scores[DocType.SENTENCIA_2DA] = scores.get(DocType.SENTENCIA_2DA, 0.0) * 0.3
 
+    # REMISIÓN A LA CORTE CONSTITUCIONAL (eventual revisión): un oficio/email que REMITE el
+    # expediente a la Corte para su eventual revisión NO es una sentencia (es un trámite
+    # administrativo posterior al fallo). Sin esto, "09EnvioCorte.pdf" caía en SENTENCIA_2DA
+    # → cascada: impugnacion=SI falsa + fecha_fallo_2nd (la fecha del envío). Doble guardia:
+    # (a) la cabecera habla de ENVIAR/REMITIR a la Corte; (b) NO tiene dispositiva real de
+    # fallo (RESUELVE + verbo) → así NO toca sentencias reales (que sí remiten "para eventual
+    # revisión" pero DENTRO de su RESUELVE).
+    _htext = (text or "")[:600]
+    if re.search(r"(?i)(env[ií]o|remisi[óo]n|remit\w+|se\s+remite)\b.{0,80}corte\s+constitucional", _htext) \
+       and not re.search(r"(?i)\bresuelve\b.{0,250}(tutelar|conceder|amparar|neg|deneg|confirm|revoc|modific)", text or ""):
+        for dt in (DocType.SENTENCIA_1RA, DocType.SENTENCIA_2DA, DocType.AUTO_2DA):
+            if dt in scores:
+                scores[dt] *= 0.2
+        scores[DocType.NOTIFICACION_FALLO] = max(scores.get(DocType.NOTIFICACION_FALLO, 0.0), 0.85)
+
     # AUTO ADMISORIO vs AUTO 2DA: si dice "ADMITE IMPUGNACIÓN" → 2DA
     if DocType.AUTO_ADMISORIO in scores and DocType.AUTO_2DA in scores:
         if "IMPUGNAC" in head or "IMPUGNAC" in fn_up or "SEGUNDA" in head:
@@ -601,8 +616,11 @@ def classify(doc: DocText) -> DocClassification:
             method="none", signals={},
         )
 
-    # Top-1
-    best_dt = max(combined, key=combined.get)
+    # Top-1. Desempate DETERMINISTA por nombre de tipo: `combined` deriva de un set
+    # (`all_types`), cuyo orden depende de PYTHONHASHSEED; sin ordenar, `max` resolvía
+    # los empates distinto entre procesos → la misma demanda podía clasificarse distinto
+    # en dos corridas. sorted() fija el orden; en empate gana el tipo alfabéticamente menor.
+    best_dt = max(sorted(combined, key=lambda d: d.value), key=combined.get)
     best_score = combined[best_dt]
 
     if best_score < 0.2:

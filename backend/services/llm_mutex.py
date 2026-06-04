@@ -116,11 +116,23 @@ def _spawn_llm() -> int:
     # así que 4 slots solo añadían presión concurrente sobre la iGPU (factor en los
     # DeviceLost) y fragmentaban la KV. Con 1 slot: menos presión GPU = más estable, y
     # las llamadas secuenciales del caso reusan el KV-cache del slot (prompt caching real).
+    # ctx-size por env. Default 4096 = config EMPÍRICA de producción (docs/LLM_JURIDICO_
+    # CUANTIZADO_LOCAL_CPU.md §5.5): subir la ventana NO ayuda y hace el prefill más lento;
+    # el anclaje (~5K chars) es mejor solución. La perilla LLM_CTX_SIZE permite EXPERIMENTAR
+    # con 8192 (cabe un fallo entero) / 16384 / 32768 (cabe un caso) — pero no es el default.
+    ctx_size = os.getenv("LLM_CTX_SIZE", "4096")
     cmd = [str(bin_path), "-m", str(GGUF_BASE), "--port", str(LLM_PORT),
-           "--ctx-size", "4096", "--parallel", "1", "--host", "127.0.0.1"]
+           "--ctx-size", ctx_size, "--parallel", "1", "--host", "127.0.0.1"]
+    # Control de "thinking" a nivel servidor (robusto entre modelos: el /no_think en texto
+    # solo funciona en el 4B base; Instruct-2507 lo ignora y Qwen3.5 no lo soporta). Opt-in
+    # vía LLM_REASONING=off|on|auto; sin la env se preserva el comportamiento actual.
+    reasoning = os.getenv("LLM_REASONING")
+    if reasoning in ("off", "on", "auto"):
+        cmd += ["--reasoning", reasoning]
+        logger.info("llama-server: --reasoning %s", reasoning)
     if use_gpu:
         cmd += ["--n-gpu-layers", "99"]
-        logger.info("llama-server: backend iGPU (Vulkan, --n-gpu-layers 99)")
+        logger.info("llama-server: backend iGPU (Vulkan, --n-gpu-layers 99, ctx %s)", ctx_size)
     else:
         cmd += ["-t", "8", "-tb", "12", "--mlock"]
         logger.info("llama-server: backend CPU (-t8 -tb12 --mlock)")

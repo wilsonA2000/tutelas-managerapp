@@ -18,6 +18,7 @@ pero NO como filtro: si están mal clasificados, igual se encuentra por contenid
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 from sqlalchemy.orm import Session
@@ -41,7 +42,11 @@ SECTIONS = {
         "rx": re.compile(
             r"en\s+m[ée]rito\s+de\s+lo\s+expuesto|administrando\s+justicia\s+en\s+nombre"
             r"|^\s*r\s*e\s*s\s*u\s*e\s*l\s*v\s*e\b|^\s*falla\s*:?\s*$"
-            r"|acepta\w*\s+(?:el\s+)?desistimiento|tener\s+por\s+desistid\w*",
+            r"|acepta\w*\s+(?:el\s+)?desistimiento|tener\s+por\s+desistid\w*"
+            # Dispositiva sin keyword RESUELVE: "PRIMERO: NEGAR/CONCEDER/CONFIRMAR…" al
+            # inicio de línea + verbo dispositivo (alta precisión; evita el falso positivo
+            # "la providencia que resuelve"). Cubre fallos que numeran sin encabezado.
+            r"|^\s*primero\s*[:.\-]?\s*(?:deneg|nieg|neg|conced|conce|tutel|ampar|confirm|revoc|modific|declar|orden)\w*",
             re.I | re.M),
         "which": "last", "before": 2, "after": 3,
     },
@@ -86,9 +91,15 @@ def _window(pages: list[str], section: str):
     return lo, hi
 
 
-def build_field_context(db: Session, case, missing: list[str], budget: int = 10000) -> str:
+def build_field_context(db: Session, case, missing: list[str], budget: int | None = None) -> str:
     """Arma el texto LLM con SOLO la(s) ventana(s) ancladas a las secciones que
-    necesitan los campos faltantes. "" si no encuentra nada (caller no llama al LLM)."""
+    necesitan los campos faltantes. "" si no encuentra nada (caller no llama al LLM).
+
+    `budget` (chars) por env V9_FIELD_CONTEXT_BUDGET. Default 10000, pero el óptimo
+    EMPÍRICO documentado es ~5000 (docs/LLM_JURIDICO_CUANTIZADO §5.4): más contexto =
+    prefill más lento sin ganar calidad (el anclaje ya manda el pasaje correcto)."""
+    if budget is None:
+        budget = int(os.getenv("V9_FIELD_CONTEXT_BUDGET", "10000"))
     if not missing:
         return ""
     sections = []
@@ -128,7 +139,9 @@ def build_field_context(db: Session, case, missing: list[str], budget: int = 100
                 break
             seen_windows.add(key)
             seg = "\n".join(pages[win[0]:win[1]])
-            block = f"=== {d.filename or ''} (pp {win[0]+1}-{win[1]}) ===\n{seg}"
+            # Header rotulado: doc_type (clasificación regex) + sección + páginas → el LLM
+            # recibe el MAPA (qué doc es, dónde está la sección), no solo texto crudo.
+            block = f"=== {d.filename or ''} [{(d.doc_type or 'OTRO').upper()}] · sección {section} (pp {win[0]+1}-{win[1]}) ===\n{seg}"
             if used + len(block) > budget:
                 block = block[: max(0, budget - used)]
             if block:

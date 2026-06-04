@@ -202,11 +202,39 @@ Texto del expediente:
 Responde SOLO JSON: {{"campo": "valor"}}"""
 
 
+# --- Prompt V2 (KV-reuse): prefijo ESTABLE primero (idéntico entre casos → el server
+# cachea su KV una vez), parte VARIABLE (qué campos + contexto) al final. El catálogo de
+# instrucciones va completo y ordenado para que el prefijo sea byte-idéntico siempre. ---
+_STABLE_PREFIX_V2 = (
+    "/no_think\n"
+    "Eres un extractor jurídico de tutelas colombianas (Gobernación de Santander).\n"
+    "Devuelve SOLO un JSON válido con los campos pedidos. Si no encuentras un valor → \"\".\n\n"
+    "REGLAS CRÍTICAS:\n"
+    "- Si el municipio del juzgado es Bucaramanga, Floridablanca, Girón, Barrancabermeja o Piedecuesta\n"
+    "  Y el accionado principal es la Secretaría de Educación de Santander → puede haber falta de legitimación pasiva.\n"
+    "- pretensiones: transcribir verbatim del escrito de tutela; NO tomar defensas ni respuestas de la SED.\n"
+    "- El contexto trae cada fragmento rotulado con [doc_type] y su sección; usa esa pista para ubicar el campo.\n"
+    "- Si no encuentras el valor con certeza → devuelve cadena vacía.\n\n"
+    "INSTRUCCIONES POR CAMPO (referencia):\n"
+    + "\n".join(f"- {f}: {instr}" for f, instr in sorted(_FIELD_INSTRUCTIONS.items()))
+)
+
+
 def _build_prompt(missing: list[str], text: str) -> str:
-    """Construye prompt estructurado con instrucciones por campo (3A)."""
+    """Construye el prompt. V2 (env V9_PROMPT_V2=true): prefijo estable→KV-reuse, variable
+    al final, contexto rotulado por doc_type/sección. V1 (default): comportamiento actual."""
+    if os.getenv("V9_PROMPT_V2", "false").lower() == "true":
+        miss = sorted(missing)  # orden determinista (no rompe el prefijo cacheado)
+        return (
+            _STABLE_PREFIX_V2
+            + "\n\n=== EXTRAER AHORA solo estos campos ===\n" + ", ".join(miss)
+            + "\n\n=== CONTEXTO (fragmentos relevantes del expediente) ===\n"
+            + (text or "")[:_CONTEXT_CAP]
+            + "\n\nResponde SOLO JSON con esos campos: {\"campo\": \"valor\"}"
+        )
+    # V1 (default): instrucciones solo de los campos faltantes, en medio del prompt.
     lines = [f"- {f}: {_FIELD_INSTRUCTIONS.get(f, 'extraer del texto')}" for f in missing]
     field_block = "Campos a extraer:\n" + "\n".join(lines)
-    # Cap de texto a 10K chars (seguridad; el campo-affinity de 3B ya lo filtra upstream)
     t = (text or "")[:10000]
     return _PROMPT_TEMPLATE.format(field_block=field_block, text=t)
 
@@ -224,8 +252,19 @@ def _call_llm(prompt: str, missing: list[str]) -> Optional[str]:
             {"role": "system", "content": "Eres un asistente jurídico. Extraes datos de tutelas y respondes SOLO el JSON pedido."},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 400, "temperature": 0,
+        # Sampling por env (default = greedy temp=0, comportamiento de producción).
+        # Permite A/B del muestreo OFICIAL por modelo (Qwen recomienda temp 0.7/top_p 0.8/
+        # top_k 20 y desaconseja greedy) sin redeploy.
+        "max_tokens": int(os.getenv("V9_LLM_MAX_TOKENS", "400")),
+        "temperature": float(os.getenv("V9_LLM_TEMPERATURE", "0")),
     }
+    # Muestreo opcional adicional (solo si la env está presente → no altera el default).
+    for _key, _env, _cast in (("top_p", "V9_LLM_TOP_P", float), ("top_k", "V9_LLM_TOP_K", int),
+                              ("min_p", "V9_LLM_MIN_P", float),
+                              ("presence_penalty", "V9_LLM_PRESENCE_PENALTY", float)):
+        _v = os.getenv(_env)
+        if _v is not None:
+            body[_key] = _cast(_v)
     # cache_prompt: el server local (llama.cpp) reusa el KV del prompt entre la llamada
     # con schema y el reintento sin schema (mismo prompt) → no re-evalúa el contexto.
     # Solo en local; los proveedores externos rechazan params desconocidos.
@@ -234,7 +273,7 @@ def _call_llm(prompt: str, missing: list[str]) -> Optional[str]:
         # Anti-degeneración del 4B local: sin esto, al forzar campos `required` que no
         # están en el doc, el modelo emite basura repetitiva (Unicode/dígitos en bucle)
         # que además dispara fence timeouts en la iGPU. repeat_penalty corta el bucle.
-        body["repeat_penalty"] = 1.15
+        body["repeat_penalty"] = float(os.getenv("V9_LLM_REPEAT_PENALTY", "1.15"))
     # Constrained decoding. strict json_schema acota duro (enum+maxLength) y es la
     # config de producción para el 4B. Pero el 30B-A3B (MoE) degenera con strict
     # cuando se le fuerza a llenar campos `required` sin respuesta (emite Unicode
@@ -299,7 +338,7 @@ _FIELD_DOC_AFFINITY: dict[str, list[str]] = {
     "abogado_responsable":    ["RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"],
 }
 
-_CONTEXT_CAP = 8_000  # chars máximos para el texto de contexto del LLM
+_CONTEXT_CAP = int(os.getenv("V9_LLM_CONTEXT_CAP", "8000"))  # chars máx del contexto LLM (env-tunable; se sube coordinado con la ventana en Fase 4)
 
 
 def build_context_for_fields(missing: list[str], doc_texts: dict[str, str]) -> str:
