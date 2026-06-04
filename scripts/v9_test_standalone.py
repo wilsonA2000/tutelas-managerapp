@@ -200,6 +200,20 @@ def main():
     # (derecho_vulnerado: anclas+tags; juzgado: parser del remitente Rama Judicial).
     extra = _checks_field_extractor()
 
+    # Task #21 — una RESOLUCIÓN ADMINISTRATIVA de la SED ("POR LA CUAL SE EFECTÚA
+    # TRASLADO ... RESUELVE: ARTÍCULO PRIMERO: TRASLADAR") NO es un fallo judicial.
+    from backend.extraction.doc_ops import _es_resolucion_admin
+    _RES_ADMIN = ("RESOLUCIÓN No. 02359 DE 2026 POR LA CUAL SE EFECTÚA TRASLADO DE DOCENTE "
+                  "EN PROPIEDAD. El Secretario de Educación ... RESUELVE: ARTÍCULO PRIMERO: "
+                  "TRASLADAR a la docente NANCY REBECA MINA a la I.E. ...")
+    _FALLO_JUD = ("... administrando justicia en nombre de la República de Colombia y por "
+                  "autoridad de la ley, RESUELVE: PRIMERO: TUTELAR el derecho fundamental a "
+                  "la educación del menor ... SEGUNDO: ORDENAR a la Secretaría ...")
+    extra = extra + [
+        ("res. admin SED → es_resolucion_admin", True, _es_resolucion_admin(_RES_ADMIN)),
+        ("fallo judicial → NO es_resolucion_admin", False, _es_resolucion_admin(_FALLO_JUD)),
+    ]
+
     failures = 0
     total = len(checks) + len(extra)
     for name, expected, actual in checks + extra:

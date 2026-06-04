@@ -57,8 +57,9 @@ def extract_document_text(doc: Document) -> tuple[str, str]:
             result = normalize_document(doc.file_path)
             if result.text.strip():
                 return result.text, result.method
-    except Exception:
-        pass  # Fallback silencioso a extractores legacy
+    except Exception as _e:
+        from backend.core.fallback_metrics import record_fallback
+        record_fallback("doc_ops.normalizer", str(_e))  # sigue al fallback legacy, ahora visible
 
     if ext == ".pdf":
         result = extract_pdf(doc.file_path)
@@ -238,8 +239,29 @@ _CONTENT_SIGNALS: dict[str, list[str]] = {
     ],
 }
 
+# RESOLUCIÓN ADMINISTRATIVA de la SED (acto de la entidad, NO fallo judicial).
+# Trampa frecuente (c2/c95/c164/c179/c468): "RESUELVE: ARTÍCULO PRIMERO: TRASLADAR/
+# NOMBRAR/DEROGAR" y "POR LA CUAL SE EFECTÚA TRASLADO/NOMBRAMIENTO" matchean las
+# señales de PDF_SENTENCIA ("RESUELVE:", "PRIMERO:") y el extractor de fallo las lee
+# como sentencia. El discriminador fiable: el fallo JUDICIAL dice "administrando
+# justicia en nombre de la República" y numera PRIMERO/SEGUNDO; la resolución usa
+# "ARTÍCULO" tras RESUELVE y el encabezado "POR LA CUAL SE ...".
+_RE_RESOLUCION_ADMIN = re.compile(
+    r"(?i)RESUELVE\s*:?\s*ART[ÍI]CULO|"
+    r"POR\s+LA\s+CUAL\s+SE\s+(?:EFECT[ÚU]A|HACE[N]?|RESUELVE|DEROGA|MODIFICA|"
+    r"NOMBRA|TRASLADA|REUBICA|ORDENA|RECONOCE|REVOCA\s+UN\s+NOMBRAMIENTO)"
+)
+
+
+def _es_resolucion_admin(text: str) -> bool:
+    t = (text or "")[:3000]
+    return bool(_RE_RESOLUCION_ADMIN.search(t)) and "administrando justicia" not in t.lower()
+
+
 # Guards de prioridad evaluados ANTES del scoring (formato: pred(fn, text) → tipo)
 _CONTENT_PRIORITY_GUARDS: list[tuple] = [
+    # Resolución administrativa SED (traslado/nombramiento/derogatoria) ≠ fallo judicial
+    (lambda fn, t: _es_resolucion_admin(t), "RESOLUCION_ADMINISTRATIVA"),
     # Emails en markdown
     (lambda fn, t: t.lstrip()[:60].startswith(("De:", "Para:", "Asunto:", "From:", "To:")), "EMAIL_MD"),
     # Acta seguimiento no es sentencia
@@ -428,8 +450,9 @@ def verify_document_belongs(case: Case, doc: Document) -> tuple[str, str]:
         from backend.core.settings import settings
         if getattr(settings, "USE_COGNITIVE_PIPELINE", False):
             return _verify_bayesian(case, doc)
-    except Exception:
-        pass  # fallback a legacy si algo falla en el import/setting
+    except Exception as _e:
+        from backend.core.fallback_metrics import record_fallback
+        record_fallback("doc_ops.verify_bayesian", str(_e))  # sigue al verify legacy, ahora visible
     # Legacy (v5.5):
     return _verify_legacy(case, doc)
 

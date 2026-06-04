@@ -2642,6 +2642,7 @@ def extract_parte_resolutiva_1ra_for_case(db: Session, case: Case) -> tuple[Opti
     """Transcribe verbatim la parte resolutiva de la SENTENCIA_1RA (misma selección de doc
     que `extract_sentido_fallo_1ra_for_case`: descarta 2da mal etiquetada, fallback a
     DESCONOCIDO con dispositiva clara). Returns (texto|None, fuente∈{"sentencia","desconocido","none"})."""
+    from backend.extraction.doc_ops import _es_resolucion_admin
     sents = [
         d for d in db.query(Document).filter(
             Document.case_id == case.id, Document.doc_type == "SENTENCIA_1RA"
@@ -2649,7 +2650,7 @@ def extract_parte_resolutiva_1ra_for_case(db: Session, case: Case) -> tuple[Opti
     ]
     sents.sort(key=lambda d: -len(d.extracted_text or ""))
     for d in sents:
-        if _is_segunda_instancia(d):
+        if _is_segunda_instancia(d) or _es_resolucion_admin(d.extracted_text or ""):
             continue
         v = _dispositiva_verbatim(d)
         if v:
@@ -2658,7 +2659,7 @@ def extract_parte_resolutiva_1ra_for_case(db: Session, case: Case) -> tuple[Opti
         Document.case_id == case.id, Document.doc_type == "DESCONOCIDO"
     ).all():
         t = d.extracted_text or ""
-        if not t or len(t) < 800 or _is_segunda_instancia(d):
+        if not t or len(t) < 800 or _is_segunda_instancia(d) or _es_resolucion_admin(t):
             continue
         v = _dispositiva_verbatim(d)
         if v:
@@ -2894,6 +2895,11 @@ def extract_sentido_fallo_1ra_for_case(db: Session, case: Case) -> tuple[Optiona
     SENTENCIA_2DA / AUTO_CONCEDE_IMPUGNACION / IMPUGNACION / DESCONOCIDO (procesalmente
     OBLIGA a que haya habido fallo de 1ra si hay impugnación o incidente — art. 32 D2591/91).
     Returns (valor, fuente) — fuente ∈ {"desistimiento","sentencia","desconocido","recap_2da","none"}."""
+    # Guard: una RESOLUCIÓN ADMINISTRATIVA de la SED ("RESUELVE: ARTÍCULO PRIMERO:
+    # TRASLADAR/NOMBRAR") NO es un fallo judicial — aunque quede mal rotulada
+    # SENTENCIA_1RA/DESCONOCIDO. El extractor la rechaza al leer (casos c2/c95/c164/c179/c468).
+    from backend.extraction.doc_ops import _es_resolucion_admin
+
     # 1) SENTENCIA_1RA "real" (descarta las 2da mal etiquetadas por filename O contenido).
     # La dispositiva se lee del FINAL del PDF (no del texto capado), donde vive el resolutivo.
     sents = [
@@ -2905,6 +2911,8 @@ def extract_sentido_fallo_1ra_for_case(db: Session, case: Case) -> tuple[Optiona
     for d in sents:
         if _is_segunda_instancia(d):
             continue  # es 2da mal etiquetada; su sentido va a sentido_fallo_2nd
+        if _es_resolucion_admin(d.extracted_text or ""):
+            continue  # resolución administrativa SED, no fallo judicial
         zone = _dispositiva_zone(d)
         tag = _classify_sentido_fallo(zone) if zone else None
         if tag:
@@ -2917,7 +2925,7 @@ def extract_sentido_fallo_1ra_for_case(db: Session, case: Case) -> tuple[Optiona
         t = d.extracted_text or ""
         if not t or len(t) < 800:
             continue
-        if _is_segunda_instancia(d):
+        if _is_segunda_instancia(d) or _es_resolucion_admin(t):
             continue
         zone = _dispositiva_zone(d)
         if not zone:
