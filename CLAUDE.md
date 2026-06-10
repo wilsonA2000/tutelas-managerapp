@@ -265,7 +265,7 @@ con 6 fases; ese archivo fue borrado. Hoy hay una sola autoridad de extracción:
 | `USE_REMOTE_EXTRACTION` | false | Delegar capas 0-5 a un pod RunPod GPU |
 | `EXPERIMENT_MODE` | false | DB fresca + workspace paralelo (no toca prod) |
 | `GMAIL_READ_ONLY` | false | No marcar emails leídos en Gmail |
-| `PII_REDACTION_ENABLED` | true | Anonimización pre-IA externa (⚠️ 2026-06-10: `backend/privacy` quedó sin consumidores tras v9 — el flag hoy no ejecuta nada; rewirear antes de confiar en él) |
+| `PII_REDACTION_ENABLED` | — | VESTIGIAL: `backend/privacy/` fue borrado (ver settings.py:74). Política de producto 2026-06-10: **LOCAL_ONLY — los datos nunca salen de la máquina**; no hay anonimización porque no hay salida externa |
 | `LLM_GGUF` | `Qwen3-4B-Q4_K_M.gguf` | Modelo del llama-server local (nombre en `data/lora-models/` o path absoluto). Bench Fase 0: `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` dio 0.869 vs 0.822 y ~2× más rápido |
 | `LLM_CTX_SIZE` | 4096 | Ventana del llama-server (8192/16384 experimentales) |
 | `LLM_REASONING` | (sin set) | `off\|on\|auto` → `--reasoning` del server; `off` recomendado con Instruct-2507 |
