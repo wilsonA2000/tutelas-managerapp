@@ -223,28 +223,10 @@ def test_move_legacy_doc_does_not_affect_other_docs(provenance_db):
 
 
 # ============================================================
-# Test 8: Idempotencia de la migración de schema
+# (Test 8 retirado 2026-06-10: verificaba la idempotencia de la migración
+# one-shot v48_add_email_provenance, borrada en el saneamiento — las columnas
+# viven en el modelo desde v4.8 y el schema de prod ya la tiene aplicada.)
 # ============================================================
-
-def test_migration_schema_is_idempotent(tmp_path):
-    from backend.database.migrations.v48_add_email_provenance import run
-
-    # Crear DB con schema base
-    db_path = tmp_path / "test_migration.db"
-    engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(engine)
-
-    # Correr migración 2 veces — segunda corrida debe skip todo
-    r1 = run(db_path=str(db_path))
-    # Primera corrida: como Base.metadata.create_all ya creó las columnas
-    # (porque están en el modelo), la migración debe saltarlas
-    assert r1["status"] == "ok"
-
-    r2 = run(db_path=str(db_path))
-    assert r2["status"] == "ok"
-    # Segunda corrida no debe hacer nada nuevo
-    assert len(r2["actions"]) == 0
-    assert len(r2["skipped"]) >= 2  # columnas ya existen
 
 
 # ============================================================
