@@ -911,7 +911,12 @@ def update_case_fields(db: Session, case: Case, tipo: str, data: dict) -> list[s
     accionante = data.get("accionante", "")
 
     if rad_23 and not case.radicado_23_digitos:
-        case.radicado_23_digitos = rad_23
+        # Normalizar a dígitos continuos (2026-06-10: el subject trae
+        # '73-001-40-03-008-2026-00387-00' con guiones y rompía el invariante
+        # {vacío | 23díg | AAAA-NNNNN} del cuadro).
+        from backend.email.rad_utils import normalize_rad23
+        _norm = normalize_rad23(rad_23)
+        case.radicado_23_digitos = _norm if len(_norm) >= 18 else rad_23
         updated.append("RADICADO_23_DIGITOS")
 
     if forest and not case.radicado_forest:
