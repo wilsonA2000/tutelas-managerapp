@@ -77,6 +77,12 @@ TRAP_WORDS = {
     "DEFENSORIA", "DEFENSORÍA", "DEFENSOR", "DEFENSORA",
     # Cuando el accionante real es la persona, NO la institución personería
     "PERSONERIA", "PERSONERÍA",
+    # Saludos/cierres de correo capturados como "nombre" (caso real 2026-06-10:
+    # ingesta creó '2026-00203 CORDIAL SALUDO'). Un nombre real jamás los contiene.
+    "CORDIAL", "SALUDO", "SALUDOS", "ATENTAMENTE", "CORDIALMENTE",
+    "BUENOS", "BUENAS", "RESPETUOSAMENTE", "AGRADEZCO", "ADJUNTO", "ADJUNTOS",
+    # Tipos de actuación que no son personas
+    "RESPUESTA", "NOTIFICACION", "NOTIFICACIÓN", "REQUERIMIENTO",
 }
 
 # Palabras que NUNCA pueden ser la primera palabra de un nombre real válido.

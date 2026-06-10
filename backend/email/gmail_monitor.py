@@ -690,6 +690,15 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
                 return ec
 
     clean_acc = re.sub(r"[\n\r]", " ", accionante or "").strip()
+    # Guard 2026-06-10: validar que el "nombre" sea un nombre real — un saludo de
+    # correo ('CORDIAL SALUDO') creaba carpetas basura. Mejor el placeholder
+    # honesto, que el extractor v9 corrige después al leer los docs.
+    if clean_acc:
+        from backend.cognition.folder_renamer import is_likely_real_name
+        if not is_likely_real_name(clean_acc):
+            logger.warning("create_new_case: accionante %r no parece nombre real → [PENDIENTE REVISION]",
+                           clean_acc)
+            clean_acc = ""
     if not clean_acc:
         clean_acc = "[PENDIENTE REVISION]"
     folder_name = re.sub(r'[<>:"/\\|?*]', '', f"{rad_corto} {clean_acc}").strip()[:80]
