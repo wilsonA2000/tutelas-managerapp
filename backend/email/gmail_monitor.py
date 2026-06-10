@@ -968,120 +968,8 @@ def get_gmail_total() -> dict:
         return {"total": 0, "unread": 0, "error": str(e)}
 
 
-def sync_inbox(db: Session, progress_cb=None) -> list[dict]:
-    """Sincronizar TODOS los correos de Gmail a DB (solo registro, NO crea carpetas ni casos).
-    Importa correos faltantes como registros en la tabla Email sin efectos secundarios.
-
-    progress_cb: callable(processed:int, total:int, last_subject:str, imported:int, skipped:int) | None
-                 — invocado al inicio (con total) y por cada email procesado.
-    Returns: lista de dicts con resultado por cada email importado."""
-    results = []
-
-    try:
-        service = _get_gmail_service()
-        existing_ids = {e.message_id for e in db.query(Email.message_id).all()}
-
-        # Fallback: indexar por subject+sender para detectar duplicados con message_id diferente
-        existing_subjects = set()
-        for e in db.query(Email.subject, Email.sender).all():
-            if e.subject and e.sender:
-                existing_subjects.add((e.subject.strip()[:100], e.sender.strip()[:50]))
-
-        # Paginar TODOS los mensajes del inbox
-        messages = []
-        page_token = None
-        while True:
-            kwargs = {"userId": "me", "labelIds": ["INBOX"], "maxResults": 100}
-            if page_token:
-                kwargs["pageToken"] = page_token
-            response = service.users().messages().list(**kwargs).execute()
-            messages.extend(response.get("messages", []))
-            page_token = response.get("nextPageToken")
-            if not page_token:
-                break
-
-        if not messages:
-            if progress_cb:
-                try: progress_cb(0, 0, "", 0, 0)
-                except Exception: pass
-            return results
-
-        imported = 0
-        skipped = 0
-        total_msgs = len(messages)
-        if progress_cb:
-            try: progress_cb(0, total_msgs, "", 0, 0)
-            except Exception: pass
-
-        for idx, msg_ref in enumerate(messages, start=1):
-            last_subject_for_progress = ""
-            try:
-                msg = service.users().messages().get(userId="me", id=msg_ref["id"], format="metadata",
-                    metadataHeaders=["Subject", "From", "Date", "Message-ID", "Message-Id"]).execute()
-                headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
-                message_id = headers.get("Message-ID", headers.get("Message-Id", msg_ref["id"]))
-
-                if message_id in existing_ids:
-                    skipped += 1
-                else:
-                    subject = _normalize_typos(headers.get("Subject", ""))
-                    sender = headers.get("From", "")
-                    date_str = headers.get("Date", "")
-                    last_subject_for_progress = subject[:80]
-
-                    if _should_ignore(subject, sender):
-                        skipped += 1
-                    else:
-                        subj_key = (subject.strip()[:100], sender.strip()[:50])
-                        if subj_key in existing_subjects:
-                            skipped += 1
-                            existing_ids.add(message_id)
-                        else:
-                            try:
-                                from email.utils import parsedate_to_datetime
-                                from datetime import timezone
-                                dt = parsedate_to_datetime(date_str)
-                                date_received = dt.astimezone(timezone.utc).replace(tzinfo=None)
-                            except Exception:
-                                date_received = _utcnow()
-
-                            tipo = classify_email_type(subject, sender)
-                            radicado_data = extract_radicado(f"{subject}")
-                            case = match_to_case(db, radicado_data, "")
-
-                            email_record = Email(
-                                message_id=message_id, subject=subject, sender=sender,
-                                date_received=date_received, body_preview="",
-                                case_id=case.id if case else None,
-                                attachments=[], status="ASIGNADO" if case else "PENDIENTE",
-                                processed_at=_utcnow(),
-                            )
-                            db.add(email_record)
-                            existing_ids.add(message_id)
-                            existing_subjects.add(subj_key)
-                            imported += 1
-
-                            if imported % 50 == 0:
-                                db.commit()
-                                logger.info(f"Sync: {imported} importados, {skipped} omitidos...")
-
-            except Exception as e:
-                logger.error(f"Error sync email: {e}")
-            finally:
-                if progress_cb:
-                    try: progress_cb(idx, total_msgs, last_subject_for_progress, imported, skipped)
-                    except Exception: pass
-
-        db.commit()
-        results.append({"imported": imported, "skipped": skipped, "total_gmail": len(messages)})
-        logger.info(f"Sync completado: {imported} importados, {skipped} omitidos de {len(messages)} en Gmail")
-
-    except Exception as e:
-        logger.error(f"Error sync Gmail: {e}")
-        results.append({"error": str(e)})
-
-    return results
-
+# (2026-06-10) def sync_inbox eliminado: sin callers; creaba Emails sin metadata
+# de match. La sincronización histórica vive en backend/email/sync_batch.py.
 
 def check_inbox(db: Session) -> list[dict]:
     """Revisar bandeja de Gmail: solo emails NO LEIDOS, procesa completo (descarga adjuntos, crea casos).
@@ -1308,19 +1196,30 @@ def check_inbox(db: Session) -> list[dict]:
                 # registrar igual las señales que llevaron a la decisión. Backstop
                 # único → ninguna asignación queda con match_signals_json=None,
                 # incl. rutas futuras (se atrapan acá, no por-rama).
-                if case and match_signals_json is None:
-                    match_signals_json = json.dumps({
-                        "score": match_score,
-                        "confidence": match_confidence,
-                        "breakdown": {
+                # 2026-06-10: también ENRIQUECE un json existente sin ruta — cuando el
+                # scoring corrió (dejó {"score":0,"confidence":"NONE","breakdown":{}})
+                # y DESPUÉS una ruta determinista F1/F2 asignó el caso, el backstop
+                # viejo se saltaba (json no era None) y la ruta se perdía (ingesta
+                # 2026-06-10: 37 emails con route=None).
+                if case:
+                    try:
+                        _sig = json.loads(match_signals_json) if match_signals_json else {}
+                    except Exception:  # noqa: BLE001
+                        _sig = {}
+                    _bd = _sig.get("breakdown") or {}
+                    if not _bd.get("route"):
+                        _bd.update({
                             "route": match_route or accion,
                             "rad23": radicado_data.get("radicado_23", ""),
                             "rad_corto": radicado_data.get("radicado_corto", ""),
                             "forest": forest,
                             "accionante": accionante,
-                        },
-                        "alternatives": [],
-                    }, ensure_ascii=False)
+                        })
+                        _sig.setdefault("score", match_score)
+                        _sig.setdefault("confidence", match_confidence)
+                        _sig["breakdown"] = _bd
+                        _sig.setdefault("alternatives", [])
+                        match_signals_json = json.dumps(_sig, ensure_ascii=False)
 
                 _email_status = "ASIGNADO" if case else ("AMBIGUO" if accion == "AMBIGUO" else "PENDIENTE")
 

@@ -221,7 +221,14 @@ _HEADER_PATTERNS: dict[DocType, list[re.Pattern]] = {
     ],
     DocType.AUTO_2DA: [
         re.compile(r"(?i)\bAUTO\b.{0,40}\bADMITE\b.{0,40}\bIMPUGNAC[IÓO]N\b"),
-        re.compile(r"(?i)\bAVOCA\b.{0,30}\bSEGUNDA\s+INSTANCIA\b"),
+        # AVOCAR?: los autos dicen "AVOCAR el conocimiento en segunda instancia" y el
+        # \b tras AVOCA no matcheaba AVOCAR → AUTO_2DA nunca puntuaba y ganaba
+        # AUTO_ADMISORIO (ingesta 2026-06-10: c544/c132). Ventana 40 por "el
+        # conocimiento en" intercalado.
+        re.compile(r"(?i)\bAVOCAR?\b.{0,40}\bSEGUNDA\s+INSTANCIA\b"),
+        # Header estilo San Gil: "IMPUGNACION DE ACCION DE TUTELA" como título del
+        # auto, con el AVOCAR dispositivo más abajo.
+        re.compile(r"(?i)\bIMPUGNACI[ÓO]N\s+DE\s+ACCI[ÓO]N\s+DE\s+TUTELA\b[\s\S]{0,1500}\bAVOCAR?\b"),
     ],
     DocType.RESPUESTA: [
         re.compile(r"(?i)\bCONTESTACI[ÓO]N\b.{0,30}\bACCI[ÓO]N\s+DE\s+TUTELA\b"),
@@ -263,6 +270,14 @@ _BODY_PATTERNS: dict[DocType, list[re.Pattern]] = {
         re.compile(r"(?i)\bAVOCAR?\s+CONOCIMIENTO\b"),
         re.compile(r"(?i)\bSE\s+ADMITE\s+(?:LA\s+)?(?:PRESENTE\s+)?ACCI[ÓO]N\s+DE\s+TUTELA\b"),
         re.compile(r"(?i)\bRESUELVE\b.{0,200}\bAVOCAR\b"),
+    ],
+    # 2026-06-10: el auto del juez de 2ª que avoca la impugnación TAMBIÉN matchea
+    # "AVOCAR CONOCIMIENTO" arriba → sin entrada propia en BODY, AUTO_2DA jamás
+    # entraba a la desambiguación y c544/c132 quedaban como admisorio de 1ª.
+    DocType.AUTO_2DA: [
+        re.compile(r"(?i)\bAVOCAR?\b[\s\S]{0,60}\bSEGUNDA\s+INSTANCIA\b"),
+        re.compile(r"(?i)\bIMPUGNACI[ÓO]N\s+DE\s+ACCI[ÓO]N\s+DE\s+TUTELA\b[\s\S]{0,1500}\bAVOCAR?\b"),
+        re.compile(r"(?i)\bADMITE\b.{0,40}\bIMPUGNAC[IÓO]N\b"),
     ],
     DocType.SENTENCIA_1RA: [
         re.compile(r"(?i)\bRESUELV[EO]\b.{0,300}\b(?:TUTELAR|CONCEDER|AMPARAR|NEGAR|DENEGAR|IMPROCEDENTE)\b"),
@@ -462,9 +477,14 @@ def _disambiguate(scores: dict[DocType, float], text: str, filename: str = "") -
                 scores[dt] *= 0.2
         scores[DocType.NOTIFICACION_FALLO] = max(scores.get(DocType.NOTIFICACION_FALLO, 0.0), 0.85)
 
-    # AUTO ADMISORIO vs AUTO 2DA: si dice "ADMITE IMPUGNACIÓN" → 2DA
+    # AUTO ADMISORIO vs AUTO 2DA: si dice "ADMITE IMPUGNACIÓN" → 2DA.
+    # 2026-06-10: además del castigo a ADMISORIO hay que SUBIR el AUTO_2DA (espejo de
+    # la regla SENTENCIA_2DA): el filename "AUTO AVOCA…" le da ~0.70 a ADMISORIO y el
+    # AUTO_2DA solo puntúa por body (0.20) → con el ×0.3 quedaba 0.21 vs 0.20 y el
+    # admisorio ganaba por una centésima (c544/c132).
     if DocType.AUTO_ADMISORIO in scores and DocType.AUTO_2DA in scores:
         if "IMPUGNAC" in head or "IMPUGNAC" in fn_up or "SEGUNDA" in head:
+            scores[DocType.AUTO_2DA] = max(scores.get(DocType.AUTO_2DA, 0.0), 0.85)
             scores[DocType.AUTO_ADMISORIO] *= 0.3
         else:
             scores[DocType.AUTO_2DA] *= 0.3
