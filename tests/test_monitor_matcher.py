@@ -560,3 +560,33 @@ class TestRadCortoAmbiguo:
         cache._evict_case_no_lock(300)
         assert cache.rad_corto_candidates("2026-00100") == {100}
         assert cache.juzgado_of(300) == ""
+
+
+class TestCreateNewCaseDedupGuard:
+    """Guard 2026-06-10: el dedup por rad corto en create_new_case debe comparar el
+    bloque juzgado (díg 1-12) del rad23 — sin esto, el correo de una tutela de OTRO
+    juzgado con el mismo consecutivo se fusionaba al caso existente (conflación
+    c132/c552 Martha Chaparro vs Diana Pérez)."""
+
+    def test_dedup_mismo_juzgado_devuelve_existente(self, db):
+        from backend.email import gmail_monitor as gm
+        rd = {"radicado_corto": "2026-00100",
+              "radicado_23": "68-001-40-09-027-2026-00100-00"}  # mismo juzgado que c100
+        c = gm.create_new_case(db, rd, "JUAN CARLOS PEREZ GARCIA")
+        assert c is not None and c.id == 100
+
+    def test_dedup_juzgado_distinto_crea_nuevo(self, db, tmp_path, monkeypatch):
+        from backend.email import gmail_monitor as gm
+        monkeypatch.setattr(gm, "BASE_DIR", tmp_path)
+        rd = {"radicado_corto": "2026-00100",
+              "radicado_23": "68-001-40-88-014-2026-00100-00"}  # juzgado DISTINTO (088014)
+        c = gm.create_new_case(db, rd, "MARTHA JOHANNA CHAPARRO RODRIGUEZ")
+        assert c is not None and c.id not in (100, 300)
+        assert "MARTHA" in (c.folder_name or "")
+
+    def test_dedup_sin_rad23_conserva_comportamiento(self, db):
+        # Sin rad23 en el email no hay forma de discriminar → dedup clásico.
+        from backend.email import gmail_monitor as gm
+        rd = {"radicado_corto": "2026-00200", "radicado_23": ""}
+        c = gm.create_new_case(db, rd, "MARIA LOPEZ RODRIGUEZ")
+        assert c is not None and c.id == 200

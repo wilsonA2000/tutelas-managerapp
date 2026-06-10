@@ -679,7 +679,13 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
     if not rad_corto:
         return None
 
-    # Verificar que NO exista ya
+    # Verificar que NO exista ya. Guard 2026-06-10 (cierra el bypass del fix #11):
+    # el dedup por rad corto devolvía el caso existente SIN comparar juzgado — el
+    # correo de Martha (J14 Penal Garantías, rad23 ...088014...00097) cayó al caso
+    # de Diana (J18 Civil, mismo consecutivo 2026-00097) → conflación c132/c552.
+    # Si AMBOS rads de 23 díg existen y su bloque juzgado (díg 1-12) difiere, NO es
+    # el mismo proceso: seguir de largo y crear caso aparte.
+    _email_r23 = re.sub(r"\D", "", rad_23 or "")
     m = re.match(r"(20\d{2})[-]?0*(\d+)", rad_corto)
     if m:
         year, num = m.group(1), m.group(2)
@@ -687,6 +693,14 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
         for ec in existing:
             norm = _normalize_rad_num(ec.folder_name)
             if norm and norm == f"{year}:{num}":
+                _ec_r23 = re.sub(r"\D", "", ec.radicado_23_digitos or "")
+                if (len(_email_r23) >= 21 and len(_ec_r23) >= 21
+                        and _email_r23[:12] != _ec_r23[:12]):
+                    logger.warning(
+                        "create_new_case: rad corto %s coincide con caso %s pero el "
+                        "juzgado del rad23 difiere (%s vs %s) → caso NUEVO, no dedup",
+                        rad_corto, ec.id, _email_r23[:12], _ec_r23[:12])
+                    continue
                 return ec
 
     clean_acc = re.sub(r"[\n\r]", " ", accionante or "").strip()
