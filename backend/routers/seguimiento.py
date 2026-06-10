@@ -8,6 +8,8 @@ from sqlalchemy import or_
 
 from backend.database.database import get_db
 from backend.database.models import Case, ComplianceTracking
+from backend.auth.dependencies import get_current_user
+from backend.auth.models import User
 
 router = APIRouter(prefix="/api/seguimiento", tags=["seguimiento"])
 
@@ -295,7 +297,8 @@ def api_get_seguimiento(record_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{record_id}")
-def api_update_seguimiento(record_id: int, body: dict, db: Session = Depends(get_db)):
+def api_update_seguimiento(record_id: int, body: dict, db: Session = Depends(get_db),
+                           user: User | None = Depends(get_current_user)):
     """Actualizar un seguimiento (estado, notas, fecha cumplimiento, etc.).
 
     Emite eventos al audit_log para todos los cambios significativos:
@@ -306,6 +309,7 @@ def api_update_seguimiento(record_id: int, body: dict, db: Session = Depends(get
     from backend.services.audit_service import (
         audit_event, EVT_COMPLIANCE_STATE, EVT_COMPLIANCE_NOTE, EVT_FIELD_MODIFIED,
     )
+    actor = user.username if user else "system"  # Fase 3: actor real del token (era "wilson" hardcodeado)
 
     record = db.query(ComplianceTracking).filter(ComplianceTracking.id == record_id).first()
     if not record:
@@ -341,7 +345,7 @@ def api_update_seguimiento(record_id: int, body: dict, db: Session = Depends(get
             db,
             case_id=record.case_id,
             action=EVT_COMPLIANCE_STATE,
-            actor="wilson",  # TODO: en multiusuario, leer del token
+            actor=actor,
             entity_type="compliance",
             entity_id=record.id,
             field_name="estado",
@@ -365,7 +369,7 @@ def api_update_seguimiento(record_id: int, body: dict, db: Session = Depends(get
             db,
             case_id=record.case_id,
             action=EVT_COMPLIANCE_NOTE,
-            actor="wilson",
+            actor=actor,
             entity_type="compliance",
             entity_id=record.id,
             field_name="notas",
@@ -383,7 +387,7 @@ def api_update_seguimiento(record_id: int, body: dict, db: Session = Depends(get
                 db,
                 case_id=record.case_id,
                 action=EVT_FIELD_MODIFIED,
-                actor="wilson",
+                actor=actor,
                 entity_type="compliance",
                 entity_id=record.id,
                 field_name=field,

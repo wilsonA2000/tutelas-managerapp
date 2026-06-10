@@ -418,8 +418,9 @@ def run_sync(db: Session, base_dir: Path, result: dict, is_running_fn, force: bo
                     if doc.extracted_text and len(doc.extracted_text) > 100:
                         try:
                             index_document(db, case.id, doc.filename, doc.extracted_text)
-                        except Exception:
-                            pass  # KB indexing no es critico
+                        except Exception as _e:
+                            from backend.core.fallback_metrics import record_fallback
+                            record_fallback("sync.kb_index", str(_e))  # KB no crítico, ahora visible
             logger.info("KB: indexacion incremental post-sync completada")
         except Exception as e:
             logger.debug("KB indexing skipped: %s", e)

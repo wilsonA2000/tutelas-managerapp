@@ -214,8 +214,9 @@ def score_case(case: Case, now: Optional[datetime] = None) -> RiskReport:
                     reasons.append(
                         f"Plazo cumplimiento fallo vence en {dias_restantes} días — preparar respuesta"
                     )
-    except Exception:
-        pass  # Defensivo: no romper EarlyWarning si compliance tiene datos sucios
+    except Exception as _e:
+        from backend.core.fallback_metrics import record_fallback
+        record_fallback("early_warning.compliance", str(_e))  # datos sucios de compliance, ahora visible
 
     # Regla 9 (v8.2): detección de "previene/apercibe sanción" en sentencia.
     # Cuando el juez explícitamente advierte que ante incumplimiento decretará

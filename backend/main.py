@@ -331,6 +331,54 @@ def normalizer_status():
         return {"normalizer_enabled": False, "error": "document_normalizer no disponible"}
 
 
+@app.get("/api/health/appliance")
+def appliance_health():
+    """Fase 5: chequeo ÚNICO 'todos los módulos funcionando' para el appliance.
+    Agrega DB, motor LLM, pipeline v9, fallbacks silenciosos (Fase 3) y frescura del
+    bench. Nunca lanza: cada sub-chequeo se aísla. Global: ok | degraded | down."""
+    from pathlib import Path as _P
+    checks: dict = {}
+    try:
+        from backend.database.database import SessionLocal
+        from backend.database.models import Case
+        _db = SessionLocal()
+        try:
+            checks["db"] = {"ok": True, "cases": _db.query(Case).count()}
+        finally:
+            _db.close()
+    except Exception as e:  # noqa: BLE001
+        checks["db"] = {"ok": False, "error": str(e)[:200]}
+    try:
+        from backend.services.llm_mutex import lifecycle_state, is_up
+        checks["llm"] = {"ok": True, "up": is_up(timeout=1.0), **lifecycle_state()}
+    except Exception as e:  # noqa: BLE001
+        checks["llm"] = {"ok": False, "error": str(e)[:200]}
+    try:
+        from backend.v9.types import EXCEL_FIELDS
+        checks["v9"] = {"ok": True, "fields": len(EXCEL_FIELDS)}
+    except Exception as e:  # noqa: BLE001
+        checks["v9"] = {"ok": False, "error": str(e)[:200]}
+    try:
+        from backend.core.fallback_metrics import get_fallback_counts
+        fb = get_fallback_counts()
+        checks["fallbacks"] = {"ok": True, "counts": fb, "total": sum(fb.values())}
+    except Exception as e:  # noqa: BLE001
+        checks["fallbacks"] = {"ok": False, "error": str(e)[:200]}
+    try:
+        cells = list(_P(__file__).resolve().parent.parent.glob("data/bench/*.json"))
+        checks["bench"] = {"ok": True, "cells": len(cells)}
+    except Exception as e:  # noqa: BLE001
+        checks["bench"] = {"ok": False, "error": str(e)[:200]}
+
+    if not checks.get("db", {}).get("ok"):
+        status = "down"
+    elif not (checks.get("v9", {}).get("ok") and checks.get("llm", {}).get("ok")):
+        status = "degraded"
+    else:
+        status = "ok"
+    return {"status": status, "checks": checks}
+
+
 # Estado global de revision de Gmail manual
 gmail_check_in_progress = False
 gmail_check_result = {}
