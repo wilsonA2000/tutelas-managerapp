@@ -27,7 +27,7 @@ def make_case(**kw):
         juzgado="JUZGADO PROMISCUO MUNICIPAL DE BETULIA",
         fecha_ingreso="01/02/2026",
         incidente=None, fecha_apertura_incidente=None, responsable_desacato=None,
-        dependencia_canonical=None,
+        decision_incidente=None, dependencia_canonical=None,
     )
     defaults.update(kw)
     return SimpleNamespace(**defaults)
@@ -66,10 +66,20 @@ def test_R3_enum_valido():
 
 
 def test_R4_incidente_si_sin_fecha_ni_responsable():
-    c = make_case(incidente="SI", fecha_apertura_incidente=None, responsable_desacato=None)
+    # Solo decisiones con auto de apertura formal (SANCIONA/CIERRA) exigen fecha.
+    c = make_case(incidente="SI", decision_incidente="SANCIONA",
+                  fecha_apertura_incidente=None, responsable_desacato=None)
     f = ac.rule_R4(c)
     fields = {x.field for x in f}
     assert "fecha_apertura_incidente" in fields and "responsable_desacato" in fields
+
+
+def test_R4_en_tramite_sin_fecha_es_legitimo():
+    # EN_TRAMITE = requerimiento previo, sin auto de apertura → fecha vacía OK.
+    c = make_case(incidente="SI", decision_incidente="EN_TRAMITE",
+                  fecha_apertura_incidente=None,
+                  responsable_desacato="VICTOR COLMENARES")
+    assert ac.rule_R4(c) == []
 
 
 def test_R5_radicado_truncado():
