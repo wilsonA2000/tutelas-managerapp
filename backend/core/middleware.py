@@ -55,6 +55,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/auth/refresh",
         "/api/health",
         "/api/health/normalizer",
+        "/api/health/appliance",
     })
 
     async def dispatch(self, request: Request, call_next):

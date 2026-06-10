@@ -265,7 +265,12 @@ con 6 fases; ese archivo fue borrado. Hoy hay una sola autoridad de extracción:
 | `USE_REMOTE_EXTRACTION` | false | Delegar capas 0-5 a un pod RunPod GPU |
 | `EXPERIMENT_MODE` | false | DB fresca + workspace paralelo (no toca prod) |
 | `GMAIL_READ_ONLY` | false | No marcar emails leídos en Gmail |
-| `PII_REDACTION_ENABLED` | true | Anonimización pre-IA externa |
+| `PII_REDACTION_ENABLED` | true | Anonimización pre-IA externa (⚠️ 2026-06-10: `backend/privacy` quedó sin consumidores tras v9 — el flag hoy no ejecuta nada; rewirear antes de confiar en él) |
+| `LLM_GGUF` | `Qwen3-4B-Q4_K_M.gguf` | Modelo del llama-server local (nombre en `data/lora-models/` o path absoluto). Bench Fase 0: `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` dio 0.869 vs 0.822 y ~2× más rápido |
+| `LLM_CTX_SIZE` | 4096 | Ventana del llama-server (8192/16384 experimentales) |
+| `LLM_REASONING` | (sin set) | `off\|on\|auto` → `--reasoning` del server; `off` recomendado con Instruct-2507 |
+| `V9_LLM_SINGLE_CALL` | false | 1 llamada LLM multi-campo en vez de 3 por-campo (validar con `scripts/validate_single_call.py`) |
+| `V9_ALLOW_DEEPSEEK` | false | Habilita DeepSeek externo (gap_fill v9 Y pipeline experimental `/api/deepseek/*`); la key sola NO basta |
 
 `TUTELAS_ENV_FILE=/path/to/.env.experiment` permite cambiar el `.env` cargado sin tocar el de producción. Si existe `/workspace/tutelas-app/.env.pod`, se autocarga (RunPod).
 
