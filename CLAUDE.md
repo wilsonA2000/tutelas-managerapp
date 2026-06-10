@@ -269,7 +269,7 @@ con 6 fases; ese archivo fue borrado. Hoy hay una sola autoridad de extracción:
 | `LLM_GGUF` | `Qwen3-4B-Q4_K_M.gguf` | Modelo del llama-server local (nombre en `data/lora-models/` o path absoluto). Bench Fase 0: `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` dio 0.869 vs 0.822 y ~2× más rápido |
 | `LLM_CTX_SIZE` | 4096 | Ventana del llama-server (8192/16384 experimentales) |
 | `LLM_REASONING` | (sin set) | `off\|on\|auto` → `--reasoning` del server; `off` recomendado con Instruct-2507 |
-| `V9_LLM_SINGLE_CALL` | false | 1 llamada LLM multi-campo en vez de 3 por-campo (validar con `scripts/validate_single_call.py`) |
+| `V9_LLM_SINGLE_CALL` | **true en prod** | 1 llamada LLM multi-campo en vez de 3 por-campo. VALIDADO 2026-06-10 con Instruct-2507: 30.8× más rápido (271s→8.8s), mitad de llamadas, y ganó las 3 diferencias contra el cuadro curado |
 | `V9_ALLOW_DEEPSEEK` | false | Habilita DeepSeek externo (gap_fill v9 Y pipeline experimental `/api/deepseek/*`); la key sola NO basta |
 
 `TUTELAS_ENV_FILE=/path/to/.env.experiment` permite cambiar el `.env` cargado sin tocar el de producción. Si existe `/workspace/tutelas-app/.env.pod`, se autocarga (RunPod).
