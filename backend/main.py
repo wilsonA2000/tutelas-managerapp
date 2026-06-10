@@ -372,10 +372,37 @@ def appliance_health():
         checks["bench"] = {"ok": True, "cells": len(cells)}
     except Exception as e:  # noqa: BLE001
         checks["bench"] = {"ok": False, "error": str(e)[:200]}
+    try:
+        # Gmail: un token muerto falla SILENCIOSO por días (invalid_grant del
+        # 2026-06-10 pasó 7 días sin alarma). Refresca el credentials para
+        # detectar expirado/revocado sin llamar a la API de mensajes.
+        import json as _json
+        from backend.email.gmail_monitor import TOKEN_PATH
+        if not TOKEN_PATH.exists():
+            checks["gmail"] = {"ok": False, "error": "gmail_token.json no existe"}
+        else:
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request as _GReq
+            _scopes = _json.loads(TOKEN_PATH.read_text()).get("scopes")
+            _creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), _scopes)
+            if _creds.valid:
+                checks["gmail"] = {"ok": True, "token": "valido"}
+            else:
+                try:
+                    _creds.refresh(_GReq())
+                    checks["gmail"] = {"ok": True, "token": "refrescado"}
+                except Exception as _ge:  # noqa: BLE001
+                    checks["gmail"] = {"ok": False, "token": "expirado/revocado",
+                                       "error": str(_ge)[:160],
+                                       "fix": "correr scripts/reauth_gmail.py"}
+        checks["gmail"]["last_check"] = last_gmail_check or "nunca"
+    except Exception as e:  # noqa: BLE001
+        checks["gmail"] = {"ok": False, "error": str(e)[:200]}
 
     if not checks.get("db", {}).get("ok"):
         status = "down"
-    elif not (checks.get("v9", {}).get("ok") and checks.get("llm", {}).get("ok")):
+    elif not (checks.get("v9", {}).get("ok") and checks.get("llm", {}).get("ok")
+              and checks.get("gmail", {}).get("ok")):
         status = "degraded"
     else:
         status = "ok"
@@ -446,9 +473,20 @@ def _run_gmail_check_background():
         if not new_emails:
             gmail_check_result["current"] = 3
             gmail_check_result["total"] = 3
-            gmail_check_result["step"] = "Completado: No hay emails nuevos"
+            if errors:
+                # 0 emails Y hubo errores = la revisión FALLÓ (p.ej. invalid_grant:
+                # token OAuth expirado) — no reportar "Completado" engañoso.
+                err_msg = errors[0].get("error", "desconocido")
+                if "invalid_grant" in str(err_msg):
+                    gmail_check_result["step"] = ("Error: token de Gmail expirado/revocado — "
+                                                  "correr scripts/reauth_gmail.py")
+                else:
+                    gmail_check_result["step"] = f"Error: Gmail falló sin descargar emails ({str(err_msg)[:120]})"
+                gmail_check_result["error"] = str(err_msg)[:300]
+            else:
+                gmail_check_result["step"] = "Completado: No hay emails nuevos"
+                add_monitor_log("No hay emails nuevos")
             _update_pct()
-            add_monitor_log("No hay emails nuevos")
             return
 
         # Paso 2: Clasificar emails y asociar a casos
