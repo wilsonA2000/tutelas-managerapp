@@ -37,7 +37,12 @@ LLM_HEALTH = f"{LLM_URL}/v1/models"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 LLAMA_BIN = Path.home() / "llama.cpp" / "build" / "bin" / "llama-server"                 # CPU
 LLAMA_BIN_VULKAN = Path.home() / "llama.cpp" / "build-vulkan" / "bin" / "llama-server"   # iGPU
-GGUF_BASE = PROJECT_ROOT / "data" / "lora-models" / "Qwen3-4B-Q4_K_M.gguf"
+# Modelo seleccionable por env sin tocar código (bench Fase 0: Instruct-2507
+# rindió 0.869 vs 0.822 del base — flip pendiente de validación de Wilson).
+# Acepta nombre de archivo (relativo a data/lora-models/) o path absoluto.
+_GGUF_ENV = os.getenv("LLM_GGUF", "Qwen3-4B-Q4_K_M.gguf")
+GGUF_BASE = Path(_GGUF_ENV) if os.path.isabs(_GGUF_ENV) \
+    else PROJECT_ROOT / "data" / "lora-models" / _GGUF_ENV
 GGUF_LORA = PROJECT_ROOT / "data" / "lora-models" / "iuris-lora-qwen3-4b.gguf"
 
 PAUSE_FLAG = Path("/tmp/iuris_llm_paused.flag")
