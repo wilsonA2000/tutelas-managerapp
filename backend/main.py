@@ -310,6 +310,9 @@ from backend.routers.chat import router as chat_router
 app.include_router(chat_router)
 from backend.routers.v9 import router as v9_router
 app.include_router(v9_router)
+# Pipeline experimental DeepSeek end-to-end (módulo aislado — eliminar si no se adopta)
+from backend.routers.deepseek_pipeline import router as deepseek_pipeline_router
+app.include_router(deepseek_pipeline_router)
 
 
 # ============================================================

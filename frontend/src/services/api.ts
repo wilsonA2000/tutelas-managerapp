@@ -429,4 +429,42 @@ export const v9Extract = (caseId: number, apply = false) =>
 export const v9ExtractBatch = (params: { case_ids?: number[]; limit?: number; apply?: boolean }) =>
   api.post<V9BatchResponse>('/v9/extract-batch', params).then(r => r.data);
 
+// ── Pipeline experimental DeepSeek end-to-end ─────────────────────────────
+export interface DsFieldValue { valor: string; fuente: string; confianza: string }
+export interface DsDocClassification { doc_id: number; filename: string; tipo: string; instancia: string; confianza: string; razon: string }
+export interface DsDiff { campo: string; semaforo: 'VERDE' | 'AMARILLO' | 'GRIS'; v9: string; deepseek: string }
+export interface DsPipelineResult {
+  case_id: number; folder_name: string;
+  doc_classifications: DsDocClassification[];
+  extraction: {
+    campos: Record<string, DsFieldValue>;
+    docs_usados: string[];
+    completitud: number;
+    elapsed_ms: number;
+    error?: string;
+  } | null;
+  diff_vs_v9: DsDiff[];
+  elapsed_ms_total: number;
+  error?: string;
+}
+
+export const dsHealth = () =>
+  api.get<{ available: boolean; message: string }>('/deepseek/health').then(r => r.data);
+
+export const dsProcess = (caseId: number, opts?: { classify_docs?: boolean; extract?: boolean; use_cached?: boolean }) =>
+  api.post<DsPipelineResult>(`/deepseek/process/${caseId}`, opts ?? {}).then(r => r.data);
+
+export const dsGetResult = (caseId: number) =>
+  api.get<DsPipelineResult>(`/deepseek/result/${caseId}`).then(r => r.data);
+
+export const dsApply = (caseId: number, mode: 'fill-empty' | 'all-non-manual' = 'fill-empty') =>
+  api.post<{ updated: string[]; updated_count: number; skipped_manual: string[] }>(
+    `/deepseek/apply/${caseId}`, { mode }
+  ).then(r => r.data);
+
+export const dsStats = () =>
+  api.get<{ total_procesados: number; diff_verde_total: number; diff_amarillo_total: number; completitud_promedio: number }>(
+    '/deepseek/stats'
+  ).then(r => r.data);
+
 export default api;

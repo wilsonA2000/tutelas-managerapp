@@ -6,7 +6,7 @@ import {
   CheckCircle, XCircle, Clock, ChevronRight,
   Zap, ShieldAlert, Trash2, FileWarning, Search as SearchIcon, ClipboardCheck, Brain, FolderCheck,
 } from 'lucide-react'
-import { extractBatch, extractSingle, agentExtract, getReviewQueue, getCases, syncFolders, getSyncStatus, getMismatchedDocs, dismissMismatchedDoc, dismissAllMismatchedDocs, verifyAllDocs, getSuspiciousDocs, markDocOk, runFullAudit, getLlmStatus } from '../services/api'
+import { extractBatch, extractSingle, agentExtract, getReviewQueue, getCases, syncFolders, getSyncStatus, getMismatchedDocs, dismissMismatchedDoc, dismissAllMismatchedDocs, verifyAllDocs, getSuspiciousDocs, markDocOk, runFullAudit, getLlmStatus, dsProcess, dsApply, type DsPipelineResult } from '../services/api'
 import { useNavigate } from 'react-router-dom'
 import PageHeader from '../components/PageHeader'
 import PageShell from '../components/PageShell'
@@ -49,6 +49,9 @@ export default function Extraction() {
   const dropdownRef = useRef<HTMLDivElement>(null)
   const [extractionMode, setExtractionMode] = useState<'single' | 'agent'>('single')
   const [classifyDocs, setClassifyDocs] = useState(false)
+  // Pipeline experimental DeepSeek
+  const [dsResult, setDsResult] = useState<DsPipelineResult | null>(null)
+  const [dsShowPanel, setDsShowPanel] = useState(false)
   // Casos seleccionados para extracción por lotes (checkboxes en la Cola de Revisión).
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
@@ -464,7 +467,128 @@ export default function Extraction() {
             </Button>
           </CardContent>
         </Card>
+
+        {/* ── Pipeline experimental DeepSeek ──────────────────────────── */}
+        <Card className="border-violet-200 bg-violet-50/40">
+          <CardContent className="pt-4 space-y-3">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-violet-100">
+                <Zap size={18} className="text-violet-600" />
+              </div>
+              <div>
+                <h2 className="font-medium text-foreground text-sm">Pipeline DeepSeek <span className="text-[10px] text-violet-500 font-normal ml-1">[EXPERIMENTAL]</span></h2>
+                <p className="text-xs text-muted-foreground mt-0.5">Clasifica docs + extrae 43 campos en una sola llamada</p>
+              </div>
+            </div>
+
+            <Button
+              onClick={async () => {
+                if (!selectedCaseId) { toast.error('Selecciona un caso primero'); return }
+                setDsShowPanel(false); setDsResult(null)
+                const tid = toast.loading('Procesando con DeepSeek…')
+                try {
+                  const r = await dsProcess(selectedCaseId as number, { classify_docs: true, extract: true })
+                  setDsResult(r); setDsShowPanel(true)
+                  const verde = r.diff_vs_v9.filter(d => d.semaforo === 'VERDE').length
+                  const amarillo = r.diff_vs_v9.filter(d => d.semaforo === 'AMARILLO').length
+                  toast.success(`DeepSeek: ${r.extraction?.completitud ?? 0}% completitud · ${verde} vacíos llenados · ${amarillo} difs`, { id: tid, duration: 5000 })
+                } catch (e: any) {
+                  toast.error(e?.response?.data?.detail ?? 'Error en pipeline DeepSeek', { id: tid })
+                }
+              }}
+              disabled={!selectedCaseId}
+              className="w-full bg-violet-600 hover:bg-violet-700 text-white"
+              size="lg"
+            >
+              <Zap size={15} /> Procesar con DeepSeek
+            </Button>
+          </CardContent>
+        </Card>
       </div>
+
+      {/* ── Panel resultados DeepSeek ──────────────────────────────────── */}
+      {dsShowPanel && dsResult && (
+        <Card className="border-violet-200">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-violet-100 bg-violet-50 rounded-t-lg">
+            <div className="flex items-center gap-2">
+              <Zap size={15} className="text-violet-600" />
+              <span className="text-sm font-medium text-violet-800">Resultado DeepSeek — {dsResult.folder_name}</span>
+              {dsResult.extraction && (
+                <span className="text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full">
+                  {dsResult.extraction.completitud}% completitud
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={async () => {
+                  if (!dsResult) return
+                  const tid = toast.loading('Aplicando campos vacíos a la DB…')
+                  try {
+                    const r = await dsApply(dsResult.case_id, 'fill-empty')
+                    toast.success(`${r.updated_count} campos aplicados (${r.skipped_manual.length} manuales protegidos)`, { id: tid })
+                  } catch (e: any) {
+                    toast.error('Error al aplicar', { id: tid })
+                  }
+                }}
+                className="text-xs bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-2 py-1 rounded transition-colors"
+              >
+                ✓ Aplicar VERDE a DB
+              </button>
+              <button onClick={() => setDsShowPanel(false)} className="text-xs text-muted-foreground hover:text-foreground">✕ Cerrar</button>
+            </div>
+          </div>
+
+          {/* Doc classifications */}
+          {dsResult.doc_classifications.length > 0 && (
+            <div className="px-4 py-2 border-b border-violet-100">
+              <p className="text-xs font-medium text-muted-foreground mb-1.5">Documentos clasificados:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {dsResult.doc_classifications.map(dc => (
+                  <span key={dc.doc_id} className={cn(
+                    'text-[10px] px-2 py-0.5 rounded-full border',
+                    dc.confianza === 'alta' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
+                    dc.confianza === 'media' ? 'bg-amber-50 border-amber-200 text-amber-700' :
+                    'bg-gray-50 border-gray-200 text-gray-600'
+                  )}>
+                    {dc.tipo}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Diff table */}
+          <CardContent className="p-0 max-h-96 overflow-y-auto">
+            {dsResult.diff_vs_v9.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">Sin diferencias — DeepSeek coincide con v9</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-8"></TableHead>
+                    <TableHead className="text-xs">Campo</TableHead>
+                    <TableHead className="text-xs">Valor actual (v9)</TableHead>
+                    <TableHead className="text-xs">DeepSeek propone</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {dsResult.diff_vs_v9.map(d => (
+                    <TableRow key={d.campo} className={d.semaforo === 'VERDE' ? 'bg-emerald-50/50' : d.semaforo === 'AMARILLO' ? 'bg-amber-50/50' : ''}>
+                      <TableCell className="text-center text-xs">
+                        {d.semaforo === 'VERDE' ? '🟢' : d.semaforo === 'AMARILLO' ? '🟡' : '⚫'}
+                      </TableCell>
+                      <TableCell className="text-xs font-mono text-muted-foreground">{d.campo}</TableCell>
+                      <TableCell className="text-xs max-w-[160px] truncate" title={d.v9}>{d.v9 || <span className="text-muted-foreground/50 italic">vacío</span>}</TableCell>
+                      <TableCell className="text-xs max-w-[200px] truncate font-medium" title={d.deepseek}>{d.deepseek || <span className="text-muted-foreground/50 italic">vacío</span>}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Results */}
       {showResults && results.length > 0 && (
