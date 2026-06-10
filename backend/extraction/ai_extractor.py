@@ -102,19 +102,24 @@ def _call_local(messages: list[dict], model: str = _LOCAL_MODEL,
 
     Si falla, levanta excepción — el caller debe manejar.
     """
+    # Muestreo por env, mismas perillas que v9/llm_gap_fill (defaults = comportamiento
+    # histórico greedy). Para Qwen3-*-Instruct-2507 el greedy DEGENERA (bucles 'ccc…',
+    # sopa de inglés) — Qwen recomienda temp 0.7 / top_p 0.8 / top_k 20.
     payload = {
         "messages": messages,
-        "temperature": 0.0,
-        "top_p": 1.0,
+        "temperature": float(os.getenv("V9_LLM_TEMPERATURE", "0.0")),
+        "top_p": float(os.getenv("V9_LLM_TOP_P", "1.0")),
         "seed": 42,
         "max_tokens": max_tokens,
     }
+    if os.getenv("V9_LLM_TOP_K"):
+        payload["top_k"] = int(os.getenv("V9_LLM_TOP_K"))
     headers = {}
     if not _LLM_API_KEY:
         # Anti-degeneración: con greedy (temp=0) y sin penalización, el Qwen 4B local
         # cae en bucles repetitivos ("1 1 1 1...", "_ _ _ _...") que además alargan el
         # cómputo y disparan fence timeouts en la iGPU. repeat_penalty los corta.
-        payload["repeat_penalty"] = 1.15
+        payload["repeat_penalty"] = float(os.getenv("V9_LLM_REPEAT_PENALTY", "1.15"))
     if _LLM_API_KEY:  # proveedor externo (DeepSeek): requiere model + auth.
         # Los callers pasan model local ("qwen3-4b-iuris") que el externo no conoce →
         # usar el modelo del env (_LOCAL_MODEL = LLM_LOCAL_MODEL_ID, ej. deepseek-chat).
