@@ -96,6 +96,10 @@ def extract_case(
     warnings: list[str] = []
 
     case = db.query(Case).filter(Case.id == case_id).first()
+    if case is None:
+        # Caso borrado/fusionado (curación): error limpio en vez de AttributeError
+        # profundo en field_context (validate_single_call 2026-06-10 con c487).
+        raise ValueError(f"extract_case: case {case_id} no existe (¿borrado o fusionado?)")
     folder_name, paths = _list_case_docs(db, case_id)
     fields = ExtractedFields()
 

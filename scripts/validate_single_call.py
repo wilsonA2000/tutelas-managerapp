@@ -44,13 +44,29 @@ def run_mode(case_id: int, single: bool) -> dict:
         db.close()
 
 
+def _existing_cases(case_ids):
+    """Filtra ids que ya no existen (borrados/fusionados en curación) — 2026-06-10:
+    c487 desapareció y el run completo moría a mitad de camino."""
+    from backend.database.models import Case
+    db = SessionLocal()
+    try:
+        keep = [c for c in case_ids if db.get(Case, c) is not None]
+    finally:
+        db.close()
+    gone = sorted(set(case_ids) - set(keep))
+    if gone:
+        print(f"(aviso: casos inexistentes omitidos: {gone})")
+    return keep
+
+
 def main():
     print("Encendiendo motor (GPU 1250)…")
     llm_mutex.ensure_llm_up(wait_s=90)
-    print(f"{'='*78}\nVALIDACIÓN V9_LLM_SINGLE_CALL — {len(CASES)} casos\n{'='*78}")
+    cases = _existing_cases(CASES)
+    print(f"{'='*78}\nVALIDACIÓN V9_LLM_SINGLE_CALL — {len(cases)} casos\n{'='*78}")
     tot_off_s = tot_on_s = tot_off_c = tot_on_c = 0
     mism = 0
-    for cid in CASES:
+    for cid in cases:
         off = run_mode(cid, single=False)
         on = run_mode(cid, single=True)
         tot_off_s += off["secs"]; tot_on_s += on["secs"]
