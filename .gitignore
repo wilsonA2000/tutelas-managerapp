@@ -107,3 +107,12 @@ screenshots-v6016/
 
 # Outputs de medición con PII (valores de campos de casos reales) — nunca subir
 data/quality_baseline_preorquestador.json
+
+# Bench artifacts (Fase 0-1)
+data/bench/
+data/golden/
+data/tutelas.bench.db*
+
+# Tooling local de agentes (no versionar)
+.agents/
+.claude/skills/

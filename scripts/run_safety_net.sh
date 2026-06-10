@@ -19,6 +19,9 @@ echo "════════════════════════�
 echo "  RED DE SEGURIDAD — $(date '+%Y-%m-%d %H:%M:%S')"
 echo "════════════════════════════════════════════════════════════════"
 
+echo; echo ">>> [0/5] Scorecard del benchmark (Fase 0 — métricas por campo)"
+if "$PY" -m pytest tests/bench/test_scorecard.py -q >/dev/null 2>&1; then echo "    OK"; else echo "    FAIL"; fail=1; fi
+
 echo; echo ">>> [1/5] Tests standalone v9 (sin DB)"
 if "$PY" scripts/v9_test_standalone.py; then echo "    OK"; else echo "    FAIL"; fail=1; fi
 
