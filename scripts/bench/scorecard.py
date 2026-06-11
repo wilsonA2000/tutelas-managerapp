@@ -99,10 +99,21 @@ def _rouge_l_recall(gold: str, pred: str) -> float:
     return _lcs(g, _tokens(pred)) / len(g)
 
 
+# Campos NARRATIVOS append-only: comparar binario contra el golden es injusto
+# (observaciones acumula notas fechadas de varias sesiones; dos narrativas correctas
+# casi nunca matchean). M1 2026-06-11: se trackean aparte (status 'narrative') y NO
+# entran al accuracy_present ni a hallucination — solo este campo deflactaba el
+# agregado de ~0.84 a 0.801 (57/60 'fallos' metodológicos en la celda 2507-prod).
+NARRATIVE_FIELDS = {"observaciones"}
+
+
 def score_field(field: str, gold, pred: str) -> dict:
     """gold: str presente | None (vacío verificado) | "" (no verificado→omitir)."""
     pred = "" if pred is None else str(pred).strip()
     degenerate = bool(pred) and _is_garbage(pred)
+
+    if field in NARRATIVE_FIELDS:
+        return {"field": field, "status": "narrative", "degenerate": degenerate}
 
     if isinstance(gold, str) and not gold.strip():
         return {"field": field, "status": "skipped_unverified", "degenerate": degenerate}
@@ -141,7 +152,8 @@ def score_field(field: str, gold, pred: str) -> dict:
 def score_case(gold_case: dict, pred_values: dict) -> dict:
     """gold_case: {field: gold}. pred_values: {field: valor extraído}."""
     results = [score_field(f, gold_case.get(f, ""), pred_values.get(f, "")) for f in EXCEL_FIELDS]
-    agg = {s: 0 for s in ("match", "mismatch", "missed", "hallucinated", "abstained", "skipped_unverified")}
+    agg = {s: 0 for s in ("match", "mismatch", "missed", "hallucinated", "abstained",
+                          "skipped_unverified", "narrative")}
     degen = 0
     for r in results:
         agg[r["status"]] += 1

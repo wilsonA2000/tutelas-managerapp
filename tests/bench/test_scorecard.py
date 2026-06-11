@@ -63,3 +63,13 @@ def test_score_case_aggregates():
     assert res["counts"]["match"] == 2
     assert res["counts"]["hallucinated"] == 1
     assert res["hallucination_rate"] == 1.0
+
+
+def test_narrative_field_not_scored():
+    # M1 2026-06-11: observaciones es narrativo append-only → no entra al accuracy.
+    r = sc.score_field("observaciones", "[08/05] nota curada larga", "otro resumen distinto")
+    assert r["status"] == "narrative"
+    case = sc.score_case({"observaciones": "nota A", "asunto": "TRASLADO"},
+                         {"observaciones": "nota B", "asunto": "TRASLADO"})
+    assert case["counts"]["narrative"] == 1
+    assert case["accuracy_present"] == 1.0  # solo asunto cuenta y matchea

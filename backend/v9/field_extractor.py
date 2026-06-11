@@ -523,8 +523,13 @@ _PAT_EN_CONTRA_ENTITY = re.compile(
 _PAT_VINCULACION = re.compile(
     r"(?i)(?:se\s+(?:ordena\s+(?:la\s+)?|dispone\s+(?:la\s+)?)?vinculaci[óo]n\s+(?:de\s+)?(?:oficio(?:sa)?\s+)?(?:al?\s+|a\s+l[aoes]+\s+|del?\s+)?"
     r"|se\s+vincula(?:n)?\s+(?:de\s+oficio\s+)?(?:al?\s+|a\s+l[aoes]+\s+)?(?:tr[áa]mite\s+tutelar\s+a;?\s*|presente\s+(?:tr[áa]mite|asunto)\s+a\s+)?"
-    r"|vinc[úu]lese\s+(?:de\s+oficio\s+)?(?:al?\s+|a\s+l[aoes]+\s+)?)"
-    r"([A-ZÁÉÍÓÚÑ][^\.]{8,400}?)(?=\s*(?:\.|,?\s*toda\s+vez|por\s+cuanto|quienes|para\s+que|en\s+atenci[óo]n|a\s+fin\s+(?:de|que)))"
+    r"|vinc[úu]lese\s+(?:de\s+oficio\s+)?(?:al?\s+|a\s+l[aoes]+\s+)?"
+    # M2 2026-06-11 (bench: 33/60 golden con el VINCULAR a la vista sin capturar):
+    # infinitivo dispositivo del RESUELVE ("SEGUNDO: VINCULAR al MINISTERIO…",
+    # "VINCULAR a este trámite a la GOBERNACIÓN…") y pasado narrativo ("vinculó al MEN").
+    r"|vincular\s+(?:de\s+oficio\s+)?(?:a\s+(?:este|la\s+presente)\s+(?:tr[áa]mite|acci[óo]n|actuaci[óo]n|litis)\s+)?(?:al?\s+|a\s+l[aoes]+\s+)?"
+    r"|vincul[óo]\s+(?:de\s+oficio\s+)?(?:al?\s+|a\s+l[aoes]+\s+)?)"
+    r"([A-ZÁÉÍÓÚÑ][^\.]{8,400}?)(?=\s*(?:\.|,?\s*toda\s+vez|por\s+cuanto|quienes|para\s+que|en\s+atenci[óo]n|a\s+fin\s+(?:de|que)|debiendo|;\s*y\b))"
 )
 
 
@@ -679,9 +684,9 @@ _RE_VINC_LEAD = re.compile(
     r"(?i)^(?:\s*[-:;,]\s*)*"
     r"(?:(?:la|el|los|las|al|a|de|del|en|por|y|este|esta|presente|tr[áa]mite|tutelar|"
     r"tutela|demanda|asunto|actuaci[óo]n|acci[óo]n|accionar|litis|resguardo|"
-    r"constitucional|manera|oficios[ao]|pasiva|calidad|accionad[oa]s|intermedio|sus|"
+    r"constitucional|manera|oficios[ao]|oficiosamente|pasiva|calidad|accionad[oa]s|intermedio|sus|"
     r"representantes|legales|adem[áa]s|oficio|orden[ae]se|v[íi]ncul\w*|cont[ée]stese|"
-    r"p[óo]ngase|conocimiento|se|se[ñn]or|director)\b[\s.,;:-]*)+"
+    r"p[óo]ngase|conocimiento|se|se[ñn]or|director|los?|las?|siguientes?)\b[\s.,;:•·-]*)+"
 )
 
 
@@ -693,13 +698,20 @@ def _clean_vinculados_lead(v: str) -> str:
 
 
 def extract_vinculados_for_case(db: Session, case: Case) -> Optional[str]:
-    """Extrae los vinculados del cuerpo del auto admisorio (frases 'se vincula a...')."""
-    autos = db.query(Document).filter(Document.case_id == case.id, Document.doc_type == "AUTO_ADMISORIO").all()
+    """Extrae los vinculados del cuerpo del auto admisorio (frases 'se vincula a...').
+
+    M2 2026-06-11: + PDF_AUTO_ADMISORIO (legacy por-filename — la query lo excluía y
+    perdía el auto entero, 14/60 golden) y ventana 5000→9000 (el VINCULAR del RESUELVE
+    suele caer pasada la pág. 2 en autos largos, 4/60)."""
+    autos = db.query(Document).filter(
+        Document.case_id == case.id,
+        Document.doc_type.in_(("AUTO_ADMISORIO", "PDF_AUTO_ADMISORIO")),
+    ).all()
     for d in autos:
         text = d.extracted_text or ""
         if not text or len(text) < 150:
             continue
-        head = text[:5000]
+        head = text[:9000]
         m = _PAT_VINCULACION.search(head)
         if m:
             raw = m.group(1)
