@@ -105,17 +105,27 @@ def validate_extraction(case, fields: dict) -> tuple[dict, list[str]]:
     # que son informacion valiosa pero NO pertenecen al enum. Los movemos a OBSERVACIONES
     # con prefijo [DETALLE FALLO] para que el usuario pueda consultarlos sin romper el enum.
     # Orden importa: los mas especificos/compuestos primero.
+    # M4 2026-06-11: alineado al vocab v9 (underscores — SENTIDO_FALLO_VOCAB). El enum
+    # viejo solo tenía formas con ESPACIO ('HECHO SUPERADO') y borraba los valores
+    # canónicos del extractor ('CARENCIA_OBJETO' → "no reconocido en enum — eliminado"):
+    # 8 fallos de carencia perdidos en el golden.
     ENUM_FALLO_1ST = [
-        "CONCEDE PARCIALMENTE", "HECHO SUPERADO", "DESISTIMIENTO",
-        "IMPROCEDENTE", "CONCEDE", "NIEGA", "AMPARA",
+        "CONCEDE_PARCIAL", "CONCEDE PARCIALMENTE",
+        "CARENCIA_OBJETO", "HECHO_SUPERADO", "HECHO SUPERADO",
+        "DESISTIMIENTO", "IMPROCEDENTE", "RECHAZA",
+        "CONCEDE", "NIEGA", "AMPARA",
     ]
-    ENUM_FALLO_2ND = ["CONFIRMA PARCIALMENTE", "REVOCA PARCIALMENTE", "CONFIRMA", "REVOCA", "MODIFICA"]
-    # Sinonimos juridicos → valor canonico
+    ENUM_FALLO_2ND = ["CONFIRMA_MODIFICANDO", "CONFIRMA_PARCIAL", "CONFIRMA PARCIALMENTE",
+                      "REVOCA PARCIALMENTE", "DECLARA_NULIDAD", "NULIDAD",
+                      "CONFIRMA", "REVOCA", "MODIFICA", "INHIBE"]
+    # Sinonimos juridicos → valor canonico (canon = forma con underscore del cuadro v9)
     FALLO_1ST_SYNONYMS = {
         "AMPARA": "CONCEDE",
         "AMPARADO": "CONCEDE",
-        "CARENCIA ACTUAL DE OBJETO POR HECHO SUPERADO": "HECHO SUPERADO",
-        "CARENCIA DE OBJETO": "HECHO SUPERADO",
+        "CONCEDE PARCIALMENTE": "CONCEDE_PARCIAL",
+        "HECHO SUPERADO": "HECHO_SUPERADO",
+        "CARENCIA ACTUAL DE OBJETO POR HECHO SUPERADO": "HECHO_SUPERADO",
+        "CARENCIA DE OBJETO": "CARENCIA_OBJETO",
         "DESISTIMIENTO ACEPTADO": "DESISTIMIENTO",
     }
 
