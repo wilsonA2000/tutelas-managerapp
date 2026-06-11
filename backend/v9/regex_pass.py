@@ -533,16 +533,27 @@ def _extract_cedula(text: str) -> Optional[str]:
 
 
 def _extract_juzgado(text: str) -> Optional[str]:
+    # 2026-06-10: sanitizar con _clean_juzgado — este writer corre ANTES que
+    # field_extractor (fields.set no permite sobrescribir) y metía colas basura
+    # del header al cuadro ('TRIBUNAL ADMINISTRATIVO DE SANTANDER Referencia',
+    # c549). Si el limpiador rechaza una forma rara pero real, conserva el raw.
+    def _sanea(raw: str) -> str:
+        try:
+            from backend.v9.field_extractor import _clean_juzgado
+            return _clean_juzgado(raw) or raw
+        except Exception:  # noqa: BLE001
+            return raw
+
     from backend.agent.regex_library import SELLO_JUZGADO
     m = SELLO_JUZGADO.pattern.search(text)
     if m:
         full = m.group(0).strip()
         # Cap longitud
-        return re.sub(r"\s+", " ", full)[:100]
+        return _sanea(re.sub(r"\s+", " ", full)[:100])
     # Fallback: línea con "Juzgado"
     for line in text.splitlines()[:50]:
         if re.match(r"^\s*JUZGADO\s+\w", line, re.I):
-            return re.sub(r"\s+", " ", line.strip())[:100]
+            return _sanea(re.sub(r"\s+", " ", line.strip())[:100])
     return None
 
 
