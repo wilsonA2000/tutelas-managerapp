@@ -1200,6 +1200,26 @@ def check_inbox(db: Session) -> list[dict]:
                         except Exception as e:
                             logger.debug("refresh_one de cache falló para caso %s: %s", case.id, e)
 
+                # Guard final rad23-contradice (2026-06-10, auditoría de ingesta): si el
+                # email trae un rad23 completo y el caso asignado tiene rad23 de OTRO
+                # juzgado (bloque 1-12), la asignación vino de señales débiles (nombre/
+                # municipio/thread) que CONTRADICEN el identificador fuerte → AMBIGUO
+                # (cuarentena humana). Cazó 4 misasignaciones reales en la ingesta del
+                # 2026-06-10 (Yarima→c302, desacato S.Miguel→c327, Yeiner→c89,
+                # Solano→c63). El multi-rad legítimo del MISMO juzgado (incidente,
+                # typo de año) comparte bloque → pasa. No aplica a caso recién creado
+                # con el rad del propio email.
+                if case is not None and not created_new and accion != "SALIENTE":
+                    _er23 = re.sub(r"\D", "", radicado_data.get("radicado_23", "") or "")
+                    _cr23 = re.sub(r"\D", "", case.radicado_23_digitos or "")
+                    if len(_er23) >= 21 and len(_cr23) >= 21 and _er23[:12] != _cr23[:12]:
+                        logger.warning(
+                            "Guard rad23-contradice: email rad %s… vs caso %s rad %s… "
+                            "(ruta=%s) → AMBIGUO para revisión humana",
+                            _er23[:12], case.id, _cr23[:12], match_route or accion)
+                        case = None
+                        accion = "AMBIGUO"
+
                 # ── REGISTRAR EMAIL EN DB PRIMERO (v4.8 Provenance) ──
                 # Creamos el Email antes que los Documents para tener email_id
                 # disponible al crear los hijos (adjuntos + .md). Esto garantiza
