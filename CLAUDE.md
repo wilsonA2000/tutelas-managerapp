@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Versión actual
 
-**v9.1 — Pipeline plano (mayo 2026), modernizado.** Branch de trabajo: `experiment-v5.5`. Rama de respaldo: `backup/pre-modernizacion`.
+**v9.2 — Consolidado a `main` (2026-06-10, tag `v9.2-consolidacion-20260610`).** `experiment-v5.5` y `main` apuntan al mismo commit; trabajar en `main` de aquí en adelante. Respaldo: `backup/pre-modernizacion`.
 
 ### Estado al cierre 2026-06-03 (curación de datos + curación de CÓDIGO)
 
