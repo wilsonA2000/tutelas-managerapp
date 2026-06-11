@@ -111,6 +111,17 @@ def main() -> int:
     }
     try:
         for i, cid in enumerate(case_ids):
+            # M3 2026-06-11: health-check entre casos — vk::DeviceLostError mató el
+            # server en el caso ~58/61 y los últimos corrieron sin LLM contaminando
+            # la celda. Respawn preventivo si está caído (solo server local).
+            if "127.0.0.1" in LLM_URL or "localhost" in LLM_URL:
+                try:
+                    from backend.services.llm_mutex import is_up, ensure_llm_up
+                    if not is_up(timeout=1.0):
+                        print(f"  (server caído antes de c{cid} — respawn)", file=sys.stderr)
+                        ensure_llm_up(wait_s=120)
+                except Exception as _hc:  # noqa: BLE001
+                    print(f"  (health-check falló: {_hc})", file=sys.stderr)
             t0 = time.time()
             try:
                 res = extract_case(db, cid, dry_run=True, use_llm=True)

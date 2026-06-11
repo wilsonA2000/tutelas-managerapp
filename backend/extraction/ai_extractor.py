@@ -125,12 +125,27 @@ def _call_local(messages: list[dict], model: str = _LOCAL_MODEL,
         # usar el modelo del env (_LOCAL_MODEL = LLM_LOCAL_MODEL_ID, ej. deepseek-chat).
         payload["model"] = _LOCAL_MODEL
         headers["Authorization"] = f"Bearer {_LLM_API_KEY}"
-    response = requests.post(
-        f"{_LOCAL_URL}/v1/chat/completions",
-        json=payload,
-        headers=headers,
-        timeout=_LOCAL_TIMEOUT,
-    )
+    try:
+        response = requests.post(
+            f"{_LOCAL_URL}/v1/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=_LOCAL_TIMEOUT,
+        )
+    except requests.exceptions.ConnectionError:
+        # M3 2026-06-11: server local caído (vk::DeviceLostError bajo carga sostenida)
+        # → respawn + UN reintento, en vez de fallar el campo en silencio.
+        if not _LLM_API_KEY and ("127.0.0.1" in _LOCAL_URL or "localhost" in _LOCAL_URL):
+            from backend.services.llm_mutex import ensure_llm_up
+            if ensure_llm_up(wait_s=120):
+                response = requests.post(
+                    f"{_LOCAL_URL}/v1/chat/completions",
+                    json=payload, headers=headers, timeout=_LOCAL_TIMEOUT,
+                )
+            else:
+                raise
+        else:
+            raise
     response.raise_for_status()
     data = response.json()
     text = data["choices"][0]["message"]["content"]
