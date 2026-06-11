@@ -1112,6 +1112,7 @@ _JUZGADO_STOP = re.compile(
     r"(?i)\b(?:acta\b|reparto\b|radicaci|radicad|expediente\b|accionant|accionad|"
     r"demandant|demandad|se[ñn]or\b|se[ñn]ora\b|doctor\b|doctora\b|asunto\b|ref\b|"
     r"referencia\b|oficio\b|n[uú]mero\b|n[°º]\b|nro\b|fecha\b|d[ií]a\b|me\s+permito|"
+    r"corre[ol]?\b|e-?mail\b|tel[eé]?f?\w*\b|celular\b|carrera\b|calle\b|c[oó]digo\b|piso\b|"
     r"buen\s+d[ií]a|cordial|atentamente|avoca\b|avoqu|admite\b|adm[ií]t|conoce\b|"
     r"profiri|profer|emiti|dentro\s+de|mediante\b|notific|para\s+reparto|"
     r"sala\s+de\s+decisi|de\s+conformidad|conforme\s+a|sobre\s+la\b|en\s+raz[óo]n|"
@@ -1301,6 +1302,11 @@ def extract_juzgado_for_case(db: Session, case: Case) -> Optional[str]:
 
     cands.sort(key=sort_key)
     raw = cands[0][1]
+    # 2026-06-10: pasar el ganador por _clean_juzgado ANTES de normalizar — algunos
+    # candidatos llegan con cola basura del header ("…DE IBAGUÉ Corre[o]", "…DE
+    # SANTANDER Referencia", c543/c549 de la ingesta). Si el limpiador lo rechaza
+    # (forma rara pero real), se conserva el raw para no perder dato.
+    raw = _clean_juzgado(raw) or raw
     # 1B: normalizar a forma canónica (número → escrito, sin paréntesis depto)
     from backend.v9.catalog_resolve import normalize_juzgado
     return normalize_juzgado(raw)
@@ -1563,6 +1569,14 @@ def extract_ciudad_for_case(db: Session, case: Case) -> tuple[Optional[str], str
     afectación fina en casos ambiguos (origen vs destino) la resuelve el operador o el
     pase semántico. Returns (valor, fuente∈{"afectacion","juzgado","auto","demanda","none"})."""
     juz_muni, juz_src = _ciudad_del_juzgado(db, case)
+    # Guard 2026-06-10: un "municipio" de 1-3 letras o conector es basura del parser
+    # del nombre del juzgado (ingesta: ciudad='CON' de "…CON FUNCIÓN DE CON[TROL]",
+    # ciudad='LAS', 'SANTANDER REFERENCIA'). Mejor None (cae a afectación) que basura.
+    if juz_muni:
+        _jm = _strip_accents(juz_muni).upper().strip()
+        if (len(_jm) < 4 or _jm in {"CON", "LAS", "LOS", "DEL", "PARA", "SIN"}
+                or "REFERENCIA" in _jm or not re.fullmatch(r"[A-ZÁÉÍÓÚÑÜ .]+", _jm)):
+            juz_muni = None
     # El juzgado solo NO sirve como afectación en los hubs de reparto (o si no se obtuvo).
     if juz_muni is None or _strip_accents(juz_muni).upper() in _REPARTO_HUBS:
         muni = _extract_municipio_afectacion(db, case)
