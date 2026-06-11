@@ -149,6 +149,27 @@ async def gmail_background_check():
                         add_monitor_log(
                             f"Procesados {len(new_emails)} emails -> {len(cases_processed)} casos analizados, {total_fields} campos actualizados",
                         )
+                        # GATE POST-INGESTA (P15) — mismo escaneo de conflación que la
+                        # revisión manual, sobre los casos tocados por este ciclo del cron.
+                        try:
+                            from backend.v9.folder_consistency import check_folder_consistency
+                            from backend.database.models import Document as _Doc
+                            _marc = 0
+                            for _cid in cases_processed:
+                                _r = check_folder_consistency(db, _cid)
+                                for _iss in _r.get("issues", []):
+                                    if _iss.get("tipo") not in ("CONFLACION", "RAD_AJENO"):
+                                        continue
+                                    _d = db.query(_Doc).filter(_Doc.id == _iss["doc_id"]).first()
+                                    if _d and (_d.verificacion or "").upper() not in ("OK", "NO_PERTENECE", "SOSPECHOSO"):
+                                        _d.verificacion = "SOSPECHOSO"
+                                        _d.verificacion_detalle = f"[gate post-ingesta cron] {_iss.get('detalle','')[:180]}"
+                                        _marc += 1
+                            if _marc:
+                                db.commit()
+                                add_monitor_log(f"⚠ Gate post-ingesta (cron): {_marc} doc(s) SOSPECHOSO", level="warning")
+                        except Exception as _ge:  # noqa: BLE001
+                            add_monitor_log(f"Gate post-ingesta cron falló (no-fatal): {_ge}", level="warning")
                     else:
                         add_monitor_log("No hay emails nuevos")
 
@@ -229,6 +250,47 @@ async def lifespan(app: FastAPI):
         add_monitor_log("Active learning scheduler activado (cron 3:00 AM)")
     except Exception as e:
         add_monitor_log(f"Active learning no activado: {e}", level="warning")
+
+    # P16 (2026-06-10): watchdog del appliance — cada 15 min evalúa el chequeo único
+    # (db/llm/v9/gmail/fallbacks). En TRANSICIÓN a degraded/down crea una Alert
+    # (NotificationCenter) + monitor_log; al recuperarse, log informativo. Razón:
+    # el token de Gmail murió y la plataforma pasó UNA SEMANA sin ingerir correos
+    # sin que nadie lo viera (2026-06-04→10).
+    def _appliance_watchdog():
+        import time as _time
+        last_status = "ok"
+        while True:
+            _time.sleep(900)  # 15 min
+            try:
+                health = appliance_health()
+                status = health.get("status", "ok")
+                if status != "ok" and last_status == "ok":
+                    fallas = [k for k, v in health.get("checks", {}).items() if not v.get("ok")]
+                    add_monitor_log(f"🔴 Appliance {status.upper()}: fallan {fallas}", level="error")
+                    try:
+                        from backend.alerts.models import Alert
+                        from backend.database.database import SessionLocal as _SL
+                        _db = _SL()
+                        try:
+                            _db.add(Alert(
+                                alert_type="ANOMALY",
+                                severity="CRITICAL" if status == "down" else "WARNING",
+                                title=f"Plataforma {status.upper()}: {', '.join(fallas)}",
+                                description=str({k: health["checks"][k] for k in fallas})[:800],
+                            ))
+                            _db.commit()
+                        finally:
+                            _db.close()
+                    except Exception as _ae:  # noqa: BLE001
+                        add_monitor_log(f"Alert de appliance no creada: {_ae}", level="warning")
+                elif status == "ok" and last_status != "ok":
+                    add_monitor_log("✅ Appliance recuperado: todos los chequeos OK")
+                last_status = status
+            except Exception as _we:  # noqa: BLE001
+                add_monitor_log(f"Watchdog appliance falló: {_we}", level="warning")
+
+    threading.Thread(target=_appliance_watchdog, daemon=True, name="appliance-watchdog").start()
+    add_monitor_log("Watchdog del appliance activado (cada 15 min)")
 
     # (Retirado) La precarga del analizador Presidio se quitó junto con backend/privacy/:
     # la anonimización PII pre-IA-externa no aplica en modo local-only.
@@ -544,6 +606,32 @@ def _run_gmail_check_background():
         add_monitor_log(
             f"Revision manual: {len(new_emails)} emails, {cases_processed} casos, {total_fields} campos actualizados",
         )
+
+        # GATE POST-INGESTA automático (P15, 2026-06-10): escaneo de conflación
+        # cross-juzgado SOLO sobre los casos tocados por esta revisión. Antes corría
+        # a mano (scan_conflacion.py --mark) y las conflaciones de una ingesta
+        # quedaban silenciosas hasta la siguiente auditoría (4 casos el 2026-06-10).
+        try:
+            from backend.v9.folder_consistency import check_folder_consistency
+            from backend.database.models import Document as _Doc
+            _marcados = 0
+            for _case in cases_to_process:
+                _r = check_folder_consistency(db, _case.id)
+                for _iss in _r.get("issues", []):
+                    if _iss.get("tipo") not in ("CONFLACION", "RAD_AJENO"):
+                        continue
+                    _d = db.query(_Doc).filter(_Doc.id == _iss["doc_id"]).first()
+                    if _d and (_d.verificacion or "").upper() not in ("OK", "NO_PERTENECE", "SOSPECHOSO"):
+                        _d.verificacion = "SOSPECHOSO"
+                        _d.verificacion_detalle = f"[gate post-ingesta] {_iss.get('detalle','')[:180]}"
+                        _marcados += 1
+            if _marcados:
+                db.commit()
+                add_monitor_log(
+                    f"⚠ Gate post-ingesta: {_marcados} doc(s) de otro juzgado marcados SOSPECHOSO — revisar en /extraction",
+                    level="warning")
+        except Exception as _gate_err:  # noqa: BLE001
+            add_monitor_log(f"Gate post-ingesta falló (no-fatal): {_gate_err}", level="warning")
 
     except Exception as e:
         gmail_check_result["step"] = f"Error: {str(e)[:100]}"
