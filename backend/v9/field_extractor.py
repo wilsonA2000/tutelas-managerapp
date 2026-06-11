@@ -2077,7 +2077,15 @@ _RE_PRET_DEFENSE_SECTION = re.compile(
     r"pronunciamiento\s+de\s+fondo\s+y\s+excepciones|"
     r"(?:al\s+)?considera\w*\s+que\s+no\s+(?:ha|han|se\s+ha)\s+vulnerad|"
     r"no\s+(?:ha|han|se\s+ha)\s+vulnerad\w*\s+(?:los?\s+)?derecho|"
-    r"exoner\w+\s+a\s+(?:la\s+)?(?:secretar|gobernaci|entidad|naci[óo]n))"
+    r"exoner\w+\s+a\s+(?:la\s+)?(?:secretar|gobernaci|entidad|naci[óo]n)|"
+    # Defensa ASERTIVA (no petitoria): la SED niega hechos/competencia en su
+    # "pronunciamiento final" ("En consecuencia: No existe actuación administrativa
+    # atribuible…", c554 2026-06-10). Arranque de sección con negación de la entidad.
+    r"^[\s\W]*no\s+(?:existe|hay|obra|reposa|le\s+asiste)\b|"
+    r"^[\s\W]*(?:esta|la)\s+(?:secretar[íi]a|entidad|dependencia)\s+(?:no|carece)\b|"
+    r"falta\s+de\s+legitimaci[óo]n\s+(?:en\s+la\s+causa\s+)?por\s+pasiva|"
+    r"carece\s+de\s+(?:competencia|legitimaci[óo]n)|"
+    r"(?:me|nos)\s+opong\w+\b)"
 )
 # NO es petitorio sino NARRATIVA DE HECHOS / ENCABEZADO / texto de la entidad: la sección
 # arranca describiendo lo que el accionante "alega/adujo" (hechos), presentando a las
@@ -2264,12 +2272,17 @@ def extract_pretensiones_for_case(db: Session, case: Case, *, use_llm: bool = Tr
     longest_text = ""
     demanda_text = ""  # texto de la demanda más larga — preferido para el LLM (no tiene
                        # las órdenes del juez ni la contestación de la SED)
+    # Tipos DEFENSA: jamás sirven de fallback para el locator LLM — en casos
+    # solo-respuesta (demanda no archivada, c554 2026-06-10) el LLM "ubicaba"
+    # pretensiones dentro de la contestación SED y transcribía la DEFENSA como
+    # si fuera el reclamo del accionante. Vacío honesto > defensa.
+    _DEFENSA_TYPES = {"RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"}
     for dt, strip_def, recap_ok in _PRET_DOC_ORDER:
         for d in docs_by_type.get(dt, []):
             t = d.extracted_text or ""
             if not t or len(t) < 300:
                 continue
-            if len(t) > len(longest_text):
+            if len(t) > len(longest_text) and dt not in _DEFENSA_TYPES:
                 longest_text = t
             if dt in ("DEMANDA_TUTELA", "ANEXO_DEMANDA") and len(t) > len(demanda_text):
                 demanda_text = t

@@ -282,7 +282,20 @@ def extract_case(
                 snippet = (d.text or "")[:4000]
                 if snippet:
                     doc_texts[dtype] = (doc_texts.get(dtype, "") + "\n---\n" + snippet).lstrip("\n-")
+        _pret_antes = fields.values.get("pretensiones", "")
         fields, llm_calls = llm_gap_fill.run(fields, full_text, doc_texts=doc_texts)
+        # Guard 2026-06-10 (c554): `pretensiones` debe ser transcripción VERBATIM del
+        # reclamo del ACCIONANTE (requisito del jurado). Si el caso no tiene demanda
+        # fiable (solo-respuesta: el único doc es la defensa SED), el fallback 3B le
+        # da al LLM la RESPUESTA como contexto y transcribe la DEFENSA ("No existe
+        # actuación administrativa atribuible…"). Vacío honesto > defensa como reclamo.
+        if fields.values.get("pretensiones", "") and not _pret_antes:
+            from backend.v9.field_extractor import _best_claim_text
+            _, _es_demanda_real = _best_claim_text(db, case)
+            if not _es_demanda_real:
+                warnings.append("pretensiones del LLM descartada: caso sin demanda fiable "
+                                "(solo defensa SED) — vacío honesto")
+                fields.values["pretensiones"] = ""
     timing["llm_gap_fill"] = int((time.perf_counter() - t) * 1000)
 
     # 6.5 post_validator (reglas F1-F16) — valida y corrige antes de persistir.
