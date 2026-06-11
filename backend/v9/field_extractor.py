@@ -3508,8 +3508,12 @@ def _clean_responsable_desacato(raw: str, doc_text: str = "") -> Optional[str]:
     if not raw:
         return None
     v = re.sub(r"\s+", " ", raw).strip(" ,.;:-").strip()
-    v = re.sub(r"(?i)^(?:se[ñn]ora?\s+|doctora?\s+|dra?\.?\s+|funcionari[oa]\s+|ciudadan[oa]\s+"
+    v = re.sub(r"(?i)^(?:se[ñn]or(?:es|a)?\s+|doctor(?:es|a)?\s+|dra?\.?\s+|funcionari[oa]s?\s+|ciudadan[oa]s?\s+"
                r"|al?\s+|el\s+|la\s+|los\s+|las\s+|lo\s+)+", "", v).strip()
+    # M7: boilerplate condicional del apercibimiento ("QUIEN INCUMPLA UNA ORDEN…",
+    # "QUIENES RESULTEN RESPONSABLES") no es una persona nombrada.
+    if re.match(r"(?i)\s*quien(?:es)?\b", v):
+        return None
     if not (4 <= len(v) <= 80):
         return None
     f = _fold(v)
@@ -3668,24 +3672,43 @@ def extract_incidentes_cluster_for_case(db: Session, case: Case) -> dict:
     # Pasa el doc_text al cleaner para habilitar match-por-correo en el roster (paso 1
     # del _resolve_abogado_combined). Regla c456: solo se acepta canónico/roster; el
     # cargo "Secretaria de Educación" o "Gobernador" → None (no es responsable jurídico).
+    # M7 2026-06-11: preferir la PERSONA NOMBRADA sobre la entidad — el primer match
+    # del doc suele ser el encabezado ("incidente contra la SECRETARÍA…") y la persona
+    # aparece después ("SANCIONAR a la doctora YANETH KARINA ARAUJO… en su calidad de…").
+    # Regla del usuario: responsable_desacato = persona nombrada/sancionada; la entidad
+    # solo como fallback cuando el auto no nombra a nadie. (Golden: 7 mismatches.)
+    def _es_persona(v: str) -> bool:
+        if re.search(r"(?i)secretar|gobernac|alcald|minister|institu|colegio|fondo|fidu|"
+                     r"naci[óo]n|departamento|personer|procuradur|direcci[óo]n|oficina|"
+                     r"empresa|e\.?s\.?e\b|e\.?p\.?s\b", v):
+            return False
+        return 2 <= len(v.split()) <= 5
+
+    def _mejor_responsable(t: str) -> Optional[str]:
+        persona, entidad = None, None
+        for m in _RE_RESPONSABLE_DESACATO.finditer(t):
+            r = _clean_responsable_desacato(m.group(1), doc_text=t)
+            if not r:
+                continue
+            if _es_persona(r):
+                if persona is None:
+                    persona = r
+            elif entidad is None:
+                entidad = r
+        return persona or entidad
+
     resp_global = None
     for d in (inc_escritos + autos_inc):
-        t = d.extracted_text[:8000]
-        m = _RE_RESPONSABLE_DESACATO.search(t)
-        if m:
-            r = _clean_responsable_desacato(m.group(1), doc_text=t)
+        r = _mejor_responsable(d.extracted_text[:8000])
+        if r:
+            resp_global = r
+            break
+    if not resp_global:
+        for h, _d, t in email_heads:
+            r = _mejor_responsable(t[:8000])
             if r:
                 resp_global = r
                 break
-    if not resp_global:
-        for h, _d, t in email_heads:
-            head = t[:8000]
-            m = _RE_RESPONSABLE_DESACATO.search(head)
-            if m:
-                r = _clean_responsable_desacato(m.group(1), doc_text=head)
-                if r:
-                    resp_global = r
-                    break
     # Nota: antes había aquí un default "SECRETARIO DE EDUCACIÓN DEPARTAMENTAL DE
     # SANTANDER" cuando decision_global ∈ {SANCIONA, NO_SANCIONA}. Eliminado porque
     # introducía un cargo no-canónico que la auditoría (audit_responsables_canonicos.py)
