@@ -1514,6 +1514,35 @@ def _extract_municipio_afectacion(db: Session, case: Case) -> Optional[str]:
     except Exception:
         return None
 
+    # M6 2026-06-11 — Ancla 0 (máxima precisión): PERSONERÍA MUNICIPAL DE X como
+    # accionante → la afectación ES el municipio de la personería (actúa por su
+    # comunidad). En el golden, 9/12 mismatches eran hubs sin afectación leída.
+    acc = getattr(case, "accionante", None) or ""
+    m_per = re.match(r"(?i)\s*PERSONER[ÍI]A\s+MUNICIPAL\s+DE[L]?\s+(.{3,40})", acc)
+    if m_per:
+        v = _longest_valid_municipio(m_per.group(1), valid_keys)
+        if v:
+            return v
+
+    # Ancla 0.5: sede de la I.E./colegio/vereda en la demanda o el auto — la sede
+    # escolar es la afectación (regla del usuario: colegio del menor / plaza docente).
+    _RE_SEDE_IE = re.compile(
+        r"(?i)(?:instituci[óo]n\s+educativa|i\.?\s*e\.?|colegio|centro\s+educativo|sede\s+educativa|"
+        r"vereda|corregimiento)\s+[^.,;\n]{0,60}?(?:del?\s+municipio\s+de[l]?|,?\s+municipio\s+de[l]?|\s+de[l]?)\s+"
+        r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40})")
+    for dt0 in ("DEMANDA_TUTELA", "AUTO_ADMISORIO", "PDF_AUTO_ADMISORIO"):
+        for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt0).all():
+            t = d.extracted_text or ""
+            if len(t) < 300:
+                continue
+            for m0 in _RE_SEDE_IE.finditer(t[:9000]):
+                pre = t[max(0, m0.start(1) - 45):m0.start(1)]
+                if _RE_DESTINO_CTX.search(pre):
+                    continue
+                v = _longest_valid_municipio(m0.group(1), valid_keys)
+                if v:
+                    return v
+
     for dt in ("RESPUESTA_SED", "DOCX_RESPUESTA", "RESPUESTA", "DEMANDA_TUTELA", "ANEXO_DEMANDA"):
         for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt).all():
             t = d.extracted_text or ""

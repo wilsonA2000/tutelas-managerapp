@@ -57,7 +57,11 @@ def kind_of(field: str) -> str:
 
 
 def _norm(s: str) -> str:
-    return re.sub(r"\s+", " ", str(s or "").strip().upper())
+    # M6 2026-06-11: + fold de tildes — 'SURATÁ' ≡ 'SURATA' (el golden y el extractor
+    # difieren solo en acentos y contaba como mismatch).
+    import unicodedata as _ud
+    s = _ud.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", s.strip().upper())
 
 
 def _norm_exact(field: str, s: str) -> str:

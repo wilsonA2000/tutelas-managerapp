@@ -760,6 +760,22 @@ def _extract_ciudad(text: str) -> Optional[str]:
         ciudad = ciudad.split(" DE ", 1)[1].strip()
     if not ciudad or ciudad in _CITY_NOISE or len(ciudad) < 3:
         return None
+    # M6 2026-06-11: validar contra el listado de municipios — este writer corre
+    # ANTES que field_extractor (first-wins) y metía truncados al cuadro
+    # ('SAN' de 'SAN GIL' cortado por el regex, c509). Si no es municipio
+    # conocido completo, mejor None (field_extractor/afectación lo resuelve).
+    try:
+        from backend.cognition.legal_schema import MUNICIPIOS_SANTANDER
+        _keys = {m.upper() for m in MUNICIPIOS_SANTANDER}
+        import unicodedata as _ud
+        _fold = lambda s: _ud.normalize("NFKD", s).encode("ascii", "ignore").decode()
+        if _fold(ciudad).upper() not in {_fold(k) for k in _keys}:
+            # municipios fuera de Santander (Ibagué/Cali/Bogotá) son legítimos:
+            # solo se rechazan truncados-sospechosos (≤4 chars o termina en conector)
+            if len(ciudad) <= 4 or ciudad.split()[-1] in {"DE", "DEL", "LA", "LOS", "LAS", "SAN", "SANTA"}:
+                return None
+    except Exception:  # noqa: BLE001
+        pass
     return ciudad
 
 
