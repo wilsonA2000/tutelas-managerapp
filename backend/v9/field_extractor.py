@@ -1342,10 +1342,21 @@ def extract_juzgado_2nd_for_case(db: Session, case: Case, juzgado_1st: Optional[
 
     j1_fold = _fold(juzgado_1st) if juzgado_1st else ""
 
+    # M5 2026-06-11: el avocamiento real exige doc de 2ª (SENTENCIA_2DA/AUTO_2DA).
+    # Con solo impugnacion=SI, el remitente CIRCUITO suele ser la REMISIÓN por
+    # reparto ("remítase al Juzgado X") y el cuadro curado deja juzgado_2nd vacío
+    # hasta que la 2ª avoque — 3 'alucinaciones' en el golden (c406/c408/c420).
+    has_avoc_doc = (
+        db.query(Document)
+        .filter(Document.case_id == case.id, Document.doc_type.in_(("SENTENCIA_2DA", "AUTO_2DA")))
+        .first() is not None
+    )
+    if not has_avoc_doc:
+        return None, "none"  # sin avocamiento documentado → vacío honesto (semántica del cuadro)
     # 1) remitente Rama Judicial de nivel CIRCUITO/TRIBUNAL, distinto al de 1ra
     rj = _rj_sender_candidates(db, case.id)
     rj_2nd = [j for j in rj if _juzgado_nivel(j) in ("CIRCUITO", "TRIBUNAL") and _fold(j) != j1_fold]
-    if rj_2nd:
+    if rj_2nd and has_avoc_doc:
         rj_2nd.sort(key=lambda j: (0 if _juzgado_nivel(j) == "TRIBUNAL" else 1, len(j)))
         from backend.v9.catalog_resolve import normalize_juzgado
         return normalize_juzgado(rj_2nd[0]), "regex"

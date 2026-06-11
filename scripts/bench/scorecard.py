@@ -132,6 +132,13 @@ def score_field(field: str, gold, pred: str) -> dict:
     if k == "exact":
         ok = _norm_exact(field, gold) == _norm_exact(field, pred)
         # enums: tolerar contención bidireccional (p.ej. "CONCEDE PARCIAL" ⊇ "CONCEDE")
+        # M5 2026-06-11: juzgados — misma entidad en formas distintas ('TRIBUNAL
+        # SUPERIOR (BUCARAMANGA)' vs 'TRIBUNAL SUPERIOR DEL DISTRITO JUDICIAL DE
+        # BUCARAMANGA'; pred más específica que el golden) → contención por tokens.
+        if not ok and field.startswith("juzgado"):
+            gt, pt = set(_tokens(gold)), set(_tokens(pred))
+            if gt and pt and (gt <= pt or pt <= gt):
+                ok = True
         if not ok and field in _ENUM:
             g, p = _norm(gold), _norm(pred)
             ok = g in p or p in g
