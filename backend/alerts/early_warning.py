@@ -214,7 +214,11 @@ def score_case(case: Case, now: Optional[datetime] = None) -> RiskReport:
         from backend.database.models import ComplianceTracking
         if hasattr(case, "compliance_records") and case.compliance_records:
             for rec in case.compliance_records:
-                if (rec.estado or "").upper() in ("CUMPLIDO",):
+                # CUMPLIDO/NO_APLICA = orden satisfecha, revocada o cerrada;
+                # requiere_cumplimiento=NO = ordinal informativo sin carga.
+                if (rec.estado or "").upper() in ("CUMPLIDO", "NO_APLICA"):
+                    continue
+                if (rec.requiere_cumplimiento or "").upper() == "NO":
                     continue
                 limite = _parse_date(rec.fecha_limite)
                 if not limite:

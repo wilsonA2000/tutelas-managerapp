@@ -32,7 +32,7 @@ def _case_to_audit_card(case: Case, now: datetime) -> dict:
     compliance = None
     if hasattr(case, "compliance_records") and case.compliance_records:
         for rec in case.compliance_records:
-            if (rec.estado or "").upper() not in ("CUMPLIDO",):
+            if (rec.estado or "").upper() not in ("CUMPLIDO", "NO_APLICA"):
                 limite = _parse_date(rec.fecha_limite)
                 dias_restantes = (limite - now).days if limite else None
                 compliance = {
