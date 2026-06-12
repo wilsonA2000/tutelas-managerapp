@@ -1,0 +1,59 @@
+# requirements-product.txt — P17/C2 (2026-06-11)
+# Dependencias del APPLIANCE (instalación cliente, offline via wheels/).
+# Derivado de requirements.txt eliminando todo lo SIN consumidor en backend/
+# (verificado por grep de imports — ver docs/P17_INSTALADOR_DESIGN.md §1):
+#   - presidio-analyzer/anonymizer  → backend/privacy/ borrado (LOCAL_ONLY)
+#   - marker-pdf                    → normalizador es pymupdf-only; arrastraba torch+CUDA (4.6 GB)
+#   - pytesseract / pdf2image       → 0 imports (OCR real = PaddleOCR)
+#   - faiss-cpu / sentence-transformers → backend/ml/embeddings retirado
+#   - pytest / httpx                → solo desarrollo/tests
+# El dev sigue usando requirements.txt; este archivo NO cambia el venv actual.
+
+# Backend
+fastapi>=0.115.0
+uvicorn[standard]>=0.24.0
+sqlalchemy>=2.0.23
+pydantic-settings>=2.0
+python-multipart>=0.0.6
+aiofiles>=23.0
+sse-starlette>=1.6
+requests>=2.31          # llm_mutex, chat, ai_extractor (antes llegaba transitivo)
+
+# Document extraction
+pdfplumber>=0.11.0
+PyMuPDF>=1.24.0
+python-docx>=1.1.0
+Pillow>=10.0
+paddlepaddle>=3.3.0     # CONGELAR versión exacta probada antes del bundle (riesgo ABI)
+paddleocr>=2.10,<3.0
+
+# IA externa OPT-IN (gateada por V9_ALLOW_DEEPSEEK / agent; el appliance es LOCAL_ONLY)
+anthropic>=0.40.0
+openai>=1.50.0
+
+# Excel & data
+openpyxl>=3.1.2
+pandas>=2.1.0
+
+# Gmail API REST (opcional en producto; el SDK pesa poco)
+google-auth>=2.0
+google-auth-oauthlib>=1.0
+google-api-python-client>=2.0
+
+# Database migrations
+alembic>=1.13
+
+# Authentication
+python-jose[cryptography]>=3.3
+passlib[bcrypt]>=1.7
+bcrypt>=4.0,<4.1   # passlib 1.7 incompatible con bcrypt 4.1+
+
+# Utilities
+python-dotenv>=1.0
+
+# NER local (cognitive_fill / ner_spacy) — modelo es_core_news_lg va como wheel aparte en models/
+spacy>=3.7
+rapidfuzz>=3.5
+
+# Cognitive agent — SQL parsing (backend/cognition/agent/tools.py)
+sqlglot>=30

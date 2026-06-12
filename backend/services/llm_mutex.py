@@ -35,8 +35,14 @@ LLM_URL = os.getenv("LLM_LOCAL_URL", f"http://127.0.0.1:{LLM_PORT}")
 LLM_HEALTH = f"{LLM_URL}/v1/models"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-LLAMA_BIN = Path.home() / "llama.cpp" / "build" / "bin" / "llama-server"                 # CPU
-LLAMA_BIN_VULKAN = Path.home() / "llama.cpp" / "build-vulkan" / "bin" / "llama-server"   # iGPU
+# Binarios configurables por env (P17/C6): el appliance los instala en su propio
+# prefijo; el default conserva el layout de desarrollo (~/llama.cpp/build*).
+LLAMA_BIN = Path(os.getenv(
+    "LLAMA_SERVER_BIN",
+    str(Path.home() / "llama.cpp" / "build" / "bin" / "llama-server")))                  # CPU
+LLAMA_BIN_VULKAN = Path(os.getenv(
+    "LLAMA_SERVER_BIN_VULKAN",
+    str(Path.home() / "llama.cpp" / "build-vulkan" / "bin" / "llama-server")))           # iGPU
 # Modelo seleccionable por env sin tocar código (bench Fase 0: Instruct-2507
 # rindió 0.869 vs 0.822 del base — flip pendiente de validación de Wilson).
 # Acepta nombre de archivo (relativo a data/lora-models/) o path absoluto.
