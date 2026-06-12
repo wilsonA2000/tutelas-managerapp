@@ -1,22 +1,40 @@
-"""Router de extraccion."""
+"""Router de extracción (pipeline v9).
 
+Agrupa: extracción individual/lote, semáforo del motor LLM, gate de consistencia
+de carpeta, auditorías de documentos (mismatched/suspicious) y movimiento de docs
+entre casos.
+
+Los imports de servicios (v9.pipeline, llm_mutex, doc_ops, …) son deliberadamente
+lazy: mantienen liviano el import del router y evitan ciclos con main.py.
+"""
+
+import logging
+import os
+import re
 import threading
-from backend.core.time import utcnow
-_extraction_lock = threading.Lock()
+import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
-from backend.database.database import get_db, SessionLocal
-from backend.database.models import Case
-from backend.services.extraction_service import get_review_queue
 from backend.core.settings import settings
+from backend.database.database import get_db, SessionLocal
+from backend.database.models import AuditLog, Case, Document, Email
+from backend.services.extraction_service import get_review_queue
 
 router = APIRouter(prefix="/api/extraction", tags=["extraction"])
 
-# Estado global compartido con main.py
+logger = logging.getLogger("tutelas.extraction")
+
+# Estado global compartido con main.py (main importa este router; los atributos
+# extraction_in_progress / extraction_progress / add_monitor_log se leen en runtime)
 import backend.main as _main
+
+_extraction_lock = threading.Lock()
+_progress_lock = threading.Lock()
+MAX_WORKERS = settings.EXTRACTION_MAX_WORKERS
 
 
 class BatchRequest(BaseModel):
@@ -31,7 +49,6 @@ def _guard_folder_consistency(db: Session, case_id: int, force: bool) -> None:
     luego extraer (extraer una carpeta sucia contamina los campos). `force=True` la omite."""
     if force:
         return
-    from fastapi import HTTPException
     from backend.v9.folder_consistency import check_folder_consistency
     cons = check_folder_consistency(db, case_id)
     if not cons["clean"]:
@@ -58,17 +75,11 @@ _RESPONSE_FIELDS = [
 
 def _get_token_usage(db: Session, case_id: int) -> dict | None:
     """Obtener último token usage de un caso."""
-    import sqlite3
     try:
-        conn = sqlite3.connect(str(db.bind.url).replace("sqlite:///", ""))
-        c = conn.cursor()
-        c.execute(
+        tok = db.execute(text(
             "SELECT tokens_input, tokens_output, cost_total, provider, model "
-            "FROM token_usage WHERE case_id = ? ORDER BY timestamp DESC LIMIT 1",
-            (case_id,),
-        )
-        tok = c.fetchone()
-        conn.close()
+            "FROM token_usage WHERE case_id = :cid ORDER BY timestamp DESC LIMIT 1"
+        ), {"cid": case_id}).fetchone()
         if tok:
             return {"input": tok[0], "output": tok[1], "cost": tok[2], "provider": tok[3], "model": tok[4]}
     except Exception:
@@ -86,8 +97,71 @@ def _get_fields_data(case) -> dict:
     return fields_data
 
 
-_progress_lock = threading.Lock()
-MAX_WORKERS = settings.EXTRACTION_MAX_WORKERS
+def _extract_case_sync(db: Session, case: Case, use_llm: bool, audit: bool = False) -> dict:
+    """Corre el pipeline v9 sobre un caso (síncrono) y arma la respuesta estándar.
+
+    Cuerpo compartido de `/single/{id}` y `/agent/{id}`. Gestiona el ciclo de vida
+    del motor LLM (begin/end_extraction) cuando `use_llm`; marca el caso COMPLETO
+    (semántica de la UI; v9 no gestiona processing_status) y, con `audit=True`,
+    deja rastro EXTRACTION_V9 en audit_log. `persist.py` solo RELLENA campos
+    vacíos — nunca pisa el cuadro curado ni valores manuales.
+    """
+    from backend.v9.pipeline import extract_case
+
+    start = time.time()
+    llm_lifecycle = False
+    try:
+        if use_llm:
+            from backend.services.llm_mutex import begin_extraction
+            begin_extraction()
+            llm_lifecycle = True
+        result = extract_case(db, case.id, dry_run=False, use_llm=use_llm)
+        elapsed = int(time.time() - start)
+        try:
+            case.processing_status = "COMPLETO"
+            db.commit()
+        except Exception:
+            db.rollback()
+        db.refresh(case)
+        fields_data = _get_fields_data(case)
+
+        if audit:
+            try:
+                db.add(AuditLog(
+                    case_id=case.id, action="EXTRACTION_V9",
+                    new_value=f"{len(fields_data)} campos | {elapsed}s | completitud {result.fields.completitud()}%",
+                ))
+                db.commit()
+            except Exception:
+                db.rollback()
+
+        return {
+            "status": "completed",
+            "case_id": case.id,
+            "folder_name": case.folder_name,
+            "processing_status": case.processing_status,
+            "fields_extracted": len(fields_data),
+            "fields": fields_data,
+            "completitud_v9": result.fields.completitud(),
+            "documents_processed": result.docs_processed,
+            "documents_excluded": result.docs_failed,
+            "llm_calls": result.llm_calls,
+            "warnings": result.warnings,
+            "elapsed_seconds": elapsed,
+            "tokens": _get_token_usage(db, case.id),
+            "method": "v9.pipeline",
+        }
+    except Exception as e:
+        db.rollback()
+        return {
+            "status": "error",
+            "case_id": case.id,
+            "message": str(e),
+        }
+    finally:
+        if llm_lifecycle:
+            from backend.services.llm_mutex import end_extraction
+            end_extraction()
 
 
 def _extraction_worker_init():
@@ -179,7 +253,6 @@ def _process_one_case_router(args: tuple) -> tuple:
 
 def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False, use_llm: bool = False):
     """Ejecutar extraccion en background con ProcessPool real (sin GIL)."""
-    import time
     from concurrent.futures import ProcessPoolExecutor, as_completed
     from backend.services.backup_service import auto_backup
 
@@ -348,12 +421,8 @@ def api_extract_single(case_id: int, force: bool = False, use_llm: bool = True, 
     SOSPECHOSO / PENDIENTE_OCR / conflación cross-juzgado) se rechaza con HTTP 409 —
     extraer una carpeta sucia contamina los campos. Pasar `force=true` para omitir.
     """
-    import time
-    from backend.v9.pipeline import extract_case
-
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Caso no encontrado")
 
     _guard_folder_consistency(db, case_id, force)
@@ -361,50 +430,7 @@ def api_extract_single(case_id: int, force: bool = False, use_llm: bool = True, 
     if _main.extraction_in_progress:
         return {"status": "running", "message": "Ya hay una extraccion en progreso"}
 
-    start = time.time()
-    _llm_lifecycle = False
-    try:
-        if use_llm:
-            from backend.services.llm_mutex import begin_extraction
-            begin_extraction()
-            _llm_lifecycle = True
-        result = extract_case(db, case_id, dry_run=False, use_llm=use_llm)
-        # Marca el caso como procesado (semántica de la UI; v9 no gestiona processing_status).
-        try:
-            case.processing_status = "COMPLETO"
-            db.commit()
-        except Exception:
-            db.rollback()
-        db.refresh(case)
-        fields_data = _get_fields_data(case)
-
-        return {
-            "status": "completed",
-            "case_id": case_id,
-            "folder_name": case.folder_name,
-            "processing_status": case.processing_status,
-            "fields_extracted": len(fields_data),
-            "fields": fields_data,
-            "completitud_v9": result.fields.completitud(),
-            "documents_processed": result.docs_processed,
-            "documents_excluded": result.docs_failed,
-            "llm_calls": result.llm_calls,
-            "warnings": result.warnings,
-            "elapsed_seconds": int(time.time() - start),
-            "tokens": _get_token_usage(db, case_id),
-            "method": "v9.pipeline",
-        }
-    except Exception as e:
-        db.rollback()
-        return {
-            "status": "error",
-            "case_id": case_id,
-            "message": str(e),
-        }
-    finally:
-        if _llm_lifecycle:
-            from backend.services.llm_mutex import end_extraction
-            end_extraction()
+    return _extract_case_sync(db, case, use_llm=use_llm)
 
 
 @router.post("/batch")
@@ -463,67 +489,13 @@ def api_agent_extract(case_id: int, classify: bool = False, force: bool = False,
     `persist.py` solo rellena campos vacíos (no pisa el cuadro). El query param `classify`
     se ignora (v9 clasifica los docs en la ingesta vía `doc_librarian`).
     """
-    from fastapi import HTTPException
-    from backend.database.models import AuditLog
-    from backend.v9.pipeline import extract_case
-    import time
-
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
         raise HTTPException(status_code=404, detail="Caso no encontrado")
 
     _guard_folder_consistency(db, case_id, force)
 
-    start = time.time()
-    _llm_lifecycle = False
-    try:
-        from backend.services.llm_mutex import begin_extraction
-        begin_extraction()
-        _llm_lifecycle = True
-        result = extract_case(db, case_id, dry_run=False, use_llm=True)
-        elapsed = int(time.time() - start)
-        try:
-            case.processing_status = "COMPLETO"
-            db.commit()
-        except Exception:
-            db.rollback()
-        db.refresh(case)
-        fields_data = _get_fields_data(case)
-
-        try:
-            db.add(AuditLog(
-                case_id=case_id, action="EXTRACTION_V9",
-                new_value=f"{len(fields_data)} campos | {elapsed}s | completitud {result.fields.completitud()}%",
-            ))
-            db.commit()
-        except Exception:
-            db.rollback()
-
-        return {
-            "status": "completed",
-            "case_id": case_id,
-            "folder_name": case.folder_name,
-            "processing_status": case.processing_status,
-            "fields_extracted": len(fields_data),
-            "fields": fields_data,
-            "completitud_v9": result.fields.completitud(),
-            "documents_processed": result.docs_processed,
-            "warnings": result.warnings,
-            "elapsed_seconds": elapsed,
-            "tokens": _get_token_usage(db, case_id),
-            "method": "v9.pipeline",
-        }
-    except Exception as e:
-        db.rollback()
-        return {
-            "status": "error",
-            "case_id": case_id,
-            "message": str(e),
-        }
-    finally:
-        if _llm_lifecycle:
-            from backend.services.llm_mutex import end_extraction
-            end_extraction()
+    return _extract_case_sync(db, case, use_llm=True, audit=True)
 
 
 @router.get("/agent/{case_id}/reasoning")
@@ -541,8 +513,6 @@ def api_review_queue(db: Session = Depends(get_db)):
 @router.get("/mismatched-docs")
 def api_mismatched_docs(db: Session = Depends(get_db)):
     """Documentos que no corresponden al caso. Optimizado v4.0: 1 JOIN query."""
-    from backend.database.models import AuditLog, Document
-
     # UNA query con JOIN — en vez de N+1
     results = db.query(AuditLog, Document, Case).outerjoin(
         Document, (Document.case_id == AuditLog.case_id) & (Document.filename == AuditLog.old_value),
@@ -576,10 +546,8 @@ def api_mismatched_docs(db: Session = Depends(get_db)):
 @router.delete("/mismatched-docs/{log_id}")
 def api_dismiss_mismatched_doc(log_id: int, db: Session = Depends(get_db)):
     """Descartar/resolver una alerta de documento no correspondiente."""
-    from backend.database.models import AuditLog
     log = db.query(AuditLog).filter(AuditLog.id == log_id, AuditLog.action == "DOC_NO_CORRESPONDE").first()
     if not log:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Alerta no encontrada")
     log.action = "DOC_NO_CORRESPONDE_RESUELTO"
     db.commit()
@@ -589,7 +557,6 @@ def api_dismiss_mismatched_doc(log_id: int, db: Session = Depends(get_db)):
 @router.delete("/mismatched-docs")
 def api_dismiss_all_mismatched(db: Session = Depends(get_db)):
     """Resolver TODAS las alertas de documentos no correspondientes."""
-    from backend.database.models import AuditLog
     count = db.query(AuditLog).filter(AuditLog.action == "DOC_NO_CORRESPONDE").update(
         {"action": "DOC_NO_CORRESPONDE_RESUELTO"}
     )
@@ -610,9 +577,7 @@ def api_full_audit(db: Session = Depends(get_db)):
     """Auditoría molecular completa: disco, DB, documentos, nombres, emails."""
     from pathlib import Path
     from backend.config import BASE_DIR
-    from backend.database.models import Document, Email
     from backend.extraction.doc_ops import verify_all_documents
-    import re, os
 
     VALID_EXT = {".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".md"}
 
@@ -682,152 +647,9 @@ def api_full_audit(db: Session = Depends(get_db)):
 
 
 
-@router.get("/benchmark")
-def api_benchmark(limit: int = 20, db: Session = Depends(get_db)):
-    """Benchmark: comparar regex IR vs datos actuales en DB para N casos COMPLETO.
-
-    No modifica datos — solo analiza y compara.
-    Retorna cobertura campo por campo + resumen.
-    """
-    import re
-    import time
-    from backend.extraction.ir_builder import build_case_ir
-    from backend.agent.extractors.registry import _EXTRACTORS
-    from backend.agent.extractors.base import ExtractionResult
-    from backend.agent.forest_extractor import extract_forest_from_sources
-    from backend.database.models import Email, AuditLog, TokenUsage
-    from backend.extraction.doc_ops import classify_doc_type
-
-    # Tomar N casos COMPLETO con mas campos
-    cases = db.query(Case).filter(
-        Case.processing_status == "COMPLETO",
-        Case.folder_path.isnot(None),
-    ).order_by(Case.updated_at.desc()).limit(limit).all()
-
-    FIELDS = [
-        "radicado_23_digitos", "radicado_forest", "accionante", "accionados",
-        "juzgado", "ciudad", "fecha_ingreso", "derecho_vulnerado",
-        "sentido_fallo_1st", "fecha_fallo_1st", "impugnacion", "asunto",
-        "pretensiones", "observaciones", "abogado_responsable",
-    ]
-
-    results = []
-    field_stats = {f: {"db_filled": 0, "regex_filled": 0, "match": 0, "mismatch": 0, "regex_only": 0, "db_only": 0} for f in FIELDS}
-    total_time = 0
-
-    for case in cases:
-        start = time.time()
-        case_result = {"id": case.id, "folder": case.folder_name, "fields": {}}
-
-        # Construir IR
-        try:
-            case_ir = build_case_ir(db, case)
-        except Exception as e:
-            case_result["error"] = f"IR failed: {str(e)[:80]}"
-            results.append(case_result)
-            continue
-
-        # Preparar doc_dicts
-        doc_dicts = []
-        for doc_ir in case_ir.documents:
-            doc_dicts.append({
-                "filename": doc_ir.filename, "doc_type": doc_ir.doc_type,
-                "text": doc_ir.full_text, "full_text": doc_ir.full_text,
-                "content": doc_ir.full_text, "priority": doc_ir.priority,
-                "zones": [{"zone_type": z.zone_type, "text": z.text, "metadata": z.metadata,
-                           "page": z.page, "confidence": z.confidence} for z in doc_ir.zones],
-            })
-
-        # Ejecutar extractores regex
-        case_emails = db.query(Email).filter(Email.case_id == case.id).all()
-        regex_results = {}
-
-        for field_name, extractor in _EXTRACTORS.items():
-            try:
-                result = extractor.extract_regex(doc_dicts, case_emails)
-                if result:
-                    is_valid, _ = extractor.validate(result.value)
-                    if is_valid:
-                        regex_results[field_name] = result.value
-            except Exception:
-                pass
-
-        # FOREST
-        forest = extract_forest_from_sources(doc_dicts, case_emails)
-        if forest:
-            regex_results["radicado_forest"] = forest.value
-
-        elapsed = round(time.time() - start, 2)
-        total_time += elapsed
-        case_result["elapsed_s"] = elapsed
-        case_result["ir_docs"] = len(case_ir.documents)
-        case_result["ir_zones"] = sum(len(d.zones) for d in case_ir.documents)
-
-        # Comparar campo por campo
-        for f in FIELDS:
-            attr = Case.CSV_FIELD_MAP.get(f, f)
-            db_val = (getattr(case, attr, None) or "").strip()
-            regex_val = (regex_results.get(f, "") or "").strip()
-
-            status = "empty"
-            if db_val and regex_val:
-                # Normalizar para comparacion: quitar guiones, puntos, espacios
-                db_norm = re.sub(r'[\s\-\.\,]', '', db_val.upper())
-                regex_norm = re.sub(r'[\s\-\.\,]', '', regex_val.upper())
-                if db_norm == regex_norm:
-                    status = "match"
-                    field_stats[f]["match"] += 1
-                else:
-                    status = "mismatch"
-                    field_stats[f]["mismatch"] += 1
-                field_stats[f]["db_filled"] += 1
-                field_stats[f]["regex_filled"] += 1
-            elif db_val:
-                status = "db_only"
-                field_stats[f]["db_only"] += 1
-                field_stats[f]["db_filled"] += 1
-            elif regex_val:
-                status = "regex_only"
-                field_stats[f]["regex_only"] += 1
-                field_stats[f]["regex_filled"] += 1
-
-            case_result["fields"][f] = {
-                "status": status,
-                "db": db_val[:80] if db_val else "",
-                "regex": regex_val[:80] if regex_val else "",
-            }
-
-        results.append(case_result)
-
-    # Token usage comparison: pipeline vs unified
-    token_stats = {"pipeline": {"count": 0, "tokens": 0}, "unified": {"count": 0, "tokens": 0}}
-    for tu in db.query(TokenUsage).order_by(TokenUsage.timestamp.desc()).limit(500).all():
-        key = "unified" if "unified" in (tu.model or "").lower() or "compact" in (tu.model or "").lower() else "pipeline"
-        token_stats[key]["count"] += 1
-        token_stats[key]["tokens"] += (tu.tokens_input or 0) + (tu.tokens_output or 0)
-
-    return {
-        "total_cases": len(cases),
-        "total_time_s": round(total_time, 1),
-        "avg_time_per_case_s": round(total_time / len(cases), 2) if cases else 0,
-        "field_coverage": field_stats,
-        "token_comparison": token_stats,
-        "cases": results,
-    }
-
-
-@router.get("/duplicate-docs")
-def api_duplicate_docs(db: Session = Depends(get_db)):
-    """Detectar documentos duplicados entre carpetas (mismo archivo en 2+ casos)."""
-    from backend.extraction.doc_ops import detect_duplicate_documents
-    return detect_duplicate_documents(db)
-
-
 @router.get("/suspicious-docs")
 def api_suspicious_docs(db: Session = Depends(get_db)):
     """Documentos sospechosos o que no pertenecen. Optimizado v4.0: 1 JOIN query."""
-    from backend.database.models import Document
-
     # UNA query con JOIN — en vez de N+1
     results = db.query(Document, Case).join(
         Case, Case.id == Document.case_id,
@@ -851,10 +673,8 @@ def api_suspicious_docs(db: Session = Depends(get_db)):
 @router.post("/docs/{doc_id}/mark-ok")
 def api_mark_doc_ok(doc_id: int, db: Session = Depends(get_db)):
     """Marcar un documento sospechoso como OK (pertenece al caso)."""
-    from backend.database.models import Document
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404)
     doc.verificacion = "OK"
     doc.verificacion_detalle = "Confirmado manualmente"
@@ -873,18 +693,15 @@ def api_move_doc(doc_id: int, target_case_id: int, db: Session = Depends(get_db)
 
     Para docs legacy (sin email_id), solo se mueve el doc individual.
     """
-    from backend.database.models import Document
     from backend.services.sibling_mover import move_document_or_package
 
     doc = db.query(Document).filter(Document.id == doc_id).first()
     target = db.query(Case).filter(Case.id == target_case_id).first()
     if not doc or not target:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404)
 
     result = move_document_or_package(db, doc_id, target_case_id, reason="manual_ui_move")
     if result.get("errors"):
-        from fastapi import HTTPException
         raise HTTPException(status_code=500, detail="; ".join(result["errors"]))
 
     db.commit()
@@ -910,12 +727,8 @@ def api_suggest_target(doc_id: int, db: Session = Depends(get_db)):
 
     Busca por radicado 23d, radicado corto y accionante en el texto del documento.
     """
-    import re
-    from backend.database.models import Document
-
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404)
 
     text = (doc.extracted_text or "")[:10000].upper()
@@ -976,52 +789,3 @@ def api_suggest_target(doc_id: int, db: Session = Depends(get_db)):
         "current_case": source_case.folder_name if source_case else None,
         "suggestions": suggestions[:5],
     }
-
-
-# ============================================================
-# v4.7 — Benchmark comparativo (metricas agregadas)
-# ============================================================
-
-@router.get("/metrics/comparison")
-def api_metrics_comparison(
-    since: str | None = None,
-    until: str | None = None,
-    provider: str | None = None,
-    version_tag: str = "v4.7",
-    db: Session = Depends(get_db),
-):
-    """Benchmark de metricas agregadas sobre TokenUsage + Case.
-
-    Query params:
-    - since: ISO timestamp (ej: '2026-04-09T11:00:00'). Default: ultimas 24h
-    - until: ISO timestamp. Default: ahora
-    - provider: filtrar por provider ('deepseek', 'anthropic', etc)
-    - version_tag: etiqueta del reporte (default 'v4.7')
-
-    Retorna JSON con: cost, latency, coverage, errors, providers_used,
-    problematic_cases, projection_1000_cases.
-
-    Reusa backend.reports.benchmark.compute_period_metrics (logica pura).
-    """
-    from datetime import datetime, timedelta
-    from backend.reports.benchmark import compute_period_metrics
-
-    def _parse_iso(s: str | None, default: datetime) -> datetime:
-        if not s:
-            return default
-        try:
-            return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
-        except (ValueError, AttributeError):
-            return default
-
-    now = utcnow()
-    since_dt = _parse_iso(since, now - timedelta(hours=24))
-    until_dt = _parse_iso(until, now)
-
-    return compute_period_metrics(
-        db=db,
-        since=since_dt,
-        until=until_dt,
-        provider=provider,
-        version_tag=version_tag,
-    )
