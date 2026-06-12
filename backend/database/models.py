@@ -1,6 +1,8 @@
 """Modelos SQLAlchemy para la base de datos de tutelas."""
 
 from datetime import datetime
+
+from backend.core.time import utcnow as _utcnow
 from backend.core.time import utcnow
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, JSON, Index,
@@ -206,7 +208,10 @@ class Document(Base):
     # Cuándo entró la fila a la DB (ciclo de vida de extracción 2026-06-12):
     # comparar contra field_confidences_json.v9_extracted_at del case responde
     # "¿llegaron docs DESPUÉS de la última extracción?" sin estado manual.
-    created_at = Column(DateTime, server_default=func.now())
+    # default CLIENTE-side (no solo server_default): la columna se agregó por
+    # batch_alter sin DEFAULT SQL, así que el server_default no aplica en la
+    # tabla migrada — sin esto las filas nuevas quedaban NULL (caso real c557).
+    created_at = Column(DateTime, default=_utcnow, server_default=func.now())
 
     verificacion = Column(String, default="", index=True)  # '' / OK / SOSPECHOSO / NO_PERTENECE
     verificacion_detalle = Column(String, default="")

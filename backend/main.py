@@ -83,10 +83,30 @@ def _post_ingest_split(db, new_emails) -> tuple[list, list]:
     return nuevos, actualizados
 
 
+def _sync_touched_case(db, case) -> int:
+    """Auto-curación carpeta↔DB de un caso tocado por la ingesta (2026-06-12):
+    registra archivos huérfanos que un rollback previo dejó en disco sin fila
+    (caso real c557 — el operador veía la carpeta 'vacía' sin saber que debía
+    dar refresh). No-fatal: la ingesta sigue aunque el sync falle."""
+    try:
+        from backend.services.sync_service import sync_case_folder
+        r = sync_case_folder(db, case, source="post_ingesta")
+        added = r.get("docs_added", 0)
+        if added:
+            add_monitor_log(
+                f"Carpeta '{case.folder_name}': {added} archivo(s) en disco sin registrar — registrados automáticamente",
+            )
+        return added
+    except Exception as e:  # noqa: BLE001
+        add_monitor_log(f"Sync carpeta {case.folder_name} falló (no-fatal): {e}", level="warning")
+        return 0
+
+
 def _extract_updated_case(db, case, n_docs: int) -> dict:
     """Extracción inmediata (determinista) de un caso EXISTENTE que recibió docs
     nuevos, con trazabilidad en observaciones: solo se anota lo que realmente
     cambió en DB (persist no-clobber)."""
+    n_docs += _sync_touched_case(db, case)  # huérfanos de corridas fallidas, si los hay
     stats = _v9_extract(db, case)
     changes = stats.get("changes") or {}
     visibles = [k for k in changes.keys() if not k.startswith("__")]
@@ -180,6 +200,7 @@ async def gmail_background_check():
                         total_fields = 0
                         for case, _nd in nuevos:
                             cases_processed.add(case.id)
+                            _sync_touched_case(db, case)
                             add_monitor_log(
                                 f"Caso NUEVO '{case.folder_name}': queda PENDIENTE — candidata a extracción en /extraction",
                             )
@@ -622,6 +643,7 @@ def _run_gmail_check_background():
         gmail_check_result["total"] = 2 + len(actualizados)
 
         for case, _nd in nuevos:
+            _sync_touched_case(db, case)
             add_monitor_log(
                 f"Caso NUEVO '{case.folder_name}': queda PENDIENTE — candidata a extracción en /extraction",
             )

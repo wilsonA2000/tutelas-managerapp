@@ -732,10 +732,13 @@ def api_merge_case(case_id: int, target_id: int, db: Session = Depends(get_db)):
 
 @router.post("/{case_id}/sync")
 def api_sync_single_case(case_id: int, db: Session = Depends(get_db)):
-    """Sincronizar documentos de una carpeta individual con el disco."""
+    """Sincronizar documentos de una carpeta individual con el disco.
+
+    (2026-06-12) La lógica vive en `sync_service.sync_case_folder` — compartida
+    con la post-ingesta del monitor de Gmail, que la corre automáticamente sobre
+    cada caso tocado (el operador ya no depende de este botón)."""
     from pathlib import Path
-    from backend.database.models import Document
-    from backend.database.seed import classify_document
+    from backend.services.sync_service import sync_case_folder
 
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
@@ -743,78 +746,11 @@ def api_sync_single_case(case_id: int, db: Session = Depends(get_db)):
     if not case.folder_path or not Path(case.folder_path).exists():
         raise HTTPException(status_code=400, detail="Carpeta no encontrada en disco")
 
-    VALID_EXT = {".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".md"}
-    folder = Path(case.folder_path)
-    existing = {d.filename for d in case.documents}
-
-    docs_added = 0
-    docs_removed = 0
-
-    # Agregar archivos nuevos
-    for f in sorted(folder.iterdir()):
-        if not f.is_file() or f.suffix.lower() not in VALID_EXT or f.name in existing:
-            continue
-        db.add(Document(
-            case_id=case.id, filename=f.name, file_path=str(f),
-            doc_type=classify_document(f.name), file_size=f.stat().st_size,
-        ))
-        docs_added += 1
-
-    # Eliminar documentos que ya no existen en disco
-    for doc in case.documents:
-        if doc.file_path and not Path(doc.file_path).exists():
-            db.delete(doc)
-            docs_removed += 1
-
-    db.commit()
-
-    # Verificacion inteligente de pertenencia (0 llamadas IA, todo local)
-    from backend.extraction.doc_ops import verify_document_belongs, extract_document_text
-
-    docs_moved = 0
-    docs_suspicious = 0
-    reassign_stats = {}
-
-    db.refresh(case)
-    for doc in list(case.documents):
-        if doc.verificacion in ("OK", "REASIGNADO"):
-            continue
-        if not doc.extracted_text and doc.file_path and Path(doc.file_path).exists():
-            try:
-                text, method = extract_document_text(doc)
-                if text and len(text.strip()) >= 50:
-                    doc.extracted_text = text
-                    doc.extraction_method = method
-            except Exception:
-                pass
-        if not doc.extracted_text or len(doc.extracted_text or "") < 100:
-            continue
-
-        status, detalle = verify_document_belongs(case, doc)
-        doc.verificacion = status
-        doc.verificacion_detalle = detalle
-
-        if status == "NO_PERTENECE":
-            docs_moved += 1
-            from backend.database.models import AuditLog
-            db.add(AuditLog(
-                case_id=case.id,
-                field_name="DOC_NO_PERTENECE",
-                old_value=doc.filename,
-                new_value=detalle[:200],
-                action="SYNC_VERIFY",
-                source="sync_individual",
-            ))
-        elif status == "SOSPECHOSO":
-            docs_suspicious += 1
-
-    db.commit()
+    r = sync_case_folder(db, case, source="sync_individual")
     return {
-        "message": f"+{docs_added} docs, -{docs_removed} eliminados, {docs_moved} reasignados, {docs_suspicious} sospechosos",
-        "docs_added": docs_added,
-        "docs_removed": docs_removed,
-        "docs_moved": docs_moved,
-        "docs_suspicious": docs_suspicious,
+        "message": (f"+{r['docs_added']} docs, -{r['docs_removed']} eliminados, "
+                    f"{r['docs_moved']} reasignados, {r['docs_suspicious']} sospechosos"),
+        **r,
     }
 
 

@@ -426,3 +426,97 @@ def run_sync(db: Session, base_dir: Path, result: dict, is_running_fn, force: bo
             logger.debug("KB indexing skipped: %s", e)
 
     logger.info("Sync completa: %s", result["step"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sync de UN caso (2026-06-12) — extraído del endpoint POST /api/cases/{id}/sync
+# para reutilizarlo desde la post-ingesta del monitor de Gmail: si una corrida
+# anterior falló a mitad de correo, el rollback defensivo revierte las filas
+# Document pero los ARCHIVOS ya quedaron escritos → huérfanos invisibles en el
+# módulo (caso real c557 Luz Narda: 2 PDFs en disco desde el 10-jun, 0 docs en
+# DB hasta un refresh manual). Con esto cada ingesta auto-cura los casos que
+# toca — el operador nunca necesita saber que existe un botón de refresh.
+# ─────────────────────────────────────────────────────────────────────────────
+
+SINGLE_SYNC_VALID_EXT = {".pdf", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".md"}
+
+
+def sync_case_folder(db: Session, case: Case, *, source: str = "sync") -> dict:
+    """Registra en DB los archivos de la carpeta sin fila Document, elimina filas
+    cuyo archivo ya no existe, extrae texto de los nuevos y verifica pertenencia
+    (todo local, 0 IA). Idempotente."""
+    from backend.database.seed import classify_document
+
+    if not case.folder_path or not Path(case.folder_path).exists():
+        return {"error": "Carpeta no encontrada en disco", "docs_added": 0,
+                "docs_removed": 0, "docs_moved": 0, "docs_suspicious": 0}
+
+    folder = Path(case.folder_path)
+    existing = {d.filename for d in case.documents}
+
+    docs_added = 0
+    docs_removed = 0
+
+    for f in sorted(folder.iterdir()):
+        if not f.is_file() or f.suffix.lower() not in SINGLE_SYNC_VALID_EXT or f.name in existing:
+            continue
+        db.add(Document(
+            case_id=case.id, filename=f.name, file_path=str(f),
+            doc_type=classify_document(f.name), file_size=f.stat().st_size,
+        ))
+        docs_added += 1
+
+    for doc in case.documents:
+        if doc.file_path and not Path(doc.file_path).exists():
+            db.delete(doc)
+            docs_removed += 1
+
+    db.commit()
+
+    from backend.extraction.doc_ops import verify_document_belongs, extract_document_text
+
+    docs_moved = 0
+    docs_suspicious = 0
+
+    db.refresh(case)
+    for doc in list(case.documents):
+        if doc.verificacion in ("OK", "REASIGNADO"):
+            continue
+        if not doc.extracted_text and doc.file_path and Path(doc.file_path).exists():
+            try:
+                text, method = extract_document_text(doc)
+                if text and len(text.strip()) >= 50:
+                    doc.extracted_text = text
+                    doc.extraction_method = method
+            except Exception:
+                pass
+        if not doc.extracted_text or len(doc.extracted_text or "") < 100:
+            continue
+
+        status, detalle = verify_document_belongs(case, doc)
+        doc.verificacion = status
+        doc.verificacion_detalle = detalle
+
+        if status == "NO_PERTENECE":
+            docs_moved += 1
+            db.add(AuditLog(
+                case_id=case.id,
+                field_name="DOC_NO_PERTENECE",
+                old_value=doc.filename,
+                new_value=detalle[:200],
+                action="SYNC_VERIFY",
+                source=source,
+            ))
+        elif status == "SOSPECHOSO":
+            docs_suspicious += 1
+
+    db.commit()
+    if docs_added or docs_removed:
+        logger.info("sync_case_folder c%d (%s): +%d docs, -%d eliminados",
+                    case.id, source, docs_added, docs_removed)
+    return {
+        "docs_added": docs_added,
+        "docs_removed": docs_removed,
+        "docs_moved": docs_moved,
+        "docs_suspicious": docs_suspicious,
+    }
