@@ -1468,3 +1468,36 @@ def api_extraction_progress():
     }
 
 
+
+# ============================================================
+# P17/C1 — Frontend estático (appliance)
+# ============================================================
+# Si existe frontend/dist (producto: vite build pre-empaquetado), FastAPI lo
+# sirve directamente y el cliente NO necesita Node. En desarrollo Vite sigue
+# en :5173; este bloque solo expone la última build en :8000.
+# Desactivable con TUTELAS_SERVE_FRONTEND=false.
+# DEBE ser lo último del archivo: el catch-all se registra después de TODAS
+# las rutas /api/* para no opacarlas.
+
+import os as _os
+
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if (_os.getenv("TUTELAS_SERVE_FRONTEND", "true").lower() != "false"
+        and (_FRONTEND_DIST / "index.html").is_file()):
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="spa-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        """Sirve archivos reales del dist (favicon, icons) o index.html (SPA)."""
+        candidate = (_FRONTEND_DIST / full_path).resolve()
+        # Guard anti path-traversal: solo archivos DENTRO de dist.
+        if (full_path and candidate.is_file()
+                and candidate.is_relative_to(_FRONTEND_DIST)):
+            return FileResponse(candidate)
+        return FileResponse(_FRONTEND_DIST / "index.html")
+
+    logger.info("Frontend estático servido desde %s", _FRONTEND_DIST)
