@@ -1485,14 +1485,25 @@ _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 if (_os.getenv("TUTELAS_SERVE_FRONTEND", "true").lower() != "false"
         and (_FRONTEND_DIST / "index.html").is_file()):
+    from fastapi import Request
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 
     app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="spa-assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
-    async def spa_fallback(full_path: str):
+    async def spa_fallback(request: Request, full_path: str):
         """Sirve archivos reales del dist (favicon, icons) o index.html (SPA)."""
+        # Una ruta /api/* que llegó hasta aquí no matcheó ninguna ruta real.
+        # El catch-all anula el redirect_slashes de FastAPI, así que lo
+        # replicamos: /api/alerts → /api/alerts/ si esa ruta existe.
+        if full_path.startswith("api/") or full_path == "api":
+            from fastapi.responses import JSONResponse, RedirectResponse
+            target = f"/{full_path}/"
+            if any(getattr(r, "path", None) == target for r in app.routes):
+                q = str(request.query_params)
+                return RedirectResponse(url=target + (f"?{q}" if q else ""), status_code=307)
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
         candidate = (_FRONTEND_DIST / full_path).resolve()
         # Guard anti path-traversal: solo archivos DENTRO de dist.
         if (full_path and candidate.is_file()
