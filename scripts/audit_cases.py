@@ -32,7 +32,7 @@ import re
 import sys
 from collections import Counter
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -337,7 +337,7 @@ def main() -> int:
             actuaciones_by_rad.setdefault(a.radicado_corto, []).append(a)
 
         report: dict[str, Any] = {
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "cases_audited": len(cases),
             "cases": [],
         }

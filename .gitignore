@@ -116,3 +116,4 @@ data/tutelas.bench.db*
 # Tooling local de agentes (no versionar)
 .agents/
 .claude/skills/
+data/.jwt_secret

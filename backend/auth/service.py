@@ -1,6 +1,7 @@
 """Servicio de autenticación JWT."""
 
 import secrets
+from pathlib import Path
 from backend.core.time import utcnow
 from datetime import datetime, timedelta
 
@@ -11,8 +12,33 @@ from sqlalchemy.orm import Session
 from backend.auth.models import User
 from backend.core.settings import settings
 
+
+def _load_or_create_secret() -> str:
+    """Secreto JWT persistente cuando .env no define JWT_SECRET (P17/C5).
+
+    Antes se regeneraba en CADA arranque (`secrets.token_hex` en import) →
+    todas las sesiones morían al reiniciar el backend. Ahora se genera una
+    vez y se guarda en data/.jwt_secret (0600).
+    """
+    secret_file = Path(__file__).resolve().parent.parent.parent / "data" / ".jwt_secret"
+    try:
+        if secret_file.is_file():
+            stored = secret_file.read_text().strip()
+            if len(stored) >= 32:
+                return stored
+        secret = secrets.token_hex(32)
+        secret_file.parent.mkdir(parents=True, exist_ok=True)
+        secret_file.write_text(secret)
+        secret_file.chmod(0o600)
+        return secret
+    except OSError:
+        # Filesystem de solo lectura u otro fallo: degradar al comportamiento
+        # anterior (secreto efímero) antes que impedir el arranque.
+        return secrets.token_hex(32)
+
+
 # Configuración JWT
-JWT_SECRET = settings.JWT_SECRET or secrets.token_hex(32)
+JWT_SECRET = settings.JWT_SECRET or _load_or_create_secret()
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 8
 REFRESH_TOKEN_EXPIRE_DAYS = 30
