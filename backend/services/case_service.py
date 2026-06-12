@@ -67,11 +67,18 @@ def _case_review_flags(c: Case) -> dict:
     no_rad_accionable = no_rad and not (tiene_rad_corto and n_docs > 1)
     compl = _get_case_completitud(c)
     baja = compl < MIN_COMPLETITUD_PERCENT  # <20% del cuadro v9 — el caso casi no tiene datos
-    inc_sin_fecha = (
-        any((getattr(c, f) or "") == "SI" for f in ("incidente", "incidente_2", "incidente_3"))
-        and not (c.fecha_apertura_incidente or "").strip()
-        and not (c.fecha_apertura_incidente_2 or "").strip()
-        and not (c.fecha_apertura_incidente_3 or "").strip()
+    # Por nivel: un incidente NIEGA_APERTURA (rechazado de plano) no tiene auto
+    # de apertura → fecha vacía es legítima (mismo criterio que el auditor R4).
+    _inc_levels = (
+        ("incidente", "fecha_apertura_incidente", "decision_incidente"),
+        ("incidente_2", "fecha_apertura_incidente_2", "decision_incidente_2"),
+        ("incidente_3", "fecha_apertura_incidente_3", "decision_incidente_3"),
+    )
+    inc_sin_fecha = any(
+        (getattr(c, inc_f) or "") == "SI"
+        and (getattr(c, dec_f) or "").strip().upper() != "NIEGA_APERTURA"
+        and not (getattr(c, fecha_f) or "").strip()
+        for inc_f, fecha_f, dec_f in _inc_levels
     )
     sin_qi = (c.impugnacion or "") == "SI" and not (c.quien_impugno or "").strip()
     return {
