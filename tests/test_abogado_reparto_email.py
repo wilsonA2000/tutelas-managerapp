@@ -29,8 +29,8 @@ def db():
 def _mk(db, email_text, doc_type="EMAIL_MD"):
     c = Case(folder_name="2026-00999 TEST")
     db.add(c); db.commit()
-    d = Document(case_id=c.id, filename="Email_test.md", doc_type=doc_type,
-                 extracted_text=email_text)
+    d = Document(case_id=c.id, filename="Email_test.md", file_path="/tmp/Email_test.md",
+                 doc_type=doc_type, extracted_text=email_text)
     db.add(d); db.commit()
     return c
 
