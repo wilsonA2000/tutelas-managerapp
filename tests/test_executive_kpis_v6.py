@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.database.models import Base, Case
 from backend.services.executive_kpis import (
-    compute_compliance_rate, compute_response_times,
+    compute_estado_procesal, compute_response_times,
     compute_fallos_distribution, compute_by_month,
     compute_top_municipios, compute_top_oficinas, compute_top_abogados,
     compute_top_accionantes_recurrentes, compute_impugnacion_rate,
@@ -50,29 +50,32 @@ class TestParse:
         assert _ym(datetime(2026, 12, 1)) == "2026-12"
 
 
-class TestCompliance:
+class TestEstadoProcesal:
+    # P19: la autoridad es cases.estado (curado), no processing_status (legacy).
     def test_vacio(self, db):
-        r = compute_compliance_rate([])
-        assert r["total_activos"] == 0
-        assert r["compliance_rate"] == 0.0
+        r = compute_estado_procesal([])
+        assert r["total"] == 0
+        assert r["pct_resueltas"] == 0.0
 
-    def test_todos_completo(self, db):
-        cases = [_c(db, folder_name=f"A{i}", processing_status="COMPLETO") for i in range(5)]
-        r = compute_compliance_rate(cases)
-        assert r["compliance_rate"] == 1.0
-        assert r["completo"] == 5
+    def test_todos_inactivos(self, db):
+        cases = [_c(db, folder_name=f"A{i}", estado="INACTIVO") for i in range(5)]
+        r = compute_estado_procesal(cases)
+        assert r["pct_resueltas"] == 1.0
+        assert r["inactivos"] == 5
 
     def test_mixto(self, db):
         cases = [
-            _c(db, folder_name="A", processing_status="COMPLETO"),
-            _c(db, folder_name="B", processing_status="REVISION"),
-            _c(db, folder_name="C", processing_status="PENDIENTE"),
-            _c(db, folder_name="D", processing_status="DUPLICATE_MERGED"),  # no cuenta
+            _c(db, folder_name="A", estado="ACTIVO"),
+            _c(db, folder_name="B", estado="ACTIVO"),
+            _c(db, folder_name="C", estado="INACTIVO"),
+            _c(db, folder_name="D", estado=None),  # cuenta como sin_estado
         ]
-        r = compute_compliance_rate(cases)
-        assert r["total_activos"] == 3
-        assert r["completo"] == 1
-        assert r["compliance_rate"] == round(1 / 3, 3)
+        r = compute_estado_procesal(cases)
+        assert r["total"] == 4
+        assert r["activos"] == 2
+        assert r["inactivos"] == 1
+        assert r["sin_estado"] == 1
+        assert r["pct_resueltas"] == 0.25
 
 
 class TestResponseTimes:
@@ -142,10 +145,12 @@ class TestTopRankings:
         assert r[0]["count"] == 3
 
     def test_top_abogados_con_incidente(self, db):
+        # P19: incidente activo = incidente=SI + decision viva + caso ACTIVO.
         cases = [
-            _c(db, folder_name="A", abogado_responsable="Ana", estado_incidente="EN_SANCION"),
-            _c(db, folder_name="B", abogado_responsable="Ana", estado_incidente="N/A"),
-            _c(db, folder_name="C", abogado_responsable="Bob", estado_incidente="N/A"),
+            _c(db, folder_name="A", abogado_responsable="Ana", estado="ACTIVO",
+               incidente="SI", decision_incidente="EN_TRAMITE"),
+            _c(db, folder_name="B", abogado_responsable="Ana", estado="INACTIVO"),
+            _c(db, folder_name="C", abogado_responsable="Bob", estado="ACTIVO"),
         ]
         r = compute_top_abogados(cases)
         ana = next(a for a in r if a["abogado"] == "Ana")
@@ -181,13 +186,17 @@ class TestImpugnacion:
 
 class TestExecutiveIntegration:
     def test_payload_completo(self, db):
-        _c(db, folder_name="A", processing_status="COMPLETO",
+        _c(db, folder_name="A", estado="ACTIVO",
            fecha_ingreso="01/03/2026", fecha_respuesta="05/03/2026",
            sentido_fallo_1st="CONCEDE", ciudad="Bucaramanga",
            abogado_responsable="Test Abogado")
+        # processing_status NULL no debe descontar el caso (bug del filtro viejo)
+        _c(db, folder_name="B", processing_status=None, estado="INACTIVO")
         payload = executive_dashboard(db)
         assert "summary" in payload
-        assert "compliance" in payload
+        assert "estado_procesal" in payload
+        assert "incidentes_decision" in payload
+        assert payload["summary"]["total_cases"] == 2
         assert "top_abogados" in payload
         assert "by_month" in payload
         assert "impugnacion" in payload

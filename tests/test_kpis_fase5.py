@@ -1,5 +1,6 @@
 """Fase 5 — tests para los KPIs que estaban SIN cobertura:
-pipeline_funnel, fallo_2nd_distribution, by_origen, compliance_plazos."""
+pipeline_funnel, fallo_2nd_distribution, incidentes_decision, compliance_plazos.
+(P19: by_origen fue reemplazado por incidentes_decision — campos curados.)"""
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.database.models import Base, Case
 from backend.services.executive_kpis import (
-    compute_by_origen, compute_fallo_2nd_distribution,
+    compute_incidentes_decision, compute_fallo_2nd_distribution,
     compute_pipeline_funnel, compute_compliance_plazos,
 )
 
@@ -32,11 +33,15 @@ def _c(db, **kw):
     return c
 
 
-def test_by_origen(db):
-    _c(db, origen="TUTELA"); _c(db, origen="TUTELA")
-    _c(db, origen="INCIDENTE_HUERFANO"); _c(db, origen=None)
-    r = compute_by_origen(db.query(Case).all())
-    assert r["TUTELA"] == 2 and r["INCIDENTE_HUERFANO"] == 1 and r["SIN_CLASIFICAR"] == 1
+def test_incidentes_decision(db):
+    _c(db, incidente="SI", decision_incidente="EN_TRAMITE")
+    _c(db, incidente="SI", decision_incidente="EN_TRAMITE")
+    _c(db, incidente="SI", decision_incidente="SANCIONA")
+    _c(db, incidente="SI", decision_incidente=None)   # abierto sin decidir
+    _c(db, incidente="NO", decision_incidente=None)   # sin incidente → no cuenta
+    r = compute_incidentes_decision(db.query(Case).all())
+    assert r["EN_TRAMITE"] == 2 and r["SANCIONA"] == 1 and r["SIN_DECISION"] == 1
+    assert sum(r.values()) == 4
 
 
 def test_fallo_2nd_distribution(db):
@@ -63,12 +68,17 @@ def test_pipeline_funnel(db):
 
 
 def test_compliance_plazos(db):
-    _c(db, sentido_fallo_1st="CONCEDE", fecha_fallo_1st="01/01/2020")  # pendiente (>10 días)
-    _c(db, sentido_fallo_1st="CONCEDE", fecha_fallo_1st="01/01/2020", estado_incidente="CUMPLIDO")
-    _c(db, sentido_fallo_1st="CONCEDE", fecha_fallo_1st="01/01/2020", estado_incidente="EN_SANCION")
-    _c(db, sentido_fallo_1st="NIEGA", fecha_fallo_1st="01/01/2020")  # no CONCEDE → ignorado
+    # P19: lee estado/decision_incidente curados, no estado_incidente legacy.
+    _c(db, sentido_fallo_1st="CONCEDE", fecha_fallo_1st="01/01/2020",
+       estado="ACTIVO")  # pendiente (>10 días)
+    _c(db, sentido_fallo_1st="CONCEDE", fecha_fallo_1st="01/01/2020",
+       estado="INACTIVO")  # cerrada
+    _c(db, sentido_fallo_1st="CONCEDE", fecha_fallo_1st="01/01/2020",
+       estado="ACTIVO", decision_incidente="SANCIONA")  # en sanción
+    _c(db, sentido_fallo_1st="NIEGA", fecha_fallo_1st="01/01/2020",
+       estado="ACTIVO")  # no CONCEDE → ignorado
     r = compute_compliance_plazos(db.query(Case).all())
     assert r["concedidas_pendientes_cumplimiento"] == 1
-    assert r["concedidas_cumplidas_a_tiempo"] == 1
+    assert r["concedidas_cerradas"] == 1
     assert r["en_sancion"] == 1
     assert len(r["top_pendientes"]) == 1

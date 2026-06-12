@@ -1,8 +1,12 @@
-"""KPIs Ejecutivos — Propuesta 9.9 de la tesis v6.0.
+"""KPIs Ejecutivos — Propuesta 9.9 de la tesis (refactor P19, 2026-06-11).
 
 Consolida indicadores operativos para la Secretaría de Educación de la
-Gobernación de Santander. Usa datos que v6.0 ya produce (origen,
-estado_incidente, entropy_score, fechas) más campos tradicionales.
+Gobernación de Santander.
+
+P19: todas las métricas leen los CAMPOS CURADOS del cuadro vivo
+(estado, sentido_fallo_*, incidente, decision_incidente). Las columnas
+del motor v6 borrado (processing_status, origen, estado_incidente) ya
+no alimentan ningún KPI — estaban congeladas y producían cifras falsas.
 
 Filosofía: cifras directamente accionables por el jefe de oficina jurídica
 y el Secretario de Educación. Sin IA, sin estimaciones.
@@ -49,24 +53,22 @@ def _norm(s: Optional[str]) -> str:
 # KPIs individuales
 # ============================================================
 
-def compute_compliance_rate(cases: list[Case]) -> dict:
-    """Tasa de cumplimiento: COMPLETO / (COMPLETO + REVISION + PENDIENTE)."""
-    buckets: Counter[str] = Counter()
-    for c in cases:
-        s = c.processing_status or "PENDIENTE"
-        if s == "DUPLICATE_MERGED":
-            continue
-        buckets[s] += 1
-    total = sum(buckets.values())
-    completo = buckets.get("COMPLETO", 0)
-    rate = (completo / total) if total else 0.0
+def compute_estado_procesal(cases: list[Case]) -> dict:
+    """Estado procesal del inventario: ACTIVO vs INACTIVO (autoridad: cases.estado).
+
+    Reemplaza al viejo compute_compliance_rate que leía processing_status
+    (workflow de extracción legacy, congelado desde la curación manual).
+    """
+    activos = sum(1 for c in cases if _norm(c.estado) == "ACTIVO")
+    inactivos = sum(1 for c in cases if _norm(c.estado) == "INACTIVO")
+    sin_estado = len(cases) - activos - inactivos
+    total = len(cases)
     return {
-        "completo": completo,
-        "revision": buckets.get("REVISION", 0),
-        "pendiente": buckets.get("PENDIENTE", 0),
-        "extrayendo": buckets.get("EXTRAYENDO", 0),
-        "total_activos": total,
-        "compliance_rate": round(rate, 3),
+        "activos": activos,
+        "inactivos": inactivos,
+        "sin_estado": sin_estado,
+        "total": total,
+        "pct_resueltas": round(inactivos / total, 3) if total else 0.0,
     }
 
 
@@ -173,7 +175,7 @@ def compute_top_abogados(cases: list[Case], limit: int = 10) -> list[dict]:
         ab = (c.abogado_responsable or "").strip()
         if ab and ab.upper() not in ("", "N/A", "NULL", "SIN ABOGADO"):
             buckets[ab] += 1
-            if (c.estado_incidente or "N/A") in ("ACTIVO", "EN_CONSULTA", "EN_SANCION"):
+            if _incidente_activo(c):
                 active_cases[ab].append(c.id)
     return [
         {
@@ -201,19 +203,27 @@ def compute_top_accionantes_recurrentes(cases: list[Case], limit: int = 10) -> l
     ]
 
 
-def compute_by_origen(cases: list[Case]) -> dict:
-    buckets: Counter[str] = Counter()
-    for c in cases:
-        o = c.origen or "SIN_CLASIFICAR"
-        buckets[o] += 1
-    return dict(buckets)
+# Incidentes con persona requerida y trámite vivo (riesgo real para la SED).
+_INCIDENTE_VIVO = {"EN_TRAMITE", "SANCIONA"}
 
 
-def compute_by_estado_incidente(cases: list[Case]) -> dict:
+def _incidente_activo(c: Case) -> bool:
+    return (_norm(c.incidente) == "SI"
+            and _norm(c.decision_incidente) in _INCIDENTE_VIVO
+            and _norm(c.estado) == "ACTIVO")
+
+
+def compute_incidentes_decision(cases: list[Case]) -> dict:
+    """Incidentes de desacato por decisión (autoridad: decision_incidente).
+
+    Reemplaza a by_origen/by_estado_incidente, que leían columnas del motor
+    v6 borrado (origen NULL en ~96% de los casos, estado_incidente congelado).
+    """
     buckets: Counter[str] = Counter()
     for c in cases:
-        e = c.estado_incidente or "SIN_DATOS"
-        buckets[e] += 1
+        if _norm(c.incidente) != "SI":
+            continue
+        buckets[_norm(c.decision_incidente) or "SIN_DECISION"] += 1
     return dict(buckets)
 
 
@@ -254,9 +264,15 @@ def compute_pipeline_funnel(cases: list[Case]) -> list[dict]:
     impugnados = sum(1 for c in cases if _norm(c.impugnacion).startswith("S"))
     fallo_2 = sum(1 for c in cases if _norm(c.sentido_fallo_2nd) and _norm(c.sentido_fallo_2nd) not in ("N/A", "PENDIENTE"))
     incidente = sum(1 for c in cases if _norm(c.incidente).startswith("S"))
-    cumplidos = sum(1 for c in cases if (c.estado_incidente or "").upper() == "CUMPLIDO")
+    # Subset estricto del nivel INCIDENTE: incidentes ya cerrados (decisión
+    # terminal o caso archivado). Mantiene el embudo monótono.
+    cumplidos = sum(
+        1 for c in cases
+        if _norm(c.incidente).startswith("S")
+        and (_norm(c.decision_incidente) in ("CIERRA", "NO_SANCIONA", "NIEGA_APERTURA")
+             or _norm(c.estado) == "INACTIVO"))
     return [
-        {"stage": "TUTELA", "label": "Tutelas activas", "count": total, "pct_total": 100.0},
+        {"stage": "TUTELA", "label": "Tutelas", "count": total, "pct_total": 100.0},
         {"stage": "FALLO_1ST", "label": "Con fallo 1ª instancia", "count": fallo_1,
          "pct_total": round(100 * fallo_1 / total, 1) if total else 0},
         {"stage": "IMPUGNADO", "label": "Impugnadas", "count": impugnados,
@@ -265,7 +281,7 @@ def compute_pipeline_funnel(cases: list[Case]) -> list[dict]:
          "pct_total": round(100 * fallo_2 / total, 1) if total else 0},
         {"stage": "INCIDENTE", "label": "Con incidente desacato", "count": incidente,
          "pct_total": round(100 * incidente / total, 1) if total else 0},
-        {"stage": "CUMPLIDO", "label": "Cumplido / archivado", "count": cumplidos,
+        {"stage": "CUMPLIDO", "label": "Incidentes cerrados", "count": cumplidos,
          "pct_total": round(100 * cumplidos / total, 1) if total else 0},
     ]
 
@@ -279,7 +295,7 @@ def compute_compliance_plazos(cases: list[Case]) -> dict:
     """
     today = utcnow()
     concedidas_pendientes = []
-    concedidas_a_tiempo = 0
+    concedidas_cerradas = 0
     en_sancion = 0
 
     for c in cases:
@@ -290,12 +306,13 @@ def compute_compliance_plazos(cases: list[Case]) -> dict:
         if not fecha_fallo:
             continue
         dias = (today - fecha_fallo).days
-        estado = (c.estado_incidente or "").upper()
-        if estado == "EN_SANCION":
+        if _norm(c.decision_incidente) == "SANCIONA" and _norm(c.estado) == "ACTIVO":
             en_sancion += 1
             continue
-        if estado == "CUMPLIDO":
-            concedidas_a_tiempo += 1
+        # Caso cerrado (INACTIVO) = orden satisfecha o proceso archivado;
+        # ya no es un cumplimiento pendiente que vigilar.
+        if _norm(c.estado) == "INACTIVO":
+            concedidas_cerradas += 1
             continue
         if dias > 10:
             concedidas_pendientes.append({
@@ -308,7 +325,7 @@ def compute_compliance_plazos(cases: list[Case]) -> dict:
 
     return {
         "concedidas_pendientes_cumplimiento": len(concedidas_pendientes),
-        "concedidas_cumplidas_a_tiempo": concedidas_a_tiempo,
+        "concedidas_cerradas": concedidas_cerradas,
         "en_sancion": en_sancion,
         "top_pendientes": sorted(concedidas_pendientes,
                                   key=lambda x: -x["dias_desde_fallo"])[:10],
@@ -340,13 +357,15 @@ def compute_impugnacion_rate(cases: list[Case]) -> dict:
 # ============================================================
 
 def executive_dashboard(db: Session) -> dict:
-    """Consolida todos los KPIs ejecutivos en un único payload."""
+    """Consolida todos los KPIs ejecutivos en un único payload (campos curados)."""
     now = utcnow()
 
-    # Tomar solo casos no fusionados
-    all_cases = db.query(Case).filter(Case.processing_status != "DUPLICATE_MERGED").all()
+    # Todos los casos del cuadro vivo. (El filtro viejo
+    # processing_status != 'DUPLICATE_MERGED' excluía también los NULL
+    # por semántica SQL de tres valores — descontaba casos reales.)
+    all_cases = db.query(Case).all()
 
-    compliance = compute_compliance_rate(all_cases)
+    estado_procesal = compute_estado_procesal(all_cases)
     response = compute_response_times(all_cases)
     fallos = compute_fallos_distribution(all_cases)
     fallos_2nd = compute_fallo_2nd_distribution(all_cases)
@@ -357,28 +376,29 @@ def executive_dashboard(db: Session) -> dict:
     top_oficinas = compute_top_oficinas(all_cases)
     top_abogados = compute_top_abogados(all_cases)
     top_accionantes = compute_top_accionantes_recurrentes(all_cases)
-    by_origen = compute_by_origen(all_cases)
-    by_estado_incidente = compute_by_estado_incidente(all_cases)
+    incidentes_decision = compute_incidentes_decision(all_cases)
     impugnacion = compute_impugnacion_rate(all_cases)
 
     # Early warning integrado (reutiliza 9.4)
     ew = run_early_warning(db)
 
-    # Casos críticos visibles
-    casos_sancion = by_estado_incidente.get("EN_SANCION", 0)
-    casos_activos_incidente = by_estado_incidente.get("ACTIVO", 0)
+    # Casos críticos visibles (derivados de campos curados)
+    casos_sancion = sum(1 for c in all_cases
+                        if _norm(c.decision_incidente) == "SANCIONA"
+                        and _norm(c.estado) == "ACTIVO")
+    casos_activos_incidente = sum(1 for c in all_cases if _incidente_activo(c))
 
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "summary": {
             "total_cases": len(all_cases),
-            "compliance_rate": compliance["compliance_rate"],
+            "pct_resueltas": estado_procesal["pct_resueltas"],
             "casos_criticos_rojos": ew.by_level.get(LEVEL_RED, 0),
             "casos_vigilancia_amarillos": ew.by_level.get(LEVEL_YELLOW, 0),
             "casos_en_sancion": casos_sancion,
             "casos_con_incidente_activo": casos_activos_incidente,
         },
-        "compliance": compliance,
+        "estado_procesal": estado_procesal,
         "response_times": response,
         "impugnacion": impugnacion,
         "fallos_distribution": fallos,
@@ -386,8 +406,7 @@ def executive_dashboard(db: Session) -> dict:
         "pipeline_funnel": pipeline,
         "compliance_plazos": plazos,
         "by_month": by_month,
-        "by_origen": by_origen,
-        "by_estado_incidente": by_estado_incidente,
+        "incidentes_decision": incidentes_decision,
         "top_municipios": top_municipios,
         "top_oficinas": top_oficinas,
         "top_abogados": top_abogados,

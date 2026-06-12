@@ -33,13 +33,13 @@ interface Executive {
   generated_at: string
   summary: {
     total_cases: number
-    compliance_rate: number
+    pct_resueltas: number
     casos_criticos_rojos: number
     casos_vigilancia_amarillos: number
     casos_en_sancion: number
     casos_con_incidente_activo: number
   }
-  compliance: Record<string, number>
+  estado_procesal: { activos: number; inactivos: number; sin_estado: number; total: number; pct_resueltas: number }
   response_times: {
     avg_days: number | null
     median_days: number | null
@@ -54,13 +54,12 @@ interface Executive {
   pipeline_funnel?: Array<{ stage: string; label: string; count: number; pct_total: number }>
   compliance_plazos?: {
     concedidas_pendientes_cumplimiento: number
-    concedidas_cumplidas_a_tiempo: number
+    concedidas_cerradas: number
     en_sancion: number
     top_pendientes: Array<{ case_id: number; folder_name: string; dias_desde_fallo: number; fecha_fallo: string; abogado: string }>
   }
   by_month: Array<{ month: string; count: number }>
-  by_origen: Record<string, number>
-  by_estado_incidente: Record<string, number>
+  incidentes_decision: Record<string, number>
   top_municipios: Array<{ municipio: string; count: number }>
   top_oficinas: Array<{ oficina: string; count: number }>
   top_abogados: Array<{ abogado: string; total_casos: number; casos_activos_incidente: number }>
@@ -117,7 +116,7 @@ export default function ExecutiveDashboard() {
     )
   }
 
-  const complianceAsPct = Math.round(data.summary.compliance_rate * 100)
+  const resueltasPct = Math.round(data.summary.pct_resueltas * 100)
   const rojos = data.summary.casos_criticos_rojos
   const sancion = data.summary.casos_en_sancion
   const activos = data.summary.casos_con_incidente_activo
@@ -126,7 +125,7 @@ export default function ExecutiveDashboard() {
     <PageShell>
       <PageHeader
         title="Dashboard Ejecutivo"
-        subtitle={`KPIs consolidados · Gobernación de Santander · ${data.summary.total_cases} casos activos`}
+        subtitle={`KPIs consolidados · Gobernación de Santander · ${data.summary.total_cases} casos (${data.estado_procesal.activos} activos)`}
         action={
           <Button onClick={load} variant="outline" size="sm" disabled={loading}>
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -156,8 +155,8 @@ export default function ExecutiveDashboard() {
             sublabel="Requieren seguimiento" color="text-orange-500"
           />
           <KPICard
-            icon={CheckCircle2} label="Tasa cumplimiento" value={`${complianceAsPct}%`}
-            sublabel={`${data.compliance.completo}/${data.compliance.total_activos} COMPLETO`}
+            icon={CheckCircle2} label="Resueltas" value={`${resueltasPct}%`}
+            sublabel={`${data.estado_procesal.inactivos}/${data.estado_procesal.total} cerradas (INACTIVO)`}
             color="text-green-600 dark:text-green-400"
           />
         </div>
@@ -270,8 +269,8 @@ export default function ExecutiveDashboard() {
               </CardHeader>
               <CardContent className="text-sm space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Cumplidos a tiempo:</span>
-                  <span className="font-semibold text-green-600">{data.compliance_plazos.concedidas_cumplidas_a_tiempo}</span>
+                  <span className="text-muted-foreground">Cerradas (INACTIVO):</span>
+                  <span className="font-semibold text-green-600">{data.compliance_plazos.concedidas_cerradas}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Pendientes (&gt;10d):</span>
@@ -330,20 +329,18 @@ export default function ExecutiveDashboard() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2"><Briefcase size={16} />Clasificación v6.0</CardTitle>
+            <CardTitle className="text-sm flex items-center gap-2"><Briefcase size={16} />Incidentes de desacato</CardTitle>
           </CardHeader>
           <CardContent className="text-sm space-y-1">
-            {Object.entries(data.by_origen).map(([k, v]) => (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Estado procesal:</span>
+              <span className="font-semibold">{data.estado_procesal.activos} activos · {data.estado_procesal.inactivos} inactivos</span>
+            </div>
+            <div className="border-t pt-1 mt-2 text-xs text-muted-foreground">Incidentes por decisión:</div>
+            {Object.entries(data.incidentes_decision).map(([k, v]) => (
               <div key={k} className="flex justify-between">
                 <span className="text-muted-foreground">{k}:</span>
-                <span className="font-semibold">{v}</span>
-              </div>
-            ))}
-            <div className="border-t pt-1 mt-2 text-xs text-muted-foreground">Estados de incidente:</div>
-            {Object.entries(data.by_estado_incidente).filter(([k]) => k !== 'N/A').map(([k, v]) => (
-              <div key={k} className="flex justify-between">
-                <span className="text-muted-foreground">{k}:</span>
-                <span className={`font-semibold ${k === 'EN_SANCION' ? 'text-red-600' : k === 'ACTIVO' ? 'text-orange-500' : ''}`}>{v}</span>
+                <span className={`font-semibold ${k === 'SANCIONA' ? 'text-red-600' : k === 'EN_TRAMITE' ? 'text-orange-500' : ''}`}>{v}</span>
               </div>
             ))}
           </CardContent>

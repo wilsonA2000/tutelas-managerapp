@@ -301,21 +301,23 @@ def _count_estado_incidente(db: Session, msg: str) -> ChatResponse:
     if not target:
         return ChatResponse(intent="count_by_estado_incidente", answer="No identifiqué qué estado.",
                             template_used="count_by_estado_incidente", confidence=0.4)
-    q = db.query(Case).filter(Case.estado_incidente == target)
+    # P19: autoridad = campos curados (incidente/decision_incidente/estado).
+    # La columna estado_incidente quedó congelada del motor v6 — sus filas
+    # stale hacían que el fallback (n==0) nunca disparara y el chat
+    # respondiera cifras viejas.
+    dec_cols = (Case.decision_incidente, Case.decision_incidente_2, Case.decision_incidente_3)
+    if target == "EN_SANCION":
+        q = db.query(Case).filter(Case.estado == "ACTIVO",
+                                  or_(*[c == "SANCIONA" for c in dec_cols]))
+    elif target == "ACTIVO":  # incidente abierto sin decidir
+        q = db.query(Case).filter(Case.estado == "ACTIVO", Case.incidente == "SI",
+                                  or_(*[or_(c == "EN_TRAMITE", c.is_(None), c == "") for c in dec_cols]))
+    elif target == "CUMPLIDO":  # incidente terminado con el caso resuelto
+        q = db.query(Case).filter(Case.estado == "INACTIVO", Case.incidente == "SI")
+    else:  # EN_CONSULTA: solo existe en la columna legacy curada a mano
+        q = db.query(Case).filter(Case.estado_incidente == target)
     n = q.count()
     samples = q.with_entities(Case.id, Case.folder_name).limit(5).all()
-    # Fallback v9: el cuadro nuevo usa decision_incidente, no estado_incidente.
-    if n == 0 and target == "EN_SANCION":
-        dec_cols = (Case.decision_incidente, Case.decision_incidente_2, Case.decision_incidente_3)
-        q = db.query(Case).filter(or_(*[c == "SANCIONA" for c in dec_cols]))
-        n = q.count()
-        samples = q.with_entities(Case.id, Case.folder_name).limit(5).all()
-    if n == 0 and target == "ACTIVO":  # incidente abierto sin decidir
-        dec_cols = (Case.decision_incidente, Case.decision_incidente_2, Case.decision_incidente_3)
-        q = db.query(Case).filter(Case.incidente == "SI",
-                                  or_(*[or_(c == "EN_TRAMITE", c.is_(None), c == "") for c in dec_cols]))
-        n = q.count()
-        samples = q.with_entities(Case.id, Case.folder_name).limit(5).all()
     sample_str = "\n".join(f"  • #{cid}: {fn}" for cid, fn in samples) or "  (ninguno)"
     answer = f"🚨 **{n} casos en estado `{target}`**\n\nMuestra:\n{sample_str}"
     return ChatResponse(intent="count_by_estado_incidente", answer=answer,
