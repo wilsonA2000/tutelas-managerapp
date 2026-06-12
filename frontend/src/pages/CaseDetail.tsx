@@ -1139,6 +1139,17 @@ export default function CaseDetail() {
         </div>
 
         <div className="flex items-center gap-2">
+          {Boolean(caseData.ESTADO) && (
+            <Badge
+              variant="outline"
+              className={(caseData.ESTADO as string) === 'ACTIVO'
+                ? 'text-emerald-700 border-emerald-200 bg-emerald-50'
+                : 'text-slate-600 border-slate-200 bg-slate-50'}
+              title="Estado procesal del expediente (cuadro vivo)"
+            >
+              {caseData.ESTADO as string}
+            </Badge>
+          )}
           {sensitiveCategories.length > 0 && (
             <Badge variant="outline" className="text-rose-700 border-rose-200 bg-rose-50 gap-1" title={`Datos sensibles — manejar con reserva (iniciales, no compartir nombres externamente). Detectado: ${sensitiveCategories.join(', ')}`}>
               <Lock size={11} />
