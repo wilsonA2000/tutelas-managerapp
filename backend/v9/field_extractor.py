@@ -2572,7 +2572,72 @@ def extract_abogado_responsable_for_case(
     if ext_c and allow_external:
         cnt = Counter(ext_c); top = cnt.most_common(1)[0][1]
         return next(v for v in reversed(ext_c) if cnt[v] == top), "externo_cps"
+    # Último recurso: correo de reparto — el correo PERSONAL del abogado del
+    # roster aparece como destinatario (Para/Cc) de la cadena de Apoyo Jurídico.
+    rep = _abogado_from_reparto_email(db, case)
+    if rep:
+        return rep, "reparto_email"
     return None, "none"
+
+
+_ROSTER_EMAIL_CACHE: Optional[dict[str, str]] = None
+
+
+def _roster_email_map() -> dict[str, str]:
+    """correo personal → nombre, del roster `grupo_juridico_abogados.json`.
+
+    Solo perfiles ABOGADO: los técnicos/bachilleres del grupo no llevan casos.
+    """
+    global _ROSTER_EMAIL_CACHE
+    if _ROSTER_EMAIL_CACHE is None:
+        p = Path(__file__).resolve().parents[1] / "data" / "grupo_juridico_abogados.json"
+        try:
+            data = _json.loads(p.read_text(encoding="utf-8"))
+            cache: dict[str, str] = {}
+            for e in data:
+                if "ABOGAD" not in (e.get("profesion") or "").upper():
+                    continue
+                for k in ("correo", "correo_alterno"):
+                    correo = (e.get(k) or "").strip().lower()
+                    if correo:
+                        cache[correo] = e["nombre"]
+            _ROSTER_EMAIL_CACHE = cache
+        except Exception:
+            _ROSTER_EMAIL_CACHE = {}
+    return _ROSTER_EMAIL_CACHE
+
+
+def _abogado_from_reparto_email(db: Session, case: Case) -> Optional[str]:
+    """Abogado asignado por correo de reparto (regla Wilson 2026-06-12: la tutela,
+    al asignarse, va en el correo al abogado).
+
+    Cuenta SOLO cuando el correo personal del roster aparece como DESTINATARIO
+    (líneas Para/Cc) en los emails del case — patrón validado en c282/c521/c555.
+    El remitente NO cuenta: un gmail del roster como remitente suele ser el
+    apoderado del ACCIONANTE actuando en ejercicio privado (caso real c238).
+    Empate entre dos abogados = ambiguo → None.
+    """
+    emap = _roster_email_map()
+    if not emap:
+        return None
+    from collections import Counter as _Counter
+    seen: _Counter = _Counter()
+    for d in db.query(Document).filter(
+        Document.case_id == case.id,
+        Document.doc_type.in_(["EMAIL_MD", "EMAIL_JUDICIAL", "EMAIL_INTERNO"]),
+    ).all():
+        t = (d.extracted_text or "")[:8000]
+        for m in re.finditer(r"^(?:Para|Cc|CC)\s*:?\s*(.+)$", t, re.M):
+            low = m.group(1).lower()
+            for correo, nombre in emap.items():
+                if correo in low:
+                    seen[nombre] += 1
+    if not seen:
+        return None
+    top = seen.most_common(2)
+    if len(top) > 1 and top[0][1] == top[1][1]:
+        return None
+    return top[0][0]
 
 
 # asunto (categoría) → Dirección L1 de la SED — derivado de legal_schema.SED_TEMA_MAPPING
