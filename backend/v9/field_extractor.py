@@ -2802,6 +2802,13 @@ def _dispositiva_zone(d) -> Optional[str]:
             m = list(_RE_PRIMERO_DECISION.finditer(tail))
             if m:
                 return tail[m[-1].start():m[-1].start() + 2500]
+            # PDF escaneado (sin capa de texto): la cola del disco viene VACÍA
+            # pero el extracted_text en DB existe (vino de OCR en la ingesta).
+            # Caer al texto almacenado SOLO en ese caso — si la cola sí trajo
+            # texto y no ancló, mantener None (la cola narrativa del texto
+            # capado a 30k produce falsos positivos; caso real doc6954/c534).
+            if not tail.strip():
+                return _last_resuelve_zone(d.extracted_text or "")
             return None
         except Exception as e:  # pragma: no cover
             logger.debug("dispositiva PDF falló (doc#%s): %s", getattr(d, "id", "?"), e)
@@ -2889,17 +2896,40 @@ def extract_parte_resolutiva_incidente_for_case(db: Session, case: Case) -> tupl
     return None, "none"
 
 
+# Artefactos de notificación rotulados PDF_SENTENCIA por filename ("OficioNotifica
+# Fallo", "ConstNotifFallo"): NO son la sentencia — se excluyen como candidatos.
+_RE_SENT_ARTIFACT = re.compile(r"notif|const|oficio|comunica|acta|remite|rta|respuesta", re.I)
+
+
+def _sentencia_1ra_docs(db: Session, case: Case) -> list:
+    """Candidatos a sentencia de 1ª instancia, ordenados por tamaño desc.
+
+    FIX 2026-06-12 (casos reales c516/c530/c534): la ingesta clasifica los fallos
+    frescos como PDF_SENTENCIA (filename-based) y los extractores solo leían
+    SENTENCIA_1RA → ningún fallo nuevo se capturaba hasta una reclasificación
+    manual. Ahora PDF_SENTENCIA también es candidato, con guard de filename para
+    artefactos de notificación; los guards de contenido (_is_segunda_instancia,
+    _es_resolucion_admin, zona dispositiva obligatoria) filtran el resto.
+    """
+    docs = [
+        d for d in db.query(Document).filter(
+            Document.case_id == case.id,
+            Document.doc_type.in_(("SENTENCIA_1RA", "PDF_SENTENCIA")),
+        ).all()
+        if (d.extracted_text or "") and len(d.extracted_text) > 500
+        and not (d.doc_type == "PDF_SENTENCIA"
+                 and _RE_SENT_ARTIFACT.search(d.filename or ""))
+    ]
+    docs.sort(key=lambda d: -len(d.extracted_text or ""))
+    return docs
+
+
 def extract_parte_resolutiva_1ra_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
     """Transcribe verbatim la parte resolutiva de la SENTENCIA_1RA (misma selección de doc
     que `extract_sentido_fallo_1ra_for_case`: descarta 2da mal etiquetada, fallback a
     DESCONOCIDO con dispositiva clara). Returns (texto|None, fuente∈{"sentencia","desconocido","none"})."""
     from backend.extraction.doc_ops import _es_resolucion_admin
-    sents = [
-        d for d in db.query(Document).filter(
-            Document.case_id == case.id, Document.doc_type == "SENTENCIA_1RA"
-        ).all() if (d.extracted_text or "") and len(d.extracted_text) > 500
-    ]
-    sents.sort(key=lambda d: -len(d.extracted_text or ""))
+    sents = _sentencia_1ra_docs(db, case)
     for d in sents:
         if _is_segunda_instancia(d) or _es_resolucion_admin(d.extracted_text or ""):
             continue
@@ -3153,12 +3183,7 @@ def extract_sentido_fallo_1ra_for_case(db: Session, case: Case) -> tuple[Optiona
 
     # 1) SENTENCIA_1RA "real" (descarta las 2da mal etiquetadas por filename O contenido).
     # La dispositiva se lee del FINAL del PDF (no del texto capado), donde vive el resolutivo.
-    sents = [
-        d for d in db.query(Document).filter(
-            Document.case_id == case.id, Document.doc_type == "SENTENCIA_1RA"
-        ).all() if (d.extracted_text or "") and len(d.extracted_text) > 500
-    ]
-    sents.sort(key=lambda d: -len(d.extracted_text or ""))
+    sents = _sentencia_1ra_docs(db, case)
     for d in sents:
         if _is_segunda_instancia(d):
             continue  # es 2da mal etiquetada; su sentido va a sentido_fallo_2nd
@@ -3227,12 +3252,7 @@ def extract_fecha_fallo_1ra_for_case(db: Session, case: Case) -> tuple[Optional[
     recapeado dentro del cuerpo de la sentencia)."""
     yh = _rad_year(case)
     fi = _parse_ddmmyyyy(getattr(case, "fecha_ingreso", None))
-    sents = [
-        d for d in db.query(Document).filter(
-            Document.case_id == case.id, Document.doc_type == "SENTENCIA_1RA"
-        ).all() if (d.extracted_text or "") and len(d.extracted_text) > 500
-    ]
-    sents.sort(key=lambda d: -len(d.extracted_text or ""))
+    sents = _sentencia_1ra_docs(db, case)
 
     def _consistent(v: Optional[str]) -> bool:
         if not v:

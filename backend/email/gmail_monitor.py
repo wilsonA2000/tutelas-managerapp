@@ -690,6 +690,7 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
     if m:
         year, num = m.group(1), m.group(2)
         existing = db.query(Case).filter(Case.folder_name.ilike(f"{year}%")).all()
+        _matches = []
         for ec in existing:
             norm = _normalize_rad_num(ec.folder_name)
             if norm and norm == f"{year}:{num}":
@@ -701,7 +702,20 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
                         "juzgado del rad23 difiere (%s vs %s) → caso NUEVO, no dedup",
                         rad_corto, ec.id, _email_r23[:12], _ec_r23[:12])
                     continue
-                return ec
+                _matches.append(ec)
+        if len(_matches) == 1:
+            return _matches[0]
+        if len(_matches) > 1:
+            # Guard 2026-06-12: rad corto compartido por VARIOS juzgados y el correo
+            # sin rad23 que desambigüe. Devolver el primero a ciegas conflaba
+            # expedientes (caso real e2042: impugnación de c516/Cimitarra cayó a
+            # c90/Bucaramanga, el de id más bajo). El matcher y F2 ya lo declararon
+            # ambiguo — aquí NO se adivina: el correo queda sin caso, para revisión.
+            logger.warning(
+                "create_new_case: rad corto %s AMBIGUO entre casos %s y el correo no "
+                "desambigua → no se asigna ni se crea (queda para revisión humana)",
+                rad_corto, [c.id for c in _matches])
+            return None
 
     clean_acc = re.sub(r"[\n\r]", " ", accionante or "").strip()
     # Guard 2026-06-10: validar que el "nombre" sea un nombre real — un saludo de

@@ -48,22 +48,35 @@ def norm_accionante(s: Optional[str]) -> str:
 
 # ───────────────────────── municipio del juzgado (F2) ─────────────────────────
 
-_RE_JUZ_MUNI = re.compile(
-    r"(?i)juzgado\b[^\n]{0,75}?\bde\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+){0,3})"
+# "JUEZ ..." también: los escritos dirigidos al despacho dicen "SEÑOR JUEZ PRIMERO
+# PENAL ... DE CIMITARRA" (no "JUZGADO") — sin esa variante el municipio llegaba
+# None y la desambiguación F2 fallaba (caso real e2042→c90 en vez de c516, 2026-06-12).
+_RE_JUZ_WINDOW = re.compile(r"(?i)\bju(?:zgado|ez)\b([^\n]{0,90})")
+_RE_DE_MUNI = re.compile(
+    r"(?i)\bde\s+([A-Za-záéíóúñÁÉÍÓÚÑ]+(?:\s+[A-Za-záéíóúñÁÉÍÓÚÑ]+){0,3})"
 )
 
 
 def extract_juzgado_municipio(text: str) -> Optional[str]:
-    """Municipio del despacho de un 'JUZGADO ... DE <MUNICIPIO>', validado contra los
-    87 municipios de Santander (prueba 1-3 palabras: 'PUENTE NACIONAL'). Normalizado."""
+    """Municipio del despacho de un 'JUZGADO/JUEZ ... DE <MUNICIPIO>', validado contra
+    los 87 municipios de Santander (prueba 1-3 palabras: 'PUENTE NACIONAL').
+
+    Prueba TODAS las frases 'de <X>' de la ventana — los nombres largos de despacho
+    intercalan otros 'DE' ('...CON FUNCIONES DE CONOCIMIENTO DE CIMITARRA') y el
+    primer match no siempre es el municipio. Normalizado."""
     if not text:
         return None
-    for m in _RE_JUZ_MUNI.finditer(text[:3000]):
-        words = _muni_strip(m.group(1)).split()
-        for n in range(min(3, len(words)), 0, -1):
-            name = " ".join(words[:n])
-            if name in MUNICIPIOS_SANTANDER:
-                return name
+    for m in _RE_JUZ_WINDOW.finditer(text[:3000]):
+        for dm in _RE_DE_MUNI.finditer(m.group(1)):
+            words = _muni_strip(dm.group(1)).split()
+            # Sub-ventanas (no solo prefijos): el capture puede arrastrar palabras
+            # del nombre del despacho ('CONOCIMIENTO DE CIMITARRA') y el municipio
+            # quedar al final.
+            for i in range(len(words)):
+                for n in range(min(3, len(words) - i), 0, -1):
+                    name = " ".join(words[i:i + n])
+                    if name in MUNICIPIOS_SANTANDER:
+                        return name
     return None
 
 
