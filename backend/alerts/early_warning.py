@@ -1,12 +1,13 @@
-"""Early Warning — Propuesta 9.4 de la tesis v6.0.
+"""Early Warning — Propuesta 9.4 de la tesis (recalibrado P19, 2026-06-11).
 
 Sistema de alertas tempranas que clasifica casos activos por nivel de riesgo
 procesal. Semáforo: ROJO (intervención inmediata), AMARILLO (vigilar),
-VERDE (en cumplimiento).
+VERDE (en cumplimiento), N/A (caso archivado — no aplica).
 
-Filosofía: usar datos que v6.0 ya genera (origen, estado_incidente,
-entropy_score, fecha_*) y convertirlos en una señal operativa directa para
-el equipo jurídico. Sin IA, determinista.
+P19: el motor evaluaba TODOS los casos (80 de 115 "rojos" eran INACTIVO,
+archivados hace meses) y leía columnas del motor v6 borrado (estado_incidente,
+processing_status). Ahora: compuerta por cases.estado (la autoridad curada)
++ incidentes desde incidente/decision_incidente. Sin IA, determinista.
 """
 
 from __future__ import annotations
@@ -115,14 +116,13 @@ def _days_ago(date_str: Optional[str], now: Optional[datetime] = None) -> Option
 def score_case(case: Case, now: Optional[datetime] = None) -> RiskReport:
     """Calcula el nivel de riesgo de un caso activo.
 
-    Reglas deterministas (sin IA):
-    - EN_SANCION → ROJO directo (máxima prioridad)
-    - Incidente ACTIVO con >20 días → ROJO
-    - Incidente ACTIVO con 10-20 días → AMARILLO
-    - Fallo CONCEDE + >10 días sin respuesta → ROJO
-    - Fallo CONCEDE + 5-10 días sin respuesta → AMARILLO
-    - Entropía muy alta sobre caso en trámite → AMARILLO (datos sucios)
-    - INCIDENTE_HUERFANO sin padre identificado → AMARILLO
+    Reglas deterministas (sin IA), sobre campos curados:
+    - Caso INACTIVO (cuadro curado) → N/A, no se evalúa
+    - decision_incidente SANCIONA → ROJO directo (máxima prioridad)
+    - Incidente en trámite >20 días → ROJO; 10-20 días → AMARILLO
+    - Fallo CONCEDE + >10 días sin respuesta → ROJO; 5-10 días → AMARILLO
+    - Plazo de cumplimiento (compliance_tracking) vencido → ROJO
+    - Entropía muy alta / incidente huérfano / apercibimiento → AMARILLO
     - Todo lo demás → VERDE
     """
     now = now or utcnow()
@@ -131,30 +131,54 @@ def score_case(case: Case, now: Optional[datetime] = None) -> RiskReport:
     reasons: list[str] = []
     score = 0.0
 
+    # Compuerta P19: un caso archivado (INACTIVO en el cuadro curado) no tiene
+    # riesgo procesal vigente — no se evalúa. Sin esto, 80 de 115 "rojos"
+    # eran casos cerrados con órdenes viejas en compliance_tracking.
+    if (case.estado or "").strip().upper() == "INACTIVO":
+        return RiskReport(
+            case_id=case.id,
+            folder_name=case.folder_name or "",
+            origen=origen,
+            estado_incidente=estado,
+            level=LEVEL_NA,
+            score=0.0,
+            reasons=["Caso INACTIVO (archivado) — sin riesgo procesal vigente"],
+            abogado_responsable=(case.abogado_canonical or case.abogado_responsable or ""),
+            entropy_score=case.entropy_score,
+        )
+
     # Calcular días transcurridos
     days_incid = _days_ago(case.fecha_apertura_incidente, now)
     days_fallo = _days_ago(case.fecha_fallo_1st, now)
     days_response = _days_ago(case.fecha_respuesta, now)
     has_response = bool((case.fecha_respuesta or "").strip())
 
-    # Regla 1: EN_SANCION = ROJO automático
-    if estado == "EN_SANCION":
-        score = 1.0
-        reasons.append("Incidente EN SANCIÓN — intervención jurídica inmediata requerida")
+    # Estado del incidente desde los campos CURADOS (decision_incidente);
+    # estado_incidente del motor v6 quedó congelado y daba cifras stale.
+    decisiones = {(d or "").strip().upper() for d in
+                  (case.decision_incidente, case.decision_incidente_2,
+                   case.decision_incidente_3)} - {""}
+    dec_principal = (case.decision_incidente or "").strip().upper()
+    incidente_si = (case.incidente or "").strip().upper() == "SI"
 
-    # Regla 2: Incidente ACTIVO con tiempo
-    elif estado == "ACTIVO" and days_incid is not None:
+    # Regla 1: sanción vigente = ROJO automático
+    if "SANCIONA" in decisiones:
+        score = 1.0
+        reasons.append("Incidente con SANCIÓN — intervención jurídica inmediata requerida")
+
+    # Regla 2: incidente en trámite (abierto sin decisión terminal) con tiempo
+    elif incidente_si and dec_principal in ("EN_TRAMITE", "") and days_incid is not None:
         if days_incid >= INCIDENT_DAYS_TO_RED:
             score = max(score, 0.80)
-            reasons.append(f"Incidente ACTIVO sin resolver hace {days_incid} días (>{INCIDENT_DAYS_TO_RED})")
+            reasons.append(f"Incidente en trámite sin resolver hace {days_incid} días (>{INCIDENT_DAYS_TO_RED})")
         elif days_incid >= INCIDENT_DAYS_TO_YELLOW:
             score = max(score, 0.50)
-            reasons.append(f"Incidente ACTIVO abierto hace {days_incid} días — vigilar")
+            reasons.append(f"Incidente en trámite hace {days_incid} días — vigilar")
         else:
             score = max(score, 0.25)
-            reasons.append(f"Incidente ACTIVO reciente ({days_incid} días)")
+            reasons.append(f"Incidente en trámite reciente ({days_incid} días)")
 
-    # Regla 3: EN_CONSULTA
+    # Regla 3: EN_CONSULTA (columna legacy pero curada a mano en casos puntuales)
     elif estado == "EN_CONSULTA":
         score = max(score, 0.55)
         reasons.append("Incidente EN_CONSULTA — pendiente decisión superior")
@@ -180,10 +204,8 @@ def score_case(case: Case, now: Optional[datetime] = None) -> RiskReport:
         score = max(score, 0.50)
         reasons.append("Incidente huérfano sin tutela madre identificada — revisar consolidación")
 
-    # Regla 7: Caso marcado REVISION
-    if case.processing_status == "REVISION":
-        score = max(score, 0.35)
-        reasons.append("Caso marcado para REVISION humana por el pipeline")
+    # (Regla 7 eliminada en P19: leía processing_status, columna del workflow
+    # de extracción legacy congelada desde la curación manual del cuadro.)
 
     # Regla 8 (v8.2): plazo de cumplimiento del fallo próximo a vencer.
     # Cruza con compliance_tracking — si el plazo legal del juez está por vencer,
@@ -322,11 +344,12 @@ class EarlyWarningSummary:
 
 
 def run_early_warning(db: Session, now: Optional[datetime] = None) -> EarlyWarningSummary:
-    """Evalúa todos los casos activos y retorna el summary."""
+    """Evalúa todos los casos y retorna el summary (INACTIVO sale como N/A)."""
     now = now or utcnow()
-    cases = db.query(Case).filter(
-        Case.processing_status.in_(("COMPLETO", "REVISION", "PENDIENTE", "EXTRAYENDO"))
-    ).all()
+    # P19: sin filtro por processing_status (legacy congelado, además su
+    # semántica SQL excluía los NULL). La compuerta por estado curado
+    # vive en score_case.
+    cases = db.query(Case).all()
 
     reports = [score_case(c, now=now) for c in cases]
 

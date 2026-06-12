@@ -32,7 +32,10 @@ def _mk(db, **kw):
         folder_name=kw.get("folder_name", "F"),
         processing_status=kw.get("processing_status", "COMPLETO"),
         origen=kw.get("origen", "TUTELA"),
+        estado=kw.get("estado", "ACTIVO"),   # P19: compuerta por estado curado
         estado_incidente=kw.get("estado_incidente", "N/A"),
+        incidente=kw.get("incidente"),
+        decision_incidente=kw.get("decision_incidente"),
         sentido_fallo_1st=kw.get("sentido_fallo_1st"),
         fecha_fallo_1st=kw.get("fecha_fallo_1st"),
         fecha_respuesta=kw.get("fecha_respuesta"),
@@ -64,30 +67,47 @@ class TestParseDate:
 
 
 class TestScoring:
-    def test_en_sancion_siempre_rojo(self, db):
-        c = _mk(db, estado_incidente="EN_SANCION")
+    def test_sancion_siempre_rojo(self, db):
+        # P19: la sanción vigente se lee de decision_incidente (curado)
+        c = _mk(db, incidente="SI", decision_incidente="SANCIONA")
         r = score_case(c, now=NOW)
         assert r.level == LEVEL_RED
         assert r.score == 1.0
         assert any("SANCIÓN" in s for s in r.reasons)
 
-    def test_incidente_activo_muchos_dias_rojo(self, db):
-        c = _mk(db, estado_incidente="ACTIVO",
+    def test_incidente_tramite_muchos_dias_rojo(self, db):
+        c = _mk(db, incidente="SI", decision_incidente="EN_TRAMITE",
                 fecha_apertura_incidente="01/03/2026")  # 53 días antes
         r = score_case(c, now=NOW)
         assert r.level == LEVEL_RED
 
-    def test_incidente_activo_medio_amarillo(self, db):
-        c = _mk(db, estado_incidente="ACTIVO",
+    def test_incidente_tramite_medio_amarillo(self, db):
+        c = _mk(db, incidente="SI", decision_incidente="EN_TRAMITE",
                 fecha_apertura_incidente="11/04/2026")  # 12 días antes
         r = score_case(c, now=NOW)
         assert r.level == LEVEL_YELLOW
 
     def test_incidente_reciente_verde(self, db):
-        c = _mk(db, estado_incidente="ACTIVO",
+        c = _mk(db, incidente="SI", decision_incidente="EN_TRAMITE",
                 fecha_apertura_incidente="20/04/2026")  # 3 días
         r = score_case(c, now=NOW)
         # score 0.25 → VERDE en realidad (threshold yellow = 0.40)
+        assert r.level == LEVEL_GREEN
+
+    def test_caso_inactivo_es_na(self, db):
+        # P19: caso archivado no se evalúa aunque tenga señales viejas
+        c = _mk(db, estado="INACTIVO", incidente="SI",
+                decision_incidente="SANCIONA",
+                sentido_fallo_1st="CONCEDE", fecha_fallo_1st="01/01/2026")
+        r = score_case(c, now=NOW)
+        assert r.level == LEVEL_NA
+        assert r.score == 0.0
+
+    def test_incidente_niega_apertura_no_alerta(self, db):
+        # Rechazado de plano: no hay trámite vivo que vigilar
+        c = _mk(db, incidente="SI", decision_incidente="NIEGA_APERTURA",
+                fecha_apertura_incidente="01/03/2026")
+        r = score_case(c, now=NOW)
         assert r.level == LEVEL_GREEN
 
     def test_fallo_concede_sin_respuesta_rojo(self, db):
@@ -118,11 +138,12 @@ class TestScoring:
         assert r.level == LEVEL_YELLOW
         assert any("huérfano" in s.lower() for s in r.reasons)
 
-    def test_revision_suma_pero_queda_verde_sin_otras_alertas(self, db):
+    def test_processing_status_revision_ya_no_puntua(self, db):
+        # P19: la regla 7 (processing_status legacy congelado) fue eliminada
         c = _mk(db, processing_status="REVISION")
         r = score_case(c, now=NOW)
-        # Solo REVISION aporta 0.35, bajo el threshold de AMARILLO (0.40)
         assert r.level == LEVEL_GREEN
+        assert not any("REVISION" in s for s in r.reasons)
 
     def test_duplicate_merged_es_na(self, db):
         c = _mk(db, processing_status="DUPLICATE_MERGED")
@@ -132,18 +153,29 @@ class TestScoring:
 
 class TestRunEarlyWarning:
     def test_summary_basico(self, db):
-        _mk(db, folder_name="A", estado_incidente="EN_SANCION")
-        _mk(db, folder_name="B", estado_incidente="ACTIVO", fecha_apertura_incidente="11/04/2026")
+        _mk(db, folder_name="A", incidente="SI", decision_incidente="SANCIONA")
+        _mk(db, folder_name="B", incidente="SI", decision_incidente="EN_TRAMITE",
+            fecha_apertura_incidente="11/04/2026")
         _mk(db, folder_name="C", origen="INCIDENTE_HUERFANO")
-        _mk(db, folder_name="D", estado_incidente="N/A")
+        _mk(db, folder_name="D")
+        _mk(db, folder_name="E", estado="INACTIVO")  # archivado → N/A
 
         summary = run_early_warning(db, now=NOW)
-        assert summary.total_cases_evaluated == 4
+        assert summary.total_cases_evaluated == 5
         assert summary.by_level[LEVEL_RED] == 1
         assert summary.by_level[LEVEL_YELLOW] >= 1
+        assert summary.by_level[LEVEL_NA] == 1
+
+    def test_caso_sin_processing_status_se_evalua(self, db):
+        # El filtro viejo por processing_status excluía los NULL
+        _mk(db, folder_name="A", processing_status=None,
+            incidente="SI", decision_incidente="SANCIONA")
+        summary = run_early_warning(db, now=NOW)
+        assert summary.total_cases_evaluated == 1
+        assert summary.by_level[LEVEL_RED] == 1
 
     def test_rojos_ordenados_por_score_desc(self, db):
-        _mk(db, folder_name="A", estado_incidente="EN_SANCION")
+        _mk(db, folder_name="A", incidente="SI", decision_incidente="SANCIONA")
         _mk(db, folder_name="B", sentido_fallo_1st="CONCEDE",
             fecha_fallo_1st="10/04/2026")  # rojo pero <1.0
 
@@ -152,7 +184,7 @@ class TestRunEarlyWarning:
             assert summary.red_cases[0].score >= summary.red_cases[1].score
 
     def test_to_dict_serializable(self, db):
-        _mk(db, folder_name="Zzz", estado_incidente="EN_SANCION")
+        _mk(db, folder_name="Zzz", incidente="SI", decision_incidente="SANCIONA")
         summary = run_early_warning(db, now=NOW)
         d = summary.to_dict()
         import json
