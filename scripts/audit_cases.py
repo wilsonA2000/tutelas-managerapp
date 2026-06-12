@@ -156,7 +156,9 @@ def rule_R4(case: Case) -> list[Finding]:
     if decision in _DECISION_CON_APERTURA and _is_empty(case.fecha_apertura_incidente):
         out.append(Finding("R4", "fecha_apertura_incidente", "ERROR",
                            f"incidente {decision} pero fecha_apertura_incidente vacia"))
-    if _is_empty(case.responsable_desacato):
+    # NIEGA_APERTURA: si el juzgado rechazo de plano sin requerir a nadie,
+    # no existe persona NOMBRADA -> responsable vacio es legitimo (ej. c520).
+    if decision != "NIEGA_APERTURA" and _is_empty(case.responsable_desacato):
         out.append(Finding("R4", "responsable_desacato", "ERROR",
                            "incidente=SI pero responsable_desacato vacio"))
     return out

@@ -82,6 +82,21 @@ def test_R4_en_tramite_sin_fecha_es_legitimo():
     assert ac.rule_R4(c) == []
 
 
+def test_R4_niega_apertura_sin_responsable_es_legitimo():
+    # NIEGA_APERTURA: el juzgado rechazó de plano sin requerir a nadie →
+    # no existe persona NOMBRADA, responsable vacío OK (caso real c520).
+    c = make_case(incidente="SI", decision_incidente="NIEGA_APERTURA",
+                  fecha_apertura_incidente=None, responsable_desacato=None)
+    assert ac.rule_R4(c) == []
+
+
+def test_R4_en_tramite_sin_responsable_sigue_fallando():
+    # En requerimiento previo el auto SÍ individualiza personas → exigir responsable.
+    c = make_case(incidente="SI", decision_incidente="EN_TRAMITE",
+                  fecha_apertura_incidente=None, responsable_desacato=None)
+    assert any(x.field == "responsable_desacato" for x in ac.rule_R4(c))
+
+
 def test_R5_radicado_truncado():
     c = make_case(radicado_23_digitos="123456789012345")  # 15 digits
     f = ac.rule_R5(c)
