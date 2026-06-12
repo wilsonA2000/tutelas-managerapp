@@ -38,6 +38,10 @@ interface ReviewCase {
   case_id: number; id?: number; folder_name: string; accionante?: string; ACCIONANTE?: string
   low_confidence_fields: string[]; empty_fields: string[]; document_count: number
   completitud?: number; missing_fields?: string[]
+  // Ciclo de vida de extracción (2026-06-12): derivado en backend
+  estado_extraccion?: 'NUNCA_EXTRAIDO' | 'DESACTUALIZADO' | 'AL_DIA'
+  last_extraction_at?: string | null
+  docs_nuevos?: number
 }
 
 export default function Extraction() {
@@ -835,6 +839,16 @@ export default function Extraction() {
             <AlertCircle size={14} className={reviewQueue.length > 0 ? 'text-amber-500' : 'text-emerald-400'} />
             <span className="text-sm font-medium">Cola de Revision</span>
             {reviewQueue.length > 0 && <Badge variant="outline" className="text-amber-700 border-amber-200 bg-amber-100 text-[10px]">{reviewQueue.length}</Badge>}
+            {reviewQueue.filter(c => c.estado_extraccion === 'NUNCA_EXTRAIDO').length > 0 && (
+              <Badge variant="outline" className="text-[10px] text-amber-800 border-amber-300 bg-amber-100">
+                🆕 {reviewQueue.filter(c => c.estado_extraccion === 'NUNCA_EXTRAIDO').length} candidata(s)
+              </Badge>
+            )}
+            {reviewQueue.filter(c => c.estado_extraccion === 'DESACTUALIZADO').length > 0 && (
+              <Badge variant="outline" className="text-[10px] text-sky-700 border-sky-200 bg-sky-50">
+                📄 {reviewQueue.filter(c => c.estado_extraccion === 'DESACTUALIZADO').length} con docs nuevos
+              </Badge>
+            )}
           </div>
           {reviewQueue.length > 0 && (
             <Button variant="ghost" size="icon-xs" onClick={() => qc.invalidateQueries({ queryKey: ['review-queue'] })}>
@@ -873,6 +887,16 @@ export default function Extraction() {
                     <TableCell>
                       <div className="flex items-center gap-1.5">
                         <span className="font-mono text-xs text-primary font-medium">{c.folder_name}</span>
+                        {c.estado_extraccion === 'NUNCA_EXTRAIDO' && (
+                          <Badge variant="outline" className="text-[10px] text-amber-800 border-amber-300 bg-amber-100" title="Caso nuevo de la ingesta — nunca extraído. Selecciónalo y extrae cuando llegue el expediente.">
+                            🆕 Candidata
+                          </Badge>
+                        )}
+                        {c.estado_extraccion === 'DESACTUALIZADO' && (
+                          <Badge variant="outline" className="text-[10px] text-sky-700 border-sky-200 bg-sky-50" title={`Llegaron ${c.docs_nuevos} doc(s) después de la última extracción${c.last_extraction_at ? ` (${c.last_extraction_at.slice(0, 10)})` : ''}.`}>
+                            📄 Docs nuevos ({c.docs_nuevos})
+                          </Badge>
+                        )}
                         {(c as any).docs_no_pertenece > 0 && <Badge variant="destructive" className="text-[10px]">{(c as any).docs_no_pertenece}</Badge>}
                         {(c as any).docs_sospechosos > 0 && <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-200 bg-amber-50">{(c as any).docs_sospechosos}</Badge>}
                       </div>

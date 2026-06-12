@@ -151,6 +151,10 @@ class ExtractionResult:
     timing_ms: dict[str, int] = field(default_factory=dict)  # etapa → ms
     warnings: list[str] = field(default_factory=list)
     llm_calls: int = 0  # cuántas veces se invocó LLM (objetivo: 0 o 1)
+    # Cambios realmente APLICADOS por persist (campo → {old,new,source}); vacío
+    # en dry_run. Permite a los llamadores (monitor Gmail) registrar trazabilidad
+    # honesta: "M campos escritos" = campos que cambiaron en DB, no los extraídos.
+    persist_changes: dict = field(default_factory=dict)
 
     def total_ms(self) -> int:
         return sum(self.timing_ms.values())

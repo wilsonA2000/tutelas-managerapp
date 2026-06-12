@@ -26,6 +26,7 @@ const REVISION_FLAG_LABEL: Record<string, string> = {
   sin_quien_impugno: 'impugna s/sujeto',
   necesita_revision: 'revisar',
   sin_extraer: 'sin extraer',
+  docs_nuevos: 'docs nuevos s/extraer',
 }
 
 // Severidad → clases tailwind. Mantengo paleta consistente entre el filtro
@@ -51,7 +52,7 @@ const REVISION_SEVERITY: Record<string, string> = {
   sin_accionante: 'critical', sin_radicado: 'critical',
   pocos_docs: 'warn', docs_sospechosos: 'warn', baja_completitud: 'warn',
   incidente_sin_fecha: 'procedural', sin_quien_impugno: 'procedural',
-  sin_fallo: 'info', necesita_revision: 'high', sin_extraer: 'warn',
+  sin_fallo: 'info', necesita_revision: 'high', sin_extraer: 'warn', docs_nuevos: 'warn',
 }
 
 interface RevisionFlag { value: string; label: string; severity: string; count: number }

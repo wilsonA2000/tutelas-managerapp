@@ -407,4 +407,5 @@ def extract_case(
         timing_ms=timing,
         warnings=warnings,
         llm_calls=llm_calls,
+        persist_changes=(persist_out.get("changes") or {}) if isinstance(persist_out, dict) else {},
     )

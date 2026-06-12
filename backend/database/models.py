@@ -4,7 +4,7 @@ from datetime import datetime
 from backend.core.time import utcnow
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, JSON, Index,
-    LargeBinary, UniqueConstraint, Boolean, Float,
+    LargeBinary, UniqueConstraint, Boolean, Float, func,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -203,6 +203,10 @@ class Document(Base):
     page_count = Column(Integer)
     file_size = Column(Integer)
     extraction_date = Column(DateTime)
+    # Cuándo entró la fila a la DB (ciclo de vida de extracción 2026-06-12):
+    # comparar contra field_confidences_json.v9_extracted_at del case responde
+    # "¿llegaron docs DESPUÉS de la última extracción?" sin estado manual.
+    created_at = Column(DateTime, server_default=func.now())
 
     verificacion = Column(String, default="", index=True)  # '' / OK / SOSPECHOSO / NO_PERTENECE
     verificacion_detalle = Column(String, default="")

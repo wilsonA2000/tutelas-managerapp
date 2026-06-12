@@ -31,6 +31,7 @@ _REVISION_OPTIONS = {
     "incidente_sin_fecha",   # incidente=SI sin fecha_apertura_incidente
     "sin_quien_impugno",     # impugnacion=SI sin quien_impugno
     "sin_extraer",           # field_confidences_json vacío → el pipeline v9 no corrió
+    "docs_nuevos",           # docs llegados DESPUÉS de la última extracción v9
 }
 
 # Rad corto en el folder ("2026-00083", "2025-00305", "2026-10070"…). Identifica el
@@ -52,7 +53,7 @@ def _case_review_flags(c: Case) -> dict:
         return {k: False for k in (
             "sin_accionante", "sin_radicado", "pocos_docs", "docs_sospechosos",
             "sin_fallo", "baja_completitud", "incidente_sin_fecha",
-            "sin_quien_impugno", "necesita_revision", "sin_extraer",
+            "sin_quien_impugno", "necesita_revision", "sin_extraer", "docs_nuevos",
         )} | {"_completitud": 100.0, "_n_docs": len(c.documents)}
     n_docs = len(c.documents)
     susp = any((d.verificacion or "") in ("SOSPECHOSO", "NO_PERTENECE") for d in c.documents)
@@ -81,6 +82,14 @@ def _case_review_flags(c: Case) -> dict:
         for inc_f, fecha_f, dec_f in _inc_levels
     )
     sin_qi = (c.impugnacion or "") == "SI" and not (c.quien_impugno or "").strip()
+    # docs_nuevos: el caso fue extraído pero llegaron documentos DESPUÉS de la
+    # última pasada v9 (ciclo de vida 2026-06-12). Derivado de created_at vs
+    # v9_extracted_at — misma autoridad que `estado_extraccion`, sin query extra
+    # (reusa la relación documents ya cargada para n_docs).
+    _last_ext = case_last_extraction_at(c)
+    docs_nuevos = bool(_last_ext) and any(
+        getattr(d, "created_at", None) and d.created_at > _last_ext for d in c.documents
+    )
     return {
         "sin_accionante": no_acc,
         "sin_radicado": no_rad,
@@ -93,6 +102,7 @@ def _case_review_flags(c: Case) -> dict:
         # sin_extraer: ni corrió el pipeline v9 (field_confidences) NI está suficientemente
         # diligenciado a mano (completitud ≥ EXTRAIDO_MIN_COMPLETITUD). NO entra en necesita_revision.
         "sin_extraer": not _case_extraido(c, compl),
+        "docs_nuevos": docs_nuevos,
         # "necesita_revision" agrupa señales accionables (excluye sin_fallo — normal en tutelas en curso).
         # Usa no_rad_accionable (no el crudo no_rad): un caso identificado por rad corto NO es error.
         "necesita_revision": no_acc or no_rad_accionable or n_docs <= 1 or susp or baja or inc_sin_fecha or sin_qi,
@@ -420,6 +430,55 @@ def _case_extraido(case: Case, compl: float | None = None) -> bool:
     if compl is None:
         compl = _get_case_completitud(case)
     return compl >= EXTRAIDO_MIN_COMPLETITUD
+
+
+def case_last_extraction_at(case: Case):
+    """Timestamp (datetime naive) de la última pasada v9, leído de
+    `field_confidences_json["v9_extracted_at"]`. None si nunca corrió."""
+    import json as _json
+    from datetime import datetime as _dt
+    _fc = (getattr(case, "field_confidences_json", None) or "").strip()
+    if not _fc or _fc in ("{}", "null"):
+        return None
+    try:
+        ts = _json.loads(_fc).get("v9_extracted_at")
+        if not ts:
+            return None
+        return _dt.fromisoformat(str(ts).replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def estado_extraccion(db: Session, case: Case, compl: float | None = None) -> dict:
+    """AUTORIDAD ÚNICA del ciclo de vida de extracción (derivada, 2026-06-12).
+
+    Compara la última extracción v9 contra `documents.created_at` — nunca se
+    desactualiza porque no hay estado manual que mantener:
+      - NUNCA_EXTRAIDO   → candidata a extracción (caso nuevo de la ingesta, o
+                           legacy sin pipeline ni curación suficiente).
+      - DESACTUALIZADO   → fue extraído pero llegaron docs DESPUÉS.
+      - AL_DIA           → extraído y sin docs posteriores.
+    Docs con created_at NULL (legacy pre-migración) se tratan como antiguos.
+    """
+    last = case_last_extraction_at(case)
+    extraido = _case_extraido(case, compl)
+    if not extraido and last is None:
+        n_docs = db.query(Document).filter(Document.case_id == case.id).count()
+        return {"estado": "NUNCA_EXTRAIDO", "last_extraction_at": None,
+                "docs_nuevos": n_docs}
+    if last is not None:
+        nuevos = db.query(Document).filter(
+            Document.case_id == case.id,
+            Document.created_at.isnot(None),
+            Document.created_at > last,
+        ).count()
+        if nuevos:
+            return {"estado": "DESACTUALIZADO",
+                    "last_extraction_at": last.isoformat(timespec="seconds"),
+                    "docs_nuevos": nuevos}
+    return {"estado": "AL_DIA",
+            "last_extraction_at": last.isoformat(timespec="seconds") if last else None,
+            "docs_nuevos": 0}
 
 
 def _get_valid_case_ids(db: Session, min_completitud: float = MIN_COMPLETITUD_PERCENT):
@@ -798,6 +857,7 @@ _REVISION_FLAG_META: tuple[tuple[str, str, str], ...] = (
     ("sin_quien_impugno",   "Impugna s/sujeto",    "procedural"),
     ("sin_fallo",           "Sin fallo 1ra",       "info"),
     ("sin_extraer",         "Sin extraer",         "warn"),
+    ("docs_nuevos",         "Docs nuevos s/extraer", "warn"),
 )
 
 

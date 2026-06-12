@@ -48,7 +48,60 @@ def _v9_extract(db, case) -> dict:
         "ai_error": (r.warnings[0] if r.warnings else None),
         "renamed": False,
         "method": "v9.pipeline",
+        "changes": r.persist_changes,  # campos realmente escritos en DB (no-clobber)
     }
+
+
+def _post_ingest_split(db, new_emails) -> tuple[list, list]:
+    """Ciclo de vida de extracción (2026-06-12): clasifica los casos tocados por
+    una ingesta de Gmail.
+
+    - NUEVOS (algún email de la corrida los creó, accion=CASO_NUEVO): NO se
+      extraen — con solo la notificación el extractor inventa campos (bug
+      documentado en recién admitidas). Quedan PENDIENTE = candidatas visibles
+      en /extraction.
+    - ACTUALIZADOS (carpeta existente que recibió docs): extracción determinista
+      inmediata + traza datada en observaciones.
+
+    Returns: (nuevos: list[(Case, n_docs)], actualizados: list[(Case, n_docs)])
+    """
+    info: dict = {}
+    for e in new_emails:
+        fn = e.get("matched_case")
+        if not fn:
+            continue
+        d = info.setdefault(fn, {"new": False, "docs": 0})
+        if e.get("accion") == "CASO_NUEVO":
+            d["new"] = True
+        d["docs"] += int(e.get("adjuntos_guardados") or 0) + 1  # +1: el .md del email
+    nuevos, actualizados = [], []
+    for fn, d in info.items():
+        case = db.query(Case).filter(Case.folder_name == fn).first()
+        if case is None:
+            continue
+        (nuevos if d["new"] else actualizados).append((case, d["docs"]))
+    return nuevos, actualizados
+
+
+def _extract_updated_case(db, case, n_docs: int) -> dict:
+    """Extracción inmediata (determinista) de un caso EXISTENTE que recibió docs
+    nuevos, con trazabilidad en observaciones: solo se anota lo que realmente
+    cambió en DB (persist no-clobber)."""
+    stats = _v9_extract(db, case)
+    changes = stats.get("changes") or {}
+    visibles = [k for k in changes.keys() if not k.startswith("__")]
+    try:
+        if visibles:
+            hoy = datetime.now().strftime("%d/%m/%Y")
+            detalle = ", ".join(visibles[:8]) + ("…" if len(visibles) > 8 else "")
+            linea = (f" / [{hoy}] Ingesta Gmail: {n_docs} doc(s) nuevos; "
+                     f"extracción automática escribió {len(visibles)} campo(s): {detalle}.")
+            case.observaciones = (case.observaciones or "") + linea
+            db.commit()
+    except Exception:
+        db.rollback()
+    stats["campos_escritos"] = len(visibles)
+    return stats
 
 # ============================================================
 # Estado global del monitor de Gmail y extraccion
@@ -119,26 +172,25 @@ async def gmail_background_check():
                             details={"emails": new_emails},
                         )
 
-                        # Extraccion con contexto completo: re-analizar toda la carpeta
-                        # para que la IA tenga contexto de TODOS los documentos + emails
+                        # Ciclo de vida (2026-06-12): caso NUEVO queda como candidata
+                        # (sin extracción automática); caso EXISTENTE con docs nuevos
+                        # se extrae de inmediato (determinista) + traza en observaciones.
+                        nuevos, actualizados = _post_ingest_split(db, new_emails)
                         cases_processed = set()
                         total_fields = 0
-                        for email_info in new_emails:
-                            if not email_info.get("matched_case"):
-                                continue
-                            case = db.query(Case).filter(
-                                Case.folder_name == email_info["matched_case"]
-                            ).first()
-                            if not case or case.id in cases_processed:
-                                continue
-
+                        for case, _nd in nuevos:
+                            cases_processed.add(case.id)
+                            add_monitor_log(
+                                f"Caso NUEVO '{case.folder_name}': queda PENDIENTE — candidata a extracción en /extraction",
+                            )
+                        for case, _nd in actualizados:
                             cases_processed.add(case.id)
                             try:
-                                stats = _v9_extract(db, case)
-                                fields = stats.get("ai_fields_extracted", 0)
-                                total_fields += fields
+                                stats = _extract_updated_case(db, case, _nd)
+                                escritos = stats.get("campos_escritos", 0)
+                                total_fields += escritos
                                 add_monitor_log(
-                                    f"Caso '{case.folder_name}': {fields} campos extraidos ({stats.get('documents_extracted', 0)} docs + emails analizados)",
+                                    f"Caso '{case.folder_name}': {_nd} doc(s) nuevos → extracción automática escribió {escritos} campo(s)",
                                 )
                             except Exception as e:
                                 add_monitor_log(
@@ -147,7 +199,7 @@ async def gmail_background_check():
                                 )
 
                         add_monitor_log(
-                            f"Procesados {len(new_emails)} emails -> {len(cases_processed)} casos analizados, {total_fields} campos actualizados",
+                            f"Procesados {len(new_emails)} emails -> {len(nuevos)} caso(s) nuevos (candidatas) + {len(actualizados)} actualizados, {total_fields} campos escritos",
                         )
                         # GATE POST-INGESTA (P15) — mismo escaneo de conflación que la
                         # revisión manual, sobre los casos tocados por este ciclo del cron.
@@ -557,42 +609,41 @@ def _run_gmail_check_background():
         _update_pct()
 
         # Paso 3: Extraccion con contexto completo
-        cases_to_process = []
-        cases_seen = set()
-        for email_info in new_emails:
-            if not email_info.get("matched_case"):
-                continue
-            case = db.query(Case).filter(
-                Case.folder_name == email_info["matched_case"]
-            ).first()
-            if case and case.id not in cases_seen:
-                cases_seen.add(case.id)
-                cases_to_process.append(case)
+        # Ciclo de vida (2026-06-12): caso NUEVO = candidata (sin extracción
+        # automática — con solo la notificación el extractor inventa campos);
+        # caso EXISTENTE con docs nuevos = extracción determinista inmediata
+        # + traza datada en observaciones.
+        nuevos, actualizados = _post_ingest_split(db, new_emails)
+        cases_to_process = [c for c, _ in nuevos] + [c for c, _ in actualizados]
 
         total_fields = 0
         cases_processed = 0
-        # Expandir total: 2 pasos base + N casos
-        gmail_check_result["total"] = 2 + len(cases_to_process)
+        # Expandir total: 2 pasos base + N casos a extraer
+        gmail_check_result["total"] = 2 + len(actualizados)
+
+        for case, _nd in nuevos:
+            add_monitor_log(
+                f"Caso NUEVO '{case.folder_name}': queda PENDIENTE — candidata a extracción en /extraction",
+            )
 
         # Pausar llama-server antes de la re-extracción (precaución de RAM en equipos justos).
         # Fase 7.3: la re-extracción ahora es v9 (`_v9_extract` → extract_case con use_llm=False),
         # así que normalmente no toca el LLM; se conserva la pausa como salvaguarda.
-        if cases_to_process:
+        if actualizados:
             try:
                 from backend.services.llm_mutex import pause_llm_for_extraction
                 pause_llm_for_extraction()
             except Exception as _mutex_err:
                 add_monitor_log(f"Mutex pre-Paso3 no disponible: {_mutex_err}", level="warning")
 
-        for i, case in enumerate(cases_to_process):
+        for i, (case, _nd) in enumerate(actualizados):
             gmail_check_result["current"] = 2 + i
-            gmail_check_result["step"] = f"Paso 3/3: Analizando ({i+1}/{len(cases_to_process)}): {case.folder_name[:40]}..."
+            gmail_check_result["step"] = f"Paso 3/3: Analizando ({i+1}/{len(actualizados)}): {case.folder_name[:40]}..."
             _update_pct()
 
             try:
-                stats = _v9_extract(db, case)
-                fields = stats.get("ai_fields_extracted", 0)
-                total_fields += fields
+                stats = _extract_updated_case(db, case, _nd)
+                total_fields += stats.get("campos_escritos", 0)
                 cases_processed += 1
             except Exception as e:
                 add_monitor_log(f"Error procesando {case.folder_name}: {e}", level="error")
@@ -600,11 +651,15 @@ def _run_gmail_check_background():
         gmail_check_result["current"] = gmail_check_result["total"]
         gmail_check_result["cases_processed"] = cases_processed
         gmail_check_result["total_fields"] = total_fields
-        gmail_check_result["step"] = f"Completado: {len(new_emails)} emails, {cases_processed} casos, {total_fields} campos"
+        gmail_check_result["step"] = (
+            f"Completado: {len(new_emails)} emails, {len(nuevos)} caso(s) nuevos (candidatas), "
+            f"{cases_processed} actualizados, {total_fields} campos escritos"
+        )
         _update_pct()
 
         add_monitor_log(
-            f"Revision manual: {len(new_emails)} emails, {cases_processed} casos, {total_fields} campos actualizados",
+            f"Revision manual: {len(new_emails)} emails, {len(nuevos)} nuevos (candidatas) + "
+            f"{cases_processed} actualizados, {total_fields} campos escritos",
         )
 
         # GATE POST-INGESTA automático (P15, 2026-06-10): escaneo de conflación
