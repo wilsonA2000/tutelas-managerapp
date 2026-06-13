@@ -7,13 +7,25 @@ Desacato) — con OTRO typo del juzgado en el prefijo DANE (69432 por 68432).
 """
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from backend.database.models import Base
 from backend.email.expediente_links import (
     harvest_expediente_links,
     parse_expediente_link,
     parse_server_path,
     rad23_suffix_key,
 )
+
+
+@pytest.fixture
+def db_session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    yield s
+    s.close()
 
 # El link tokenizado REAL del correo e2038 (carpeta compartida por el juzgado)
 TOKENIZED = ("https://etbcsj-my.sharepoint.com/:f:/g/personal/"
@@ -170,3 +182,74 @@ class TestFetcherPuro:
             "etbcsj-my.sharepoint.com",
             "/personal/j01prctomalaga_cendoj_ramajudicial_gov_co/Documents/x",
         ) == "https://etbcsj-my.sharepoint.com/personal/j01prctomalaga_cendoj_ramajudicial_gov_co"
+
+    def test_es_link_judicial(self):
+        from backend.email.expediente_links import es_link_judicial
+        assert es_link_judicial(TOKENIZED)  # etbcsj
+        assert not es_link_judicial(
+            "https://santandergov-my.sharepoint.com/:w:/g/personal/apoyojuridicosed_santander_gov_co/Iabc")
+
+
+class TestConflictGuard:
+    """El guard que impide contaminar una carpeta con OTRO expediente (post-c575)."""
+
+    class _FakeLink:
+        def __init__(self, case_id, rad23_url):
+            self.id = 1
+            self.case_id = case_id
+            self.url = "https://etbcsj-my.sharepoint.com/:f:/g/personal/x/Iabc?e=z"
+            self.rad23_url = rad23_url
+            self.estado = "RESUELTO"
+            self.error_detail = ""
+            self.server_path = ""
+            self.etapa = ""
+            self.instancia_hint = ""
+            self.archivado = False
+            self.owner = ""
+            self.n_files = 0
+            self.n_descargados = 0
+            self.last_checked = None
+
+    def _patch_resolve(self, monkeypatch, server_path, rad_url):
+        import backend.services.expediente_fetcher as fx
+        monkeypatch.setattr(fx, "resolve_share_link", lambda url, **kw: {
+            "estado": "RESUELTO", "session": None, "host": "etbcsj-my.sharepoint.com",
+            "owner": "x", "server_path": server_path, "rad23_url": rad_url,
+            "etapa": "", "instancia_hint": "", "archivado": False,
+        })
+        monkeypatch.setattr(fx, "list_folder", lambda *a, **k: [
+            {"name": "001.pdf", "size": 1000, "modified": "", "server_path": server_path + "/001.pdf", "subfolder": ""}])
+
+    def test_conflicto_no_descarga(self, monkeypatch, db_session, tmp_path):
+        """rad del link ≠ rad del caso → CONFLICTO, sin tocar disco."""
+        import backend.services.expediente_fetcher as fx
+        from backend.database.models import Case
+        case = Case(folder_name="2026-00029 X", folder_path=str(tmp_path),
+                    radicado_23_digitos="68001333301320260002900", processing_status="COMPLETO")
+        db_session.add(case); db_session.commit()
+        self._patch_resolve(monkeypatch, "/personal/x/Documents/68001310500420261000900",
+                            "68001310500420261000900")
+        link = self._FakeLink(case.id, "68001310500420261000900")
+        r = fx.fetch_link(db_session, link, dry_run=False)
+        assert r["estado"] == "CONFLICTO"
+        assert link.estado == "CONFLICTO"
+        assert list(tmp_path.iterdir()) == []  # no descargó nada
+
+    def test_typo_mismo_sufijo_no_es_conflicto(self, monkeypatch, db_session, tmp_path):
+        """rad con typo de prefijo DANE pero mismo sufijo [5:21] → NO es conflicto."""
+        import backend.services.expediente_fetcher as fx
+        from backend.database.models import Case
+        case = Case(folder_name="2026-00127 Y", folder_path=str(tmp_path),
+                    radicado_23_digitos="68432318900120220012700", processing_status="COMPLETO")
+        db_session.add(case); db_session.commit()
+        # 69432... (typo DANE) mismo sufijo que 68432...
+        self._patch_resolve(monkeypatch, "/personal/x/Documents/69432318900120220012700",
+                            "69432318900120220012700")
+        # mock de la descarga y el registro (no red, no disco real)
+        monkeypatch.setattr(fx, "download_file", lambda *a, **k: "deadbeef" * 8)
+        import backend.services.sync_service as ss
+        monkeypatch.setattr(ss, "sync_case_folder", lambda *a, **k: {"docs_added": 0})
+        link = self._FakeLink(case.id, "69432318900120220012700")
+        r = fx.fetch_link(db_session, link, dry_run=False)
+        assert r["estado"] != "CONFLICTO"  # typo mismo sufijo → pasa el guard
+        assert r["estado"] in ("DESCARGADO", "SIN_NOVEDAD")

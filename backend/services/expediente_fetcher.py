@@ -41,6 +41,7 @@ from backend.email.expediente_links import (
     ExpedienteLinkInfo,
     parse_expediente_link,
     parse_server_path,
+    rad23_suffix_key,
 )
 
 logger = logging.getLogger("tutelas.expediente_fetcher")
@@ -77,7 +78,7 @@ def resolve_share_link(url: str, timeout: int = _TIMEOUT,
     final = r.url or ""
     if "login.microsoftonline" in final or "login.live.com" in final:
         return {"estado": "REQUIERE_ACCESO",
-                "error_detail": "el link exige autenticación (no es de invitado anónimo)"}
+                "error_detail": "LOGIN: exige cuenta Microsoft (no es link de invitado)"}
     if r.status_code in (403, 404, 410) or "Este vínculo ya no funciona" in (r.text or "")[:5000]:
         return {"estado": "EXPIRADO", "error_detail": f"HTTP {r.status_code}"}
     if r.status_code != 200:
@@ -90,16 +91,20 @@ def resolve_share_link(url: str, timeout: int = _TIMEOUT,
     server_path = final_info.server_path or info.server_path
     if not server_path:
         # Sin redirect a onedrive.aspx: SharePoint sirvió una página shell.
-        # Distinguir: link "personas específicas" (OTP) vs caducado/revocado.
+        # Tres mecanismos distintos (clasificados empíricamente 2026-06-12):
+        #   · título "Error"                          → token caducado/revocado (muerto)
+        #   · form guestaccess.aspx?share= / "Validación de vínculo para compartir"
+        #     → link 'personas específicas' que envía OTP al correo del destinatario
+        #       (RECUPERABLE: el código llega al Gmail monitoreado de Wilson)
         body_head = (r.text or "")[:300_000]
         title_m = re.search(r"<title>\s*([^<]*?)\s*</title>", body_head, re.DOTALL)
         title = (title_m.group(1) if title_m else "").strip()
+        if "guestaccess.aspx?share=" in body_head or ("alida" in title and "ompartir" in title):
+            return {"estado": "REQUIERE_ACCESO",
+                    "error_detail": "OTP: link a persona específica (envía código al correo destinatario)"}
         if "error" in title.lower():
             return {"estado": "EXPIRADO",
-                    "error_detail": "SharePoint sirvió página de Error (link caducado o revocado)"}
-        if "código" in body_head.lower() or "verification" in body_head.lower():
-            return {"estado": "REQUIERE_ACCESO",
-                    "error_detail": "link 'personas específicas' (exige verificación)"}
+                    "error_detail": "MUERTO: SharePoint sirvió página de Error (token caducado o revocado)"}
         return {"estado": "ERROR", "error_detail": "no pude derivar server_path del redirect"}
 
     d = parse_server_path(server_path)
@@ -276,6 +281,21 @@ def fetch_link(db, link, *, dry_run: bool = True, throttle: float = 1.0) -> dict
         link.estado = "ERROR"
         link.error_detail = "caso sin carpeta en disco"
         report["estado"] = "ERROR"
+        report["error"] = link.error_detail
+        return report
+
+    # ── GUARD DE CONFLICTO ──
+    # Si el rad del path del link NO coincide (por sufijo [5:21], que tolera typo
+    # de prefijo DANE) con el rad del caso, el link apunta a OTRO expediente.
+    # Descargarlo contaminaría la carpeta (mismo principio que el gate de
+    # consistencia). NO bajar — marcar CONFLICTO para revisión humana.
+    skey_url = rad23_suffix_key(link.rad23_url)
+    skey_case = rad23_suffix_key(case.radicado_23_digitos)
+    if skey_url and skey_case and skey_url != skey_case:
+        link.estado = "CONFLICTO"
+        link.error_detail = (f"rad del link ({link.rad23_url}) ≠ rad del caso "
+                             f"({case.radicado_23_digitos}); no se baja para no contaminar — revisar")
+        report["estado"] = "CONFLICTO"
         report["error"] = link.error_detail
         return report
 

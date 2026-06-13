@@ -110,11 +110,40 @@ def resolver(db, limit: int, throttle: float) -> dict:
     return stats
 
 
-def reporte_conflictos(db) -> int:
-    """CSV: links cuyo rad23_url NO coincide con el rad del caso asignado."""
+def _lev(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if abs(len(a) - len(b)) > 4:
+        return 99
+    prev = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] != b[j - 1]))
+        prev = cur
+    return prev[len(b)]
+
+
+def _clasificar_conflicto(rad_url: str, rad_caso: str) -> str:
+    """TYPO_MISMO_CASO (typo del juzgado) / OTRO_JUZGADO_MISMA_SEQ / DISTINTO."""
+    from backend.email.rad_utils import normalize_rad23
+    ru, rc = normalize_rad23(rad_url), normalize_rad23(rad_caso)
+    if _lev(ru, rc) <= 2:
+        return "TYPO_MISMO_CASO"
+    if len(ru) >= 21 and len(rc) >= 21 and ru[:12] != rc[:12] and ru[16:21] == rc[16:21]:
+        return "OTRO_JUZGADO_MISMA_SEQ"
+    return "DISTINTO"
+
+
+def reporte_conflictos(db, marcar: bool = True) -> int:
+    """CSV: links cuyo rad23_url NO coincide (sufijo [5:21]) con el rad del caso.
+
+    Clasifica cada conflicto y, con marcar=True, pone estado=CONFLICTO en DB a
+    los que NO son typo del mismo caso (esos no deben bajarse sin revisión)."""
     rows = []
     links = db.query(ExpedienteLink).filter(
         ExpedienteLink.rad23_url != "", ExpedienteLink.case_id.isnot(None),
+        ExpedienteLink.url.like("%etbcsj%"),
     ).all()
     for link in links:
         case = db.query(Case).filter(Case.id == link.case_id).first()
@@ -122,17 +151,23 @@ def reporte_conflictos(db) -> int:
             continue
         k_url = rad23_suffix_key(link.rad23_url)
         k_case = rad23_suffix_key(case.radicado_23_digitos)
-        if not k_url:
+        if not k_url or (k_case and k_url == k_case):
             continue
-        if not k_case or k_url != k_case:
-            rows.append({
-                "link_id": link.id, "case_id": case.id,
-                "folder": case.folder_name or "",
-                "rad_caso": case.radicado_23_digitos or "",
-                "rad_url": link.rad23_url,
-                "etapa": link.etapa, "juzgado": link.juzgado_hint,
-                "email_id": link.email_id, "url": link.url,
-            })
+        clase = _clasificar_conflicto(link.rad23_url, case.radicado_23_digitos or "")
+        rows.append({
+            "link_id": link.id, "case_id": case.id, "clase": clase,
+            "folder": case.folder_name or "", "accionante": case.accionante or "",
+            "rad_caso": case.radicado_23_digitos or "", "rad_url": link.rad23_url,
+            "etapa": link.etapa, "juzgado": link.juzgado_hint,
+            "email_id": link.email_id, "url": link.url,
+        })
+        if marcar and clase != "TYPO_MISMO_CASO" and link.estado in (
+                "RESUELTO", "SIN_NOVEDAD", "PENDIENTE"):
+            link.estado = "CONFLICTO"
+            link.error_detail = (f"{clase}: rad link {link.rad23_url} ≠ rad caso "
+                                 f"{case.radicado_23_digitos} — revisar antes de bajar")
+    if marcar:
+        db.commit()
     if rows:
         CSV_OUT.parent.mkdir(exist_ok=True)
         with open(CSV_OUT, "w", newline="", encoding="utf-8") as fh:
