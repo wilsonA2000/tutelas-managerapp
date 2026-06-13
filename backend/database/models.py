@@ -494,3 +494,37 @@ class TokenUsage(Base):
 # anonimización pre-IA-externa no aplica en modo local-only. Las tablas `pii_mappings` y
 # `privacy_stats` quedan vestigiales en DBs ya creadas (SQLAlchemy las ignora); se dropean
 # en la próxima migración limpia.
+
+
+class ExpedienteLink(Base):
+    """Link al expediente digital del juzgado (OneDrive/SharePoint cendoj).
+
+    Cosechado de los correos de notificación (`email/expediente_links.py`).
+    El PATH compartido trae el rad verdadero + etapa procesal; el link tokenizado
+    otorga cookie FedAuth anónima con la que `services/expediente_fetcher.py`
+    enumera y descarga el expediente completo (nombres curados por el juzgado).
+    """
+    __tablename__ = "expediente_links"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    url = Column(String, nullable=False, unique=True, index=True)
+    url_kind = Column(String, default="")        # share_folder / share_file / onedrive_view / guestaccess
+    case_id = Column(Integer, ForeignKey("cases.id"), nullable=True, index=True)
+    email_id = Column(Integer, ForeignKey("emails.id"), nullable=True, index=True)
+
+    owner = Column(String, default="")           # j01prctomalaga_cendoj_ramajudicial_gov_co
+    juzgado_hint = Column(String, default="")    # j01prctomalaga
+    server_path = Column(String, default="")     # /personal/<owner>/Documents/... (resuelto)
+    rad23_url = Column(String, default="", index=True)  # rad 19-23 díg hallado en el path
+    etapa = Column(String, default="")           # 003SegundoIncidenteDesacato
+    instancia_hint = Column(String, default="")  # 006AccionesTutelaPrimeraInstancia
+    archivado = Column(Boolean, default=False)
+
+    # PENDIENTE (cosechado, sin red) → RESUELTO (path/rad extraídos) →
+    # DESCARGADO / SIN_NOVEDAD / REQUIERE_ACCESO / EXPIRADO / ERROR
+    estado = Column(String, default="PENDIENTE", index=True)
+    last_checked = Column(DateTime, nullable=True)
+    n_files = Column(Integer, default=0)         # archivos en el manifest remoto
+    n_descargados = Column(Integer, default=0)   # bajados y registrados (acumulado)
+    error_detail = Column(String, default="")
+    created_at = Column(DateTime, default=_utcnow, server_default=func.now())

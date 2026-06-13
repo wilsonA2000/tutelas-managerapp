@@ -1129,6 +1129,29 @@ def check_inbox(db: Session) -> list[dict]:
                 from backend.email.case_lookup_cache import get_cache
                 from backend.email.matcher import EmailSignals, score_case_match
 
+                # ── Links de expediente (OneDrive del juzgado) ──
+                # El path del link trae el rad VERDADERO (corrige typos del subject,
+                # caso real e2038/c575). Resolver requiere 1 GET — solo se paga
+                # cuando el rad23 del cuerpo no matchea ningún caso (el escenario
+                # que crea cascarones). Nunca rompe la ingesta.
+                exped_urls: list[str] = []
+                rad23_url = ""
+                try:
+                    from backend.email.expediente_links import harvest_expediente_links
+                    exped_urls = harvest_expediente_links(f"{subject}\n{body}")
+                    if exped_urls:
+                        _cache_pre = get_cache()
+                        _kb_hit = (_cache_pre.lookup_by_rad23(radicado_data.get("radicado_23", ""))
+                                   if _cache_pre.is_built else None)
+                        if not _kb_hit:
+                            from backend.services.expediente_fetcher import resolve_share_link
+                            _res = resolve_share_link(exped_urls[0], timeout=20)
+                            if _res.get("estado") == "RESUELTO" and _res.get("rad23_url"):
+                                rad23_url = _res["rad23_url"]
+                                logger.info(f"Link expediente resuelto: rad_url={rad23_url} etapa={_res.get('etapa','')}")
+                except Exception as _e:
+                    logger.warning(f"Harvest/resolve link expediente falló (no-fatal): {_e}")
+
                 signals = EmailSignals(
                     rad23=radicado_data.get("radicado_23", ""),
                     rad_corto=radicado_data.get("radicado_corto", ""),
@@ -1137,6 +1160,7 @@ def check_inbox(db: Session) -> list[dict]:
                     accionante_name=accionante,
                     sender=sender,
                     thread_parent_case_id=thread_parent_case_id,
+                    rad23_url=rad23_url,
                 )
 
                 case = None
@@ -1307,6 +1331,26 @@ def check_inbox(db: Session) -> list[dict]:
                 )
                 db.add(email_record)
                 db.flush()  # obtener email_record.id sin commit
+
+                # ── Persistir links de expediente cosechados (cola del fetcher) ──
+                if exped_urls:
+                    try:
+                        from backend.email.expediente_links import parse_expediente_link
+                        from backend.database.models import ExpedienteLink
+                        for _u in exped_urls:
+                            if db.query(ExpedienteLink.id).filter(ExpedienteLink.url == _u).first():
+                                continue
+                            _pi = parse_expediente_link(_u)
+                            db.add(ExpedienteLink(
+                                url=_u, url_kind=_pi.kind, owner=_pi.owner,
+                                juzgado_hint=_pi.juzgado_hint, server_path=_pi.server_path,
+                                rad23_url=_pi.rad23_url or rad23_url, etapa=_pi.etapa,
+                                instancia_hint=_pi.instancia_hint, archivado=_pi.archivado,
+                                case_id=case.id if case else None,
+                                email_id=email_record.id,
+                            ))
+                    except Exception as _e:
+                        logger.warning(f"Persistencia de links expediente falló (no-fatal): {_e}")
 
                 # ── DESCARGAR ADJUNTOS (con email_id propagado) ──
                 guardados, ignorados = download_attachments(

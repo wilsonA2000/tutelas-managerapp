@@ -125,9 +125,14 @@ class EmailSignals:
     accionante_name: str = ""
     sender: str = ""
     thread_parent_case_id: Optional[int] = None  # resuelto antes del matcher
+    # rad23 leído del PATH del link de expediente OneDrive del juzgado
+    # (expediente_links/expediente_fetcher). Es la estructura de archivo del
+    # propio despacho — corrige typos del subject (caso real e2038).
+    rad23_url: str = ""
 
     def has_any(self) -> bool:
-        return bool(self.rad23 or self.rad_corto or self.forest or self.cc_accionante or self.thread_parent_case_id)
+        return bool(self.rad23 or self.rad_corto or self.forest or self.cc_accionante
+                    or self.thread_parent_case_id or self.rad23_url)
 
 
 @dataclass
@@ -157,6 +162,10 @@ class MatchResult:
 
 WEIGHT_THREAD_PARENT = 70
 WEIGHT_RAD23 = 70
+# rad23 del PATH del link de expediente (OneDrive del juzgado): tan confiable
+# como el rad23 del cuerpo (es el archivo del propio despacho) e inmune a
+# typos del subject. El lookup difuso tolera typo en el prefijo DANE.
+WEIGHT_RAD23_URL = 70
 WEIGHT_FOREST_VERIFIED_SENDER = 50
 WEIGHT_FOREST_GENERIC = 20
 WEIGHT_CC = 20
@@ -235,6 +244,23 @@ def score_case_match(
 
     if cid := hits.get("rad23"):
         _add_signal(cid, "rad23", WEIGHT_RAD23)
+
+    # ── 2b. rad23 del link de expediente (OneDrive del juzgado) ──
+    if signals.rad23_url:
+        cid_url = cache.lookup_by_rad23(signals.rad23_url)
+        if cid_url:
+            _add_signal(cid_url, "rad23_url", WEIGHT_RAD23_URL)
+        else:
+            # typo en el prefijo DANE del path del juzgado (caso real 69432→68432):
+            # sufijo [5:21] único entre los casos = misma identidad.
+            cid_url = cache.lookup_by_rad23_suffix(signals.rad23_url)
+            if cid_url:
+                _add_signal(cid_url, "rad23_url_suffix", WEIGHT_RAD23_URL)
+                logger.info(
+                    "rad23_url %s no exacto en KB pero sufijo[5:21] único → case %d "
+                    "(typo de prefijo DANE en el path del juzgado)",
+                    signals.rad23_url, cid_url,
+                )
 
     if cid := hits.get("forest"):
         sender_lower = (signals.sender or "").lower()

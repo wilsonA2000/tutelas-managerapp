@@ -201,6 +201,21 @@ class CaseLookupCache:
             return None
         return self.by_rad23.get(norm[:21])
 
+    def lookup_by_rad23_suffix(self, rad23: str | None) -> int | None:
+        """Lookup difuso por sufijo [5:21] del rad23 (16 dígitos: entidad+espec+
+        despacho+año+secuencia). Para rads que llegan con typo en el prefijo DANE
+        de municipio (caso real: carpeta del juzgado decía 69432... por 68432...).
+        Solo retorna si el match es ÚNICO — ambigüedad = None."""
+        if not rad23:
+            return None
+        norm = normalize_rad23(rad23)
+        if len(norm) < 21:
+            return None
+        skey = norm[5:21]
+        with self._lock:
+            hits = {cid for k, cid in self.by_rad23.items() if len(k) >= 21 and k[5:21] == skey}
+        return next(iter(hits)) if len(hits) == 1 else None
+
     def lookup_by_rad_corto(self, rad_corto: str | None) -> int | None:
         if not rad_corto:
             return None
