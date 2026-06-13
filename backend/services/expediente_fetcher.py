@@ -230,11 +230,14 @@ def _case_hashes(db, case_id: int) -> set[str]:
     return hashes
 
 
-def fetch_link(db, link, *, dry_run: bool = True, throttle: float = 1.0) -> dict:
+def fetch_link(db, link, *, dry_run: bool = True, throttle: float = 1.0,
+               allow_conflict: bool = False) -> dict:
     """Procesa UN ExpedienteLink: resolver → manifest → dedupe → descargar → registrar.
 
     Con dry_run=True solo resuelve y lista (actualiza rad/etapa/n_files del link,
-    NO descarga). Retorna reporte dict. Nunca lanza: el error queda en el link.
+    NO descarga). `allow_conflict=True` omite el guard de rad (solo para conflictos
+    YA revisados y confirmados manualmente — p.ej. traslados entre juzgados donde
+    el rad cambia pero es la misma tutela). Nunca lanza: el error queda en el link.
     """
     from backend.database.models import Case, Document
 
@@ -291,7 +294,7 @@ def fetch_link(db, link, *, dry_run: bool = True, throttle: float = 1.0) -> dict
     # consistencia). NO bajar — marcar CONFLICTO para revisión humana.
     skey_url = rad23_suffix_key(link.rad23_url)
     skey_case = rad23_suffix_key(case.radicado_23_digitos)
-    if skey_url and skey_case and skey_url != skey_case:
+    if not allow_conflict and skey_url and skey_case and skey_url != skey_case:
         link.estado = "CONFLICTO"
         link.error_detail = (f"rad del link ({link.rad23_url}) ≠ rad del caso "
                              f"({case.radicado_23_digitos}); no se baja para no contaminar — revisar")
