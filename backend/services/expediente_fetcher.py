@@ -121,6 +121,17 @@ def resolve_share_link(url: str, timeout: int = _TIMEOUT,
     }
 
 
+# señal de caso en la ruta: rad de 19-23 díg, rad corto AAAA-NNNNN, o año 20xx
+_CASE_SIGNAL_RE = re.compile(r"\d{19,23}|20\d{2}[-\s]?\d{4,5}|\b20[12]\d\b")
+
+
+def _path_has_case_signal(server_path: str) -> bool:
+    """True si la ruta tiene señal de un caso concreto (rad/año). False para
+    carpetas administrativas genéricas del juzgado ('ACTAS Y CONSTANCIAS', etc.)."""
+    from urllib.parse import unquote
+    return bool(_CASE_SIGNAL_RE.search(unquote(server_path or "")))
+
+
 def _api_base(host: str, server_path: str) -> str:
     """https://<host>/personal/<owner> — raíz del sitio personal para la API."""
     parts = [p for p in server_path.split("/") if p]
@@ -284,6 +295,19 @@ def fetch_link(db, link, *, dry_run: bool = True, throttle: float = 1.0,
         link.estado = "ERROR"
         link.error_detail = "caso sin carpeta en disco"
         report["estado"] = "ERROR"
+        report["error"] = link.error_detail
+        return report
+
+    # ── GUARD DE CARPETA GENÉRICA ──
+    # Una carpeta SIN señal de caso en la ruta (ni rad23, ni rad corto AAAA-NNNNN,
+    # ni año) es un folder administrativo del juzgado compartido por error
+    # (p.ej. "00. ACTAS Y CONSTANCIAS" con cientos de archivos cross-caso).
+    # Bajarla contamina el caso con docs de otros. NO bajar — marcar CONFLICTO.
+    if not allow_conflict and not _path_has_case_signal(res["server_path"]):
+        link.estado = "CONFLICTO"
+        link.error_detail = ("carpeta genérica del juzgado (sin radicado ni año en la ruta) — "
+                             "no es el expediente del caso; no se baja para no contaminar")
+        report["estado"] = "CONFLICTO"
         report["error"] = link.error_detail
         return report
 

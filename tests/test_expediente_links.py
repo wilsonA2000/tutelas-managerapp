@@ -220,6 +220,30 @@ class TestConflictGuard:
         monkeypatch.setattr(fx, "list_folder", lambda *a, **k: [
             {"name": "001.pdf", "size": 1000, "modified": "", "server_path": server_path + "/001.pdf", "subfolder": ""}])
 
+    def test_path_case_signal(self):
+        from backend.services.expediente_fetcher import _path_has_case_signal
+        assert _path_has_case_signal("/personal/x/Documents/02Tutelas2022/68432318900120220012700")
+        assert _path_has_case_signal("/personal/x/.../2026-00055-00 - TUTELA")
+        assert _path_has_case_signal("/personal/x/.../68705-40-89-001-2024-00012-01")
+        # genéricas del juzgado → sin señal de caso
+        assert not _path_has_case_signal("/personal/j19pmbuc/Documents/00. ACTAS Y CONSTANCIAS")
+        assert not _path_has_case_signal("/personal/x/Documents/TUTELAS DE PRIMERA INSTANCIA")
+
+    def test_carpeta_generica_no_descarga(self, monkeypatch, db_session, tmp_path):
+        """Carpeta genérica del juzgado (sin rad/año en ruta) → CONFLICTO, sin bajar."""
+        import backend.services.expediente_fetcher as fx
+        from backend.database.models import Case
+        case = Case(folder_name="2026-00055 X", folder_path=str(tmp_path),
+                    radicado_23_digitos="68001400901920260005500", processing_status="COMPLETO")
+        db_session.add(case); db_session.commit()
+        self._patch_resolve(monkeypatch,
+                            "/personal/j19pmbuc_cendoj_ramajudicial_gov_co/Documents/00. ACTAS Y CONSTANCIAS", "")
+        link = self._FakeLink(case.id, "")
+        r = fx.fetch_link(db_session, link, dry_run=False)
+        assert r["estado"] == "CONFLICTO"
+        assert "genérica" in link.error_detail
+        assert list(tmp_path.iterdir()) == []
+
     def test_conflicto_no_descarga(self, monkeypatch, db_session, tmp_path):
         """rad del link ≠ rad del caso → CONFLICTO, sin tocar disco."""
         import backend.services.expediente_fetcher as fx
