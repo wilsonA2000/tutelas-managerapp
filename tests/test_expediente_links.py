@@ -235,6 +235,24 @@ class TestConflictGuard:
         assert link.estado == "CONFLICTO"
         assert list(tmp_path.iterdir()) == []  # no descargó nada
 
+    def test_otp_extract_code(self):
+        from backend.services.expediente_otp import extract_code_from_text
+        assert extract_code_from_text("Su código de verificación es 4829173") == "4829173"
+        assert extract_code_from_text("Tu código: 028471\nGracias") == "028471"
+        # prioriza la línea con 'código' sobre otros números
+        assert extract_code_from_text("Folio 2026-00180\nCódigo de verificación 556677") == "556677"
+        assert extract_code_from_text("sin numeros aqui") == ""
+
+    def test_otp_parse_hidden(self):
+        from backend.services.expediente_otp import _parse_hidden, _has_code_field
+        html = ('<input type="hidden" name="__VIEWSTATE" value="abc123" />'
+                '<input type="hidden" name="__EVENTVALIDATION" value="xyz" />'
+                '<input type="text" name="visible" value="no" />')
+        h = _parse_hidden(html)
+        assert h == {"__VIEWSTATE": "abc123", "__EVENTVALIDATION": "xyz"}
+        assert not _has_code_field(html)
+        assert _has_code_field('<input name="txtVerificationCode">')
+
     def test_typo_mismo_sufijo_no_es_conflicto(self, monkeypatch, db_session, tmp_path):
         """rad con typo de prefijo DANE pero mismo sufijo [5:21] → NO es conflicto."""
         import backend.services.expediente_fetcher as fx
