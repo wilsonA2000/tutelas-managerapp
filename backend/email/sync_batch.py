@@ -192,8 +192,9 @@ def _process_one_message(
         exped_urls: list[str] = []
         rad23_url = ""
         try:
-            from backend.email.expediente_links import harvest_expediente_links
-            exped_urls = harvest_expediente_links(f"{subject}\n{body}")
+            from backend.email.expediente_links import harvest_expediente_links, es_link_judicial
+            exped_urls = [u for u in harvest_expediente_links(f"{subject}\n{body}")
+                          if es_link_judicial(u)]
             if exped_urls and not (cache.is_built and cache.lookup_by_rad23(radicado_data.get("radicado_23", ""))):
                 from backend.services.expediente_fetcher import resolve_share_link
                 _res = resolve_share_link(exped_urls[0], timeout=20)
@@ -333,9 +334,11 @@ def _persist_email(
 
     # Links de expediente del juzgado → cola del fetcher (no-fatal)
     try:
-        from backend.email.expediente_links import harvest_expediente_links, parse_expediente_link
+        from backend.email.expediente_links import harvest_expediente_links, parse_expediente_link, es_link_judicial
         from backend.database.models import ExpedienteLink
         for _u in harvest_expediente_links(f"{subject}\n{body or ''}"):
+            if not es_link_judicial(_u):
+                continue
             if db.query(ExpedienteLink.id).filter(ExpedienteLink.url == _u).first():
                 continue
             _pi = parse_expediente_link(_u)

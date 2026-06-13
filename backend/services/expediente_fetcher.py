@@ -89,6 +89,17 @@ def resolve_share_link(url: str, timeout: int = _TIMEOUT,
     final_info = parse_expediente_link(final)
     server_path = final_info.server_path or info.server_path
     if not server_path:
+        # Sin redirect a onedrive.aspx: SharePoint sirvió una página shell.
+        # Distinguir: link "personas específicas" (OTP) vs caducado/revocado.
+        body_head = (r.text or "")[:300_000]
+        title_m = re.search(r"<title>\s*([^<]*?)\s*</title>", body_head, re.DOTALL)
+        title = (title_m.group(1) if title_m else "").strip()
+        if "error" in title.lower():
+            return {"estado": "EXPIRADO",
+                    "error_detail": "SharePoint sirvió página de Error (link caducado o revocado)"}
+        if "código" in body_head.lower() or "verification" in body_head.lower():
+            return {"estado": "REQUIERE_ACCESO",
+                    "error_detail": "link 'personas específicas' (exige verificación)"}
         return {"estado": "ERROR", "error_detail": "no pude derivar server_path del redirect"}
 
     d = parse_server_path(server_path)

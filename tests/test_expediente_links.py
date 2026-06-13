@@ -72,6 +72,17 @@ class TestParse:
         assert d["rad23_url"] == "68432318900120220012700"
         assert d["etapa"] == ""
 
+    def test_parse_server_path_rad_embebido(self):
+        # caso real: el juzgado nombra la carpeta con texto alrededor del rad
+        d = parse_server_path("/personal/x/Documents/Tutelas/03) 684644089001202500107Educación")
+        assert d["rad23_url"] == "684644089001202500107"
+        assert d["etapa"] == ""  # la carpeta del caso, no una etapa
+
+    def test_parse_server_path_rad_embebido_con_etapa(self):
+        d = parse_server_path("/personal/x/Documents/03) 684644089001202500107Educación/002SegundaInstancia")
+        assert d["rad23_url"] == "684644089001202500107"
+        assert d["etapa"] == "002SegundaInstancia"
+
     def test_share_file(self):
         info = parse_expediente_link(TOKENIZED.replace("/:f:/", "/:b:/"))
         assert info.kind == "share_file"

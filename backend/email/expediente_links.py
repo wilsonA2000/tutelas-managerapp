@@ -96,9 +96,15 @@ def _juzgado_hint(owner: str) -> str:
 
 
 def parse_server_path(server_path: str) -> dict:
-    """Extrae rad/etapa/instancia/archivado de un server-relative path decodificado."""
+    """Extrae rad/etapa/instancia/archivado de un server-relative path decodificado.
+
+    El rad puede venir como segmento puro (`.../68432318900120220012700/...`) o
+    EMBEBIDO en el nombre de la carpeta del juzgado (caso real:
+    `03) 684644089001202500107Educación`). Se prefiere el segmento puro; si no
+    hay, se toma el último rad embebido (carpeta más profunda)."""
     segs = [s for s in unquote(server_path).split("/") if s]
     rad = ""
+    rad_seg = ""   # segmento donde vive el rad
     etapa = ""
     instancia = ""
     archivado = False
@@ -107,13 +113,19 @@ def parse_server_path(server_path: str) -> dict:
             archivado = True
         if not instancia and re.match(r"^\d{3}.*(Instancia|Tutela)", s, re.IGNORECASE):
             instancia = s
-        m = _RAD_IN_PATH_RE.fullmatch(s)
-        if m:
-            rad = m.group(0)
+        if _RAD_IN_PATH_RE.fullmatch(s):
+            rad = s
+            rad_seg = s
+    if not rad:
+        for s in segs:
+            for m in _RAD_IN_PATH_RE.finditer(s):
+                rad = m.group(0)
+                rad_seg = s
     if segs:
         last = segs[-1]
-        # la carpeta compartida es una etapa si el último segmento NO es el rad
-        if last != rad and not _RAD_IN_PATH_RE.fullmatch(last):
+        # la carpeta compartida es una etapa solo si el último segmento NO es
+        # (ni contiene) el rad — si lo contiene, ES la carpeta del caso.
+        if last != rad_seg and not _RAD_IN_PATH_RE.search(last):
             etapa = last
     return {
         "rad23_url": rad,
@@ -165,6 +177,17 @@ def parse_expediente_link(url: str) -> ExpedienteLinkInfo:
         return info
 
     return info
+
+
+def es_link_judicial(url: str) -> bool:
+    """True si el link es del tenant de la Rama Judicial (expediente cendoj).
+
+    Los correos también traen links del tenant de la Gobernación
+    (santandergov-my.sharepoint.com — Words internos de la SED): esos NO son
+    expedientes y no entran a la cola del fetcher (hallazgo del backfill
+    2026-06-12: 163/385 links eran internos)."""
+    host = urlparse(url).netloc.lower()
+    return "etbcsj" in host or "cendoj" in url.lower()
 
 
 # ── Matching difuso del rad de URL ────────────────────────────────

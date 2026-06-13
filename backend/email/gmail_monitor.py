@@ -1137,8 +1137,9 @@ def check_inbox(db: Session) -> list[dict]:
                 exped_urls: list[str] = []
                 rad23_url = ""
                 try:
-                    from backend.email.expediente_links import harvest_expediente_links
-                    exped_urls = harvest_expediente_links(f"{subject}\n{body}")
+                    from backend.email.expediente_links import harvest_expediente_links, es_link_judicial
+                    exped_urls = [u for u in harvest_expediente_links(f"{subject}\n{body}")
+                                  if es_link_judicial(u)]
                     if exped_urls:
                         _cache_pre = get_cache()
                         _kb_hit = (_cache_pre.lookup_by_rad23(radicado_data.get("radicado_23", ""))
