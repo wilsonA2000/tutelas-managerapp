@@ -1,4 +1,4 @@
-# Tutelas Manager — Gobernación de Santander
+# Tutelas Manager gobernaciones
 
 Plataforma de gestión, auditoría y seguimiento de acciones de tutela
 de la Secretaría de Educación Departamental.
