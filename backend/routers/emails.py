@@ -42,7 +42,19 @@ def api_assign_email(email_id: int, case_id: int, db: Session = Depends(get_db))
     ))
     db.commit()
 
-    return email.to_dict()
+    # Fix A: al asignar, importar los adjuntos huérfanos del correo (mover a la
+    # carpeta del caso, registrar+extraer+verificar, generar .md, vincular email_id).
+    # Sin esto el caso quedaba "sin documentos vinculados" tras la asignación manual.
+    import_result = None
+    try:
+        from backend.services.sync_service import import_email_attachments_to_case
+        import_result = import_email_attachments_to_case(db, email, case, source="email_assign")
+    except Exception as e:
+        import_result = {"error": str(e)}
+
+    data = email.to_dict()
+    data["imported_attachments"] = import_result
+    return data
 
 
 @router.get("/detail/{email_id}")

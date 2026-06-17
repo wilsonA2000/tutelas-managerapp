@@ -13,8 +13,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.database.models import Base, Case, Document
-from backend.services.sync_service import sync_case_folder
+from backend.database.models import Base, Case, Document, Email
+from backend.services.sync_service import sync_case_folder, import_email_attachments_to_case
 
 
 @pytest.fixture
@@ -63,3 +63,54 @@ def test_elimina_filas_de_archivos_desaparecidos(db, tmp_path):
     r = sync_case_folder(db, c, source="test")
     assert r["docs_removed"] == 1
     assert db.query(Document).filter(Document.case_id == c.id).count() == 0
+
+
+# ── Fix A (2026-06-17): assign importa adjuntos huérfanos ────────────────────
+# Correos AMBIGUO entran sin caso → adjunto a _emails_sin_clasificar/ sin fila
+# Document. Al asignar email→caso, import_email_attachments_to_case lo mueve,
+# registra+extrae y vincula email_id.
+
+def test_import_adjunto_huerfano_al_asignar(db, tmp_path):
+    unsorted = tmp_path / "_emails_sin_clasificar"
+    unsorted.mkdir()
+    orphan = unsorted / "RTA EDGAR.pdf"
+    orphan.write_bytes(b"%PDF-1.4 contestacion fake con suficiente texto " + b"x" * 200)
+    folder = tmp_path / "2026-00125 EDGAR GALVIS"
+    folder.mkdir()
+    c = Case(folder_name=folder.name, folder_path=str(folder))
+    db.add(c); db.commit()
+    e = Email(message_id="<m1>", subject="RESPUESTA TUTELA", sender="sed@x.gov.co",
+              attachments=[{"filename": orphan.name, "saved_path": str(orphan)}])
+    db.add(e); db.commit()
+
+    r = import_email_attachments_to_case(db, e, c, source="test")
+    assert r["moved"] == 1 and r["errors"] == 0
+    # el archivo se movió a la carpeta del caso y dejó de estar en _emails_sin_clasificar
+    assert (folder / "RTA EDGAR.pdf").exists() and not orphan.exists()
+    # quedó registrado como Document vinculado al email
+    doc = db.query(Document).filter(Document.case_id == c.id,
+                                    Document.filename == "RTA EDGAR.pdf").first()
+    assert doc is not None and doc.email_id == e.id
+
+
+def test_import_dedup_sha256_no_duplica(db, tmp_path):
+    """Si el caso YA tiene el mismo contenido (p.ej. traído por expediente), el
+    huérfano se descarta (dedup por hash), no se duplica."""
+    payload = b"%PDF-1.4 mismo contenido " + b"y" * 200
+    folder = tmp_path / "2026-00200 PRUEBA DEDUP"
+    folder.mkdir()
+    (folder / "ya_existe.pdf").write_bytes(payload)  # ya en la carpeta
+    c = Case(folder_name=folder.name, folder_path=str(folder))
+    db.add(c); db.commit()
+    unsorted = tmp_path / "_emails_sin_clasificar"
+    unsorted.mkdir()
+    dup = unsorted / "RTA_reenviada.pdf"
+    dup.write_bytes(payload)  # mismo sha256, otro nombre
+    e = Email(message_id="<m2>", subject="RV: RESPUESTA", sender="sed@x.gov.co",
+              attachments=[{"filename": dup.name, "saved_path": str(dup)}])
+    db.add(e); db.commit()
+
+    r = import_email_attachments_to_case(db, e, c, source="test")
+    assert r["moved"] == 0 and r["deduped"] == 1
+    assert not dup.exists()  # huérfano dup eliminado
+    assert not (folder / "RTA_reenviada.pdf").exists()  # no se duplicó en la carpeta

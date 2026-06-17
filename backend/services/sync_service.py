@@ -520,3 +520,148 @@ def sync_case_folder(db: Session, case: Case, *, source: str = "sync") -> dict:
         "docs_moved": docs_moved,
         "docs_suspicious": docs_suspicious,
     }
+
+
+def import_email_attachments_to_case(
+    db: Session, email: Email, case: Case, *, source: str = "email_assign",
+) -> dict:
+    """Importa al caso los adjuntos huérfanos de un email recién asignado.
+
+    Cierra el hueco del flujo de asignación manual: cuando un correo entra SIN
+    caso (AMBIGUO/unmatched), `download_attachments` guarda el archivo en
+    `_emails_sin_clasificar/` pero NO crea fila `Document` (guard `if case:`), y
+    el endpoint de asignación solo cambia `case_id`. Resultado: el caso queda
+    "sin documentos vinculados". Esta función, llamada desde el assign, mueve los
+    adjuntos a la carpeta del caso, los registra+extrae+verifica vía
+    `sync_case_folder`, genera el `.md` del cuerpo y vincula `email_id`.
+
+    - Dedup sha256 contra los archivos FÍSICOS del caso (evita duplicar un doc ya
+      traído por el fetch de expediente o reenvíos). El huérfano dup se elimina.
+    - Idempotente: adjuntos ya dentro de la carpeta del caso se ignoran.
+    """
+    import shutil
+    from sqlalchemy.orm.attributes import flag_modified
+
+    result = {"moved": 0, "deduped": 0, "errors": 0, "md_created": False, "sync": None}
+    if not case.folder_path or not Path(case.folder_path).exists():
+        result["error"] = "Carpeta del caso no existe en disco"
+        return result
+    folder = Path(case.folder_path)
+
+    # Dedup definitivo: hashes de los archivos que YA están en la carpeta del caso.
+    existing_hashes: set[str] = set()
+    for f in folder.iterdir():
+        if f.is_file():
+            try:
+                existing_hashes.add(hashlib.sha256(f.read_bytes()).hexdigest())
+            except Exception:
+                pass
+
+    # `Email.attachments` es Column(JSON): SQLAlchemy lo entrega ya como list.
+    # Tolerar también str (datos legacy) por robustez.
+    raw = email.attachments
+    if isinstance(raw, str):
+        import json
+        try:
+            atts = json.loads(raw) if raw else []
+        except Exception:
+            atts = []
+    else:
+        atts = list(raw) if raw else []
+
+    moved_names: list[str] = []
+    changed = False
+    for a in atts:
+        sp = a.get("saved_path") or ""
+        if not sp:
+            continue
+        p = Path(sp)
+        if not p.exists():
+            continue
+        # Ya está dentro de la carpeta del caso → nada que mover (idempotencia).
+        try:
+            if folder.resolve() in p.resolve().parents:
+                continue
+        except Exception:
+            pass
+        try:
+            data = p.read_bytes()
+        except Exception:
+            result["errors"] += 1
+            continue
+        h = hashlib.sha256(data).hexdigest()
+        if h in existing_hashes:
+            # El caso ya tiene este contenido (expediente/reenvío) → borrar huérfano.
+            try:
+                p.unlink()
+            except Exception:
+                pass
+            a["saved_path"] = ""
+            changed = True
+            result["deduped"] += 1
+            continue
+        target = folder / p.name
+        cnt = 1
+        while target.exists():
+            target = folder / f"{p.stem}_{cnt}{p.suffix}"
+            cnt += 1
+        try:
+            shutil.move(str(p), str(target))
+        except Exception:
+            result["errors"] += 1
+            continue
+        existing_hashes.add(h)
+        moved_names.append(target.name)
+        a["saved_path"] = str(target)
+        a["filename"] = target.name
+        changed = True
+        result["moved"] += 1
+        db.add(AuditLog(
+            case_id=case.id, field_name="documento",
+            old_value=f"_emails_sin_clasificar/{p.name}", new_value=str(target),
+            action="EMAIL_ASSIGN_IMPORT", source=source,
+        ))
+
+    if changed:
+        email.attachments = atts
+        flag_modified(email, "attachments")  # JSON in-place mutation no se detecta solo
+
+    # Generar el .md del cuerpo del email en la carpeta del caso (si no existe).
+    try:
+        from backend.email.gmail_monitor import save_email_md
+        md = save_email_md(
+            folder,
+            {
+                "subject": email.subject, "sender": email.sender,
+                "date": email.date_received.isoformat() if email.date_received else "",
+                "folder_name": case.folder_name,
+            },
+            email.body_preview or "", atts,
+            db=db, case_id=case.id, email_id=email.id,
+            email_message_id=email.message_id,
+        )
+        result["md_created"] = bool(md)
+    except Exception as e:
+        logger.warning("import_email_attachments .md falló c%d e%d: %s", case.id, email.id, e)
+
+    db.commit()
+
+    # Registrar + extraer + verificar lo movido (reusa el pipeline local probado).
+    result["sync"] = sync_case_folder(db, case, source=source)
+
+    # Vincular provenance email_id en los documentos recién importados.
+    if moved_names:
+        for doc in db.query(Document).filter(
+            Document.case_id == case.id, Document.filename.in_(moved_names),
+        ).all():
+            if not doc.email_id:
+                doc.email_id = email.id
+                doc.email_message_id = email.message_id
+        db.commit()
+
+    logger.info(
+        "import_email_attachments c%d e%d: +%d movidos, %d dedup, %d err, md=%s",
+        case.id, email.id, result["moved"], result["deduped"], result["errors"],
+        result["md_created"],
+    )
+    return result
