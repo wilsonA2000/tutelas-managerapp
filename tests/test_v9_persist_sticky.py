@@ -129,3 +129,32 @@ def test_sticky_no_genera_conflict_si_valor_es_el_mismo(db):
     r = persist(db, c.id, f, dry_run=False)
     assert r["sticky_conflicts"] == []
     assert "radicado_23_digitos" not in r["changes"]
+
+
+# ── Incidente flag upgrade NO→SI (2026-06-17) ────────────────────────────────
+# El flag `incidente='NO'` es un DEFAULT, no un hecho curado. Cuando nuevos docs
+# revelan un desacato, debe poder hacer upgrade NO→SI aunque ya esté poblado
+# (nunca SI→NO sin intervención manual). Sin esto quedaba incidente='NO' con
+# decision_incidente poblado → contradicción que rompía la derivación de estado
+# (c506/c18/c205).
+
+def test_incidente_upgrade_no_a_si(db):
+    """Case con incidente='NO' (default) → v9 detecta desacato → upgrade a 'SI'."""
+    c = _make_case(db, incidente="NO")
+    f = _fields_with(incidente="SI", decision_incidente="EN_TRAMITE")
+    r = persist(db, c.id, f, dry_run=False)
+    assert r["changes"].get("incidente", {}).get("new") == "SI"
+    db.refresh(c)
+    assert c.incidente == "SI"
+    assert c.decision_incidente == "EN_TRAMITE"  # ya no queda la contradicción
+
+
+def test_incidente_no_se_degrada_si_a_no(db):
+    """SI→NO NO se permite (fill-only/manual): un re-extract sin señal no borra
+    un incidente ya registrado."""
+    c = _make_case(db, incidente="SI")
+    f = _fields_with(incidente="NO")
+    r = persist(db, c.id, f, dry_run=False)
+    assert "incidente" not in r["changes"]
+    db.refresh(c)
+    assert c.incidente == "SI"

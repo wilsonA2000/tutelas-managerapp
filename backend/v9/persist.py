@@ -212,6 +212,17 @@ STICKY_FIELDS: frozenset[str] = frozenset({
 # respetando (línea del check FieldSource.MANUAL, arriba del fill-only).
 _RECOMPUTE_FIELDS: frozenset[str] = frozenset({"estado"})
 
+# Flag PRIMARIO de incidente de desacato: 'NO' es un DEFAULT ("no detectado aún"),
+# no un hecho curado. Cuando nuevos docs (AutoApertura, escrito de desacato) revelan
+# un incidente, debe poder hacer upgrade NO→SI aunque ya esté poblado (nunca SI→NO
+# sin intervención manual). Sin esto, persist fill-only dejaba incidente='NO' con
+# decision_incidente poblado → contradicción que rompe la derivación de estado
+# (c506/c18/c205, 2026-06-17). El valor MANUAL se sigue respetando arriba.
+# Solo el slot 1: los slots 2/3 son CONTEO de incidentes distintos (date-clustering
+# ruidoso que sobre-cuenta etapas de un mismo desacato con muchos docs de expediente,
+# ej. c417) → no se auto-upgradean.
+_INCIDENTE_FLAG_FIELDS: frozenset[str] = frozenset({"incidente"})
+
 
 def persist(
     db: Session,
@@ -305,7 +316,13 @@ def persist(
         # editar a mano vía UI/UPDATE.
         # Excepción: los campos DERIVADOS (_RECOMPUTE_FIELDS, ej. `estado`) SÍ se
         # recomputan aunque ya tengan valor — su valor MANUAL ya se respetó arriba.
-        if current and v9_key not in _RECOMPUTE_FIELDS:
+        # Upgrade NO→SI del flag de incidente: nuevos docs revelan un desacato que
+        # antes no existía. Nunca al revés (SI→NO se respeta como fill-only/manual).
+        _inc_upgrade = (
+            v9_key in _INCIDENTE_FLAG_FIELDS
+            and str(current).upper() == "NO" and str(value).upper() == "SI"
+        )
+        if current and v9_key not in _RECOMPUTE_FIELDS and not _inc_upgrade:
             # 1F: Observaciones — append-only de flags auto-detectados
             if v9_key == "observaciones":
                 merged = _merge_observaciones(str(current), value)
