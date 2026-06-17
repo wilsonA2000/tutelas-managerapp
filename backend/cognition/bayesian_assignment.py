@@ -208,15 +208,27 @@ def infer_assignment(case, doc_ir, doc=None) -> AssignmentVerdict:
     ids: IdentifierSet = harvest_identifiers(doc_ir)
 
     case_rad23 = _norm_digits(getattr(case, "radicado_23_digitos", "") or "")
+
     # v6.0.16: comparar IGNORANDO sufijo de etapa procesal (00/01/02 = misma tutela).
-    # Tomar año+consecutivo+despacho (12 dígitos antes de los últimos 2 del rad23).
-    case_rad23_core = case_rad23[-14:-2] if len(case_rad23) >= 14 else ""
+    # 2026-06-17: robusto a la forma de 21 díg (recurso "00" implícito, el juzgado a veces
+    # imprime el rad sin instancia). Antes `[-14:-2]` se desalineaba entre 21 y 23 díg del
+    # MISMO rad → el rad PROPIO del caso se leía como "de otro caso" → SOSPECHOSO falso
+    # (c330: header trae 686794089001202600115 [21d] = su propio 68679408900120260011500).
+    # Se normaliza quitando la instancia (rad[:21] si ≥23) antes de tomar el core de 12 díg
+    # (despacho+año+consecutivo). Para rads de 23 díg el resultado es idéntico al anterior.
+    def _rad_core(rad_value: str) -> str:
+        rn = _norm_digits(rad_value)
+        if len(rn) >= 23:
+            rn = rn[:21]          # quita instancia (+ excedente) → forma canónica de 21
+        if len(rn) < 12:
+            return ""
+        return rn[-12:]           # despacho(3)+año(4)+consecutivo(5)
+
+    case_rad23_core = _rad_core(case_rad23)
 
     def _rad_matches_case(rad_value: str) -> bool:
-        rn = _norm_digits(rad_value)
-        if not case_rad23_core or len(rn) < 14:
-            return False
-        return rn[-14:-2] == case_rad23_core
+        c = _rad_core(rad_value)
+        return bool(c) and bool(case_rad23_core) and c == case_rad23_core
 
     # 3) RAD23 en el doc
     rads_in_doc = ids.of_kind("rad23")

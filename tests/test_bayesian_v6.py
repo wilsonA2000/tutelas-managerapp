@@ -110,6 +110,29 @@ class TestH4DocDeOtroProceso:
         assert v.verdict == "OK"
 
 
+class TestRad21DigitosRecursoImplicito:
+    """2026-06-17: el juzgado a veces imprime el rad sin la instancia (21 díg). Esa
+    forma es el MISMO rad del caso (23 díg) y NO debe leerse como 'de otro caso'
+    (c330: header 686794089001202600115 [21d] == su propio ...0011500 [23d])."""
+
+    def test_rad21_del_caso_en_header_es_match_no_otro_caso(self):
+        case = _Case(radicado_23_digitos="68001400902720260003400")  # 23 díg
+        # mismo rad sin el sufijo de instancia "00" → 21 díg
+        z = DocumentZone(zone_type="HEADER", text="NOTIFICA AUTO 680014009027202600034")
+        ir = _ir([z])
+        v = infer_assignment(case, ir)
+        assert v.verdict == "OK"
+        assert not any("otro caso" in r.lower() for r in v.reasons_against)
+
+    def test_rad21_de_otro_caso_sigue_no_pertenece(self):
+        # guard anti-regresión: un rad de 21 díg de OTRO consecutivo sí es ajeno
+        case = _Case(radicado_23_digitos="68001400902720260003400")
+        z = DocumentZone(zone_type="HEADER", text="NOTIFICA AUTO 680014009027202600099")
+        ir = _ir([z])
+        v = infer_assignment(case, ir)
+        assert v.verdict == "NO_PERTENECE"
+
+
 class TestSospechosoSinEvidencia:
     def test_sin_ninguna_senal_queda_sospechoso(self):
         case = _Case(radicado_23_digitos="68001400902720260003400")
