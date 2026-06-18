@@ -1,0 +1,21 @@
+{
+ "tipoConsulta": "NumeroRadicacion",
+ "procesos": [],
+ "parametros": {
+  "numero": "68001400902420260012500",
+  "nombre": null,
+  "tipoPersona": null,
+  "idSujeto": null,
+  "ponente": null,
+  "claseProceso": null,
+  "codificacionDespacho": null,
+  "soloActivos": false
+ },
+ "paginacion": {
+  "cantidadRegistros": 0,
+  "registrosPagina": 20,
+  "cantidadPaginas": 0,
+  "pagina": 1,
+  "paginas": null
+ }
+}

@@ -1,0 +1,34 @@
+{
+ "tipoConsulta": "NumeroRadicacion",
+ "procesos": [
+  {
+   "idProceso": 222027970,
+   "idConexion": 298,
+   "llaveProceso": "68001400902420260005500",
+   "fechaProceso": "2026-03-18T00:00:00",
+   "fechaUltimaActuacion": "2026-04-16T00:00:00",
+   "despacho": "DESPACHO 024 - JUZGADO MUNICIPAL - PENAL CON FUNCIÓN DE CONOCIMIENTO - BUCARAMANGA *",
+   "departamento": "SANTANDER",
+   "sujetosProcesales": "Demandante: SARA EDILIA MOGOLLÓN BUSTAMANTE | Demandado: SECRETARÍA DE EDUCACIÓN DEL DEPARTAMENTO DE SANTANDER ",
+   "esPrivado": false,
+   "cantFilas": -1
+  }
+ ],
+ "parametros": {
+  "numero": "68001400902420260005500",
+  "nombre": null,
+  "tipoPersona": null,
+  "idSujeto": null,
+  "ponente": null,
+  "claseProceso": null,
+  "codificacionDespacho": null,
+  "soloActivos": false
+ },
+ "paginacion": {
+  "cantidadRegistros": 1,
+  "registrosPagina": 20,
+  "cantidadPaginas": 1,
+  "pagina": 1,
+  "paginas": null
+ }
+}

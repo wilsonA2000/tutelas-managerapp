@@ -1,0 +1,67 @@
+{
+ "actuaciones": [
+  {
+   "idRegActuacion": 2698188730,
+   "llaveProceso": "68001400902420260005500",
+   "consActuacion": 4,
+   "fechaActuacion": "2026-04-16T00:00:00",
+   "actuacion": "Auto de Impugnacion de Tutela",
+   "anotacion": "Mediante auto del 15 de abril se profiere auto concediendo la impugnacion presentada por la Secretaria de Educación de Santander y se envia a la oficia reparto. Libardo",
+   "fechaInicial": null,
+   "fechaFinal": null,
+   "fechaRegistro": "2026-04-16T00:00:00",
+   "codRegla": "00                              ",
+   "conDocumentos": false,
+   "cant": 4
+  },
+  {
+   "idRegActuacion": 2698188720,
+   "llaveProceso": "68001400902420260005500",
+   "consActuacion": 3,
+   "fechaActuacion": "2026-04-16T00:00:00",
+   "actuacion": "Sentencia de Primera Instancia de Tutela",
+   "anotacion": "Con fecha 6 de abril se emite sentencia de primera instancia tutelando el derecho fundamental al minimo vital. Libardo",
+   "fechaInicial": null,
+   "fechaFinal": null,
+   "fechaRegistro": "2026-04-16T00:00:00",
+   "codRegla": "00                              ",
+   "conDocumentos": false,
+   "cant": 4
+  },
+  {
+   "idRegActuacion": 2690340000,
+   "llaveProceso": "68001400902420260005500",
+   "consActuacion": 2,
+   "fechaActuacion": "2026-03-18T00:00:00",
+   "actuacion": "Auto Admite y Avoca Tutela",
+   "anotacion": "MEDIANTE AUTO DEL 16 DE MARZO DE 2026 SE AVOCA CONOCIMIENTO",
+   "fechaInicial": null,
+   "fechaFinal": null,
+   "fechaRegistro": "2026-03-18T00:00:00",
+   "codRegla": "00                              ",
+   "conDocumentos": false,
+   "cant": 4
+  },
+  {
+   "idRegActuacion": 2690262670,
+   "llaveProceso": "68001400902420260005500",
+   "consActuacion": 1,
+   "fechaActuacion": "2026-03-18T00:00:00",
+   "actuacion": " Radicación de Proceso",
+   "anotacion": "Actuación de  Radicación de Proceso  realizada el 18/03/2026 a las 08:20:01",
+   "fechaInicial": "2026-03-18T00:00:00",
+   "fechaFinal": "2026-03-18T00:00:00",
+   "fechaRegistro": "2026-03-18T00:00:00",
+   "codRegla": "00                              ",
+   "conDocumentos": false,
+   "cant": 4
+  }
+ ],
+ "paginacion": {
+  "cantidadRegistros": 4,
+  "registrosPagina": 40,
+  "cantidadPaginas": 1,
+  "pagina": 1,
+  "paginas": null
+ }
+}
