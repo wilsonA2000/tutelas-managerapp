@@ -95,5 +95,14 @@ def run(db: Session, case, fields: ExtractedFields) -> dict:
         fields.values["fecha_ingreso"] = data["fecha_radicacion"]
         fields.sources["fecha_ingreso"] = FieldSource.API_RAMA_JUDICIAL
         applied.append("fecha_ingreso")
-    logger.info("CPNU enrich c%s: aplicó %s", case.id, applied)
-    return {"found": True, "rad23": rad, "applied": applied}
+
+    # Fase C: vuelca la línea de actuaciones reales a case_actuaciones y detecta novedades.
+    nuevas = []
+    try:
+        from backend.services.rama_judicial_sync import sync_case_actuaciones
+        nuevas = sync_case_actuaciones(db, case, data).get("nuevas", [])
+    except Exception as e:
+        logger.warning("sync actuaciones c%s falló (no-fatal): %s", case.id, str(e)[:120])
+
+    logger.info("CPNU enrich c%s: aplicó %s, +%d actuaciones nuevas", case.id, applied, len(nuevas))
+    return {"found": True, "rad23": rad, "applied": applied, "actuaciones_nuevas": nuevas}

@@ -46,11 +46,19 @@ def _case_to_audit_card(case: Case, now: datetime) -> dict:
                 }
                 break
 
-    # Última actuación administrativa
+    # Última actuación: la CRONOLÓGICAMENTE más reciente (por fecha_actuacion DD/MM/YYYY),
+    # con fallback a imported_at. Antes ordenaba solo por imported_at → tras el backfill
+    # de actuaciones CPNU (todas importadas a la vez) mostraba una arbitraria.
     ult_actuacion = None
     if hasattr(case, "actuaciones_registradas") and case.actuaciones_registradas:
-        ult = sorted(case.actuaciones_registradas,
-                     key=lambda a: a.imported_at or datetime.min, reverse=True)[0]
+        import re as _re
+
+        def _act_key(a):
+            m = _re.match(r"(\d{2})/(\d{2})/(\d{4})", a.fecha_actuacion or "")
+            fkey = (int(m.group(3)), int(m.group(2)), int(m.group(1))) if m else (0, 0, 0)
+            return (fkey, a.imported_at or datetime.min)
+
+        ult = sorted(case.actuaciones_registradas, key=_act_key, reverse=True)[0]
         ult_actuacion = {
             "fecha": ult.fecha_actuacion,
             "tipo": ult.tipo_actuacion,
