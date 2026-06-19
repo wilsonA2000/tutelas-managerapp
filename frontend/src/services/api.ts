@@ -467,4 +467,23 @@ export const dsStats = () =>
     '/deepseek/stats'
   ).then(r => r.data);
 
+// ── Rama Judicial (CPNU) — consulta oficial por radicado ──────────────────
+export interface RamaJudicialActuacion {
+  fecha: string | null; actuacion: string | null; anotacion: string | null;
+  con_documentos: boolean; id_reg_actuacion: number | null;
+}
+export interface RamaJudicialPreview {
+  case_id: number; rad23: string; encontrado: boolean; error?: string | null;
+  juzgado?: string | null; departamento?: string | null; fecha_radicacion?: string | null;
+  clase?: string | null; ponente?: string | null; demandante?: string | null;
+  demandado?: string | null; es_privado?: boolean; actuaciones?: RamaJudicialActuacion[];
+}
+export const ramaJudicialPreview = (caseId: number) =>
+  api.get<RamaJudicialPreview>(`/rama-judicial/preview/${caseId}`, { timeout: 30000 }).then(r => r.data);
+
+export const ramaJudicialFetchDocs = (caseId: number, dryRun = true) =>
+  api.post<{ estado: string; descargados: number; dedup: number; errors: number }>(
+    `/rama-judicial/fetch-docs/${caseId}`, null, { params: { dry_run: dryRun }, timeout: 180000 }
+  ).then(r => r.data);
+
 export default api;

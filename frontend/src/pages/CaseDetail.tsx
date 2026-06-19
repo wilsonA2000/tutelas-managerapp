@@ -7,6 +7,7 @@ import {
   AlertCircle, RefreshCw, ChevronDown, ChevronUp, Trash2, Mail, Package, Lock, FolderInput, Search, Pencil, FolderPlus, Link2, History,
 } from 'lucide-react'
 import HistorialModal from '../components/HistorialModal'
+import RamaJudicialButton from '../components/RamaJudicialButton'
 import { getCase, getCases, updateCase, renameCaseFolder, getDocumentPreviewUrl, syncSingleCase, deleteCase, deleteDocument, suggestDocTarget, moveDocument, markDocOk, getCaseEmailPackages, createCase, getCaseAcumulacion, compareCases, mergeCases, type CaseCompareResult } from '../services/api'
 import StatusBadge from '../components/StatusBadge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -1174,6 +1175,7 @@ export default function CaseDetail() {
           <Button variant="ghost" size="icon-sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} title="Sincronizar carpeta">
             <RefreshCw size={14} className={syncMutation.isPending || caseQ.isFetching ? 'animate-spin' : ''} />
           </Button>
+          <RamaJudicialButton caseId={caseId} />
           <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !dirty}>
             {saveMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
             Guardar
