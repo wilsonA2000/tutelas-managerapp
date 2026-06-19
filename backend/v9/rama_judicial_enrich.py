@@ -1,0 +1,99 @@
+"""Etapa v9: enriquecimiento desde la API CPNU de la Rama Judicial (Fase B).
+
+Gated por flag `RAMA_JUDICIAL_ENABLED` (default OFF) → INERTE en producción hasta
+activarlo. Cuando está ON, setea AUTORITATIVAMENTE los campos ESTRUCTURALES que la
+auditoría 2026-06-18 validó como fuente-de-verdad del juzgado:
+  - `juzgado` (cod_despacho oficial; 87% coincidía en la auditoría)
+  - `fecha_ingreso` (fecha de radicación real; corrige años mal/fechas de correo)
+
+NO toca: accionante/accionados (CPNU parsea mal cooperativas/agentes oficiosos y choca
+con la regla personería-no-personero), ni semánticos (asunto/derecho/pretensiones), ni
+sentido/parte_resolutiva (probatorios). La política de sobrescritura + el guard de
+coherencia de fechas viven en `persist._API_AUTHORITATIVE_FIELDS`.
+
+Cache: `RamaJudicialSync` guarda la respuesta CPNU (TTL 7 días) para no re-pegar la API
+en cada extracción. OJO operativo: con el flag ON, una extracción masiva pega CPNU por
+caso → respetar el rate-limit (ver project_rama_judicial_cpnu).
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import timedelta
+
+from sqlalchemy.orm import Session
+
+from backend.core.time import utcnow
+from backend.email.rad_utils import normalize_rad23, is_valid_rad23
+from backend.v9.types import ExtractedFields, FieldSource
+
+logger = logging.getLogger("tutelas.v9.rama_judicial_enrich")
+
+CACHE_TTL_DAYS = 7
+_AUTHORITATIVE = ("juzgado", "fecha_ingreso")
+
+
+def enabled() -> bool:
+    return os.getenv("RAMA_JUDICIAL_ENABLED", "false").lower() == "true"
+
+
+def _get_or_sync(db: Session, case, rad23: str) -> dict | None:
+    """Devuelve la respuesta CPNU (cache si fresca, si no consulta y cachea)."""
+    from backend.database.models import RamaJudicialSync
+
+    row = (db.query(RamaJudicialSync)
+           .filter(RamaJudicialSync.case_id == case.id)
+           .order_by(RamaJudicialSync.id.desc()).first())
+    if (row and row.expediente_json and row.last_synced_at
+            and (utcnow() - row.last_synced_at) < timedelta(days=CACHE_TTL_DAYS)):
+        try:
+            return json.loads(row.expediente_json)
+        except Exception:
+            pass
+
+    from backend.services import rama_judicial_client as rj
+    try:
+        data = rj.consultar_proceso(rad23).to_dict()
+    except Exception as e:
+        logger.warning("CPNU enrich c%s falló: %s", case.id, str(e)[:120])
+        return None
+
+    if row is None:
+        row = RamaJudicialSync(case_id=case.id, radicado_23_digitos=rad23)
+        db.add(row)
+    row.radicado_23_digitos = rad23
+    row.expediente_json = json.dumps(data, ensure_ascii=False)
+    row.estado_sync = ("SINCRONIZADO" if data.get("encontrado")
+                       else "NO_ENCONTRADO" if data.get("error") == "no_encontrado"
+                       else "ERROR")
+    row.last_actuaciones_count = len(data.get("actuaciones") or [])
+    row.last_synced_at = utcnow()
+    row.error_detail = (data.get("error") or "")[:200]
+    db.commit()
+    return data
+
+
+def run(db: Session, case, fields: ExtractedFields) -> dict:
+    """Force-setea los campos autoritativos en `fields` (la sobrescritura real la
+    decide persist). Returns dict con lo aplicado/estado. No-op si el flag está OFF."""
+    if not enabled():
+        return {"skipped": "RAMA_JUDICIAL_ENABLED off"}
+    rad = normalize_rad23(getattr(case, "radicado_23_digitos", None))
+    if not is_valid_rad23(rad):
+        return {"skipped": "rad23 inválido"}
+    data = _get_or_sync(db, case, rad)
+    if not data or not data.get("encontrado"):
+        return {"found": False, "rad23": rad}
+
+    applied = []
+    if data.get("juzgado"):
+        fields.values["juzgado"] = data["juzgado"]
+        fields.sources["juzgado"] = FieldSource.API_RAMA_JUDICIAL
+        applied.append("juzgado")
+    if data.get("fecha_radicacion"):
+        fields.values["fecha_ingreso"] = data["fecha_radicacion"]
+        fields.sources["fecha_ingreso"] = FieldSource.API_RAMA_JUDICIAL
+        applied.append("fecha_ingreso")
+    logger.info("CPNU enrich c%s: aplicó %s", case.id, applied)
+    return {"found": True, "rad23": rad, "applied": applied}

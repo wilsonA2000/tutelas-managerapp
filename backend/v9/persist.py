@@ -223,6 +223,31 @@ _RECOMPUTE_FIELDS: frozenset[str] = frozenset({"estado"})
 # ej. c417) → no se auto-upgradean.
 _INCIDENTE_FLAG_FIELDS: frozenset[str] = frozenset({"incidente"})
 
+# Campos ESTRUCTURALES donde la API CPNU (Rama Judicial) es FUENTE OFICIAL y SÍ pisa
+# un valor no-manual (decisión Wilson 2026-06-18 "API gana en estructurales"). Se
+# limita a los que la auditoría validó (juzgado: cod_despacho oficial; fecha_ingreso:
+# fecha de radicación real). NO incluye partes (CPNU parsea mal cooperativas/agentes
+# oficiosos). El valor MANUAL se sigue respetando arriba. GUARD de coherencia para
+# fecha_ingreso: no pisar si la fecha de la API es POSTERIOR a un fallo/respuesta ya
+# registrado (= el rad23 es de una etapa posterior, su fechaProceso no es el ingreso).
+_API_AUTHORITATIVE_FIELDS: frozenset[str] = frozenset({"juzgado", "fecha_ingreso"})
+
+
+def _ddmmyyyy_key(s) -> tuple | None:
+    m = re.match(r"(\d{2})/(\d{2})/(\d{4})", str(s or ""))
+    return (int(m.group(3)), int(m.group(2)), int(m.group(1))) if m else None
+
+
+def _fecha_ingreso_coherente(api_fecha, case) -> bool:
+    """True si la fecha de ingreso de la API NO contradice fallos/respuestas previos."""
+    af = _ddmmyyyy_key(api_fecha)
+    if not af:
+        return False
+    post = [k for k in (_ddmmyyyy_key(getattr(case, "fecha_fallo_1st", None)),
+                        _ddmmyyyy_key(getattr(case, "fecha_respuesta", None)),
+                        _ddmmyyyy_key(getattr(case, "fecha_fallo_2nd", None))) if k]
+    return not (post and af > min(post))
+
 
 def persist(
     db: Session,
@@ -322,7 +347,16 @@ def persist(
             v9_key in _INCIDENTE_FLAG_FIELDS
             and str(current).upper() == "NO" and str(value).upper() == "SI"
         )
-        if current and v9_key not in _RECOMPUTE_FIELDS and not _inc_upgrade:
+        # API CPNU autoritativa: pisa estructurales no-manuales (juzgado/fecha_ingreso),
+        # con guard de coherencia para fecha_ingreso (no aceptar fecha posterior a un
+        # fallo/respuesta ya registrado).
+        _api_authoritative = (
+            v9_key in _API_AUTHORITATIVE_FIELDS
+            and fields.sources.get(v9_key) == FieldSource.API_RAMA_JUDICIAL
+            and (v9_key != "fecha_ingreso" or _fecha_ingreso_coherente(value, case))
+        )
+        if (current and v9_key not in _RECOMPUTE_FIELDS
+                and not _inc_upgrade and not _api_authoritative):
             # 1F: Observaciones — append-only de flags auto-detectados
             if v9_key == "observaciones":
                 merged = _merge_observaciones(str(current), value)

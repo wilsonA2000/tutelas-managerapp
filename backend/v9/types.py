@@ -20,6 +20,7 @@ class FieldSource(str, Enum):
     EXCEL = "excel"
     LLM = "llm"
     MANUAL = "manual"
+    API_RAMA_JUDICIAL = "rama_judicial_api"   # CPNU — fuente oficial del juzgado
 
 
 # Las 39 columnas del cuadro Excel (frontend/src/pages/Cuadro.tsx:23-61).

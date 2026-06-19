@@ -158,3 +158,55 @@ def test_incidente_no_se_degrada_si_a_no(db):
     assert "incidente" not in r["changes"]
     db.refresh(c)
     assert c.incidente == "SI"
+
+
+# ── API CPNU autoritativa en estructurales (Fase B, 2026-06-18) ──────────────
+# juzgado/fecha_ingreso con source=API_RAMA_JUDICIAL pisan valor NO-manual;
+# respetan MANUAL; fecha_ingreso con guard de coherencia (no posterior a fallo).
+
+def _fields_api(**kw):
+    f = ExtractedFields()
+    for k, v in kw.items():
+        f.values[k] = v
+        f.sources[k] = FieldSource.API_RAMA_JUDICIAL
+    return f
+
+
+def test_api_pisa_juzgado_no_manual(db):
+    c = _make_case(db, juzgado="JUZGADO REGEX MALO")
+    f = _fields_api(juzgado="JUZGADO 024 PENAL MUNICIPAL DE BUCARAMANGA")
+    r = persist(db, c.id, f, dry_run=False)
+    assert r["changes"].get("juzgado", {}).get("new") == "JUZGADO 024 PENAL MUNICIPAL DE BUCARAMANGA"
+    db.refresh(c)
+    assert c.juzgado == "JUZGADO 024 PENAL MUNICIPAL DE BUCARAMANGA"
+
+
+def test_api_no_pisa_juzgado_manual(db):
+    c = _make_case(db, juzgado="JUZGADO CURADO A MANO")
+    c.field_confidences_json = '{"v9_sources": {"juzgado": "manual"}}'
+    db.commit()
+    f = _fields_api(juzgado="JUZGADO API")
+    r = persist(db, c.id, f, dry_run=False)
+    assert "juzgado" not in r["changes"]
+    db.refresh(c)
+    assert c.juzgado == "JUZGADO CURADO A MANO"
+
+
+def test_api_fecha_ingreso_guard_coherencia(db):
+    # fecha API (19/05) POSTERIOR al fallo 1ra (13/03) → NO se aplica (rad de etapa posterior)
+    c = _make_case(db, fecha_ingreso="01/03/2026", fecha_fallo_1st="13/03/2026")
+    f = _fields_api(fecha_ingreso="19/05/2026")
+    r = persist(db, c.id, f, dry_run=False)
+    assert "fecha_ingreso" not in r["changes"]
+    db.refresh(c)
+    assert c.fecha_ingreso == "01/03/2026"
+
+
+def test_api_fecha_ingreso_coherente_si_pisa(db):
+    # fecha API (09/02) ANTERIOR al fallo (13/03) → coherente → pisa
+    c = _make_case(db, fecha_ingreso="10/02/2026", fecha_fallo_1st="13/03/2026")
+    f = _fields_api(fecha_ingreso="09/02/2026")
+    r = persist(db, c.id, f, dry_run=False)
+    assert r["changes"].get("fecha_ingreso", {}).get("new") == "09/02/2026"
+    db.refresh(c)
+    assert c.fecha_ingreso == "09/02/2026"

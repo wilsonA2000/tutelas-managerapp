@@ -28,7 +28,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from backend.v9 import doc_io, regex_pass, catalog_resolve, excel_reconcile, llm_gap_fill, persist, field_extractor_pass, field_extractor
+from backend.v9 import doc_io, regex_pass, catalog_resolve, excel_reconcile, llm_gap_fill, persist, field_extractor_pass, field_extractor, rama_judicial_enrich
 from backend.v9.types import ExtractedFields, ExtractionResult
 
 logger = logging.getLogger("tutelas.v9.pipeline")
@@ -256,6 +256,16 @@ def extract_case(
     t = time.perf_counter()
     excel_reconcile.run(fields, excel_row)
     timing["excel_reconcile"] = int((time.perf_counter() - t) * 1000)
+
+    # 5.5 rama_judicial_enrich — fuente oficial del juzgado por rad23 (Fase B).
+    # Gated por RAMA_JUDICIAL_ENABLED (default OFF): inerte salvo que se active.
+    # Force-setea juzgado/fecha_ingreso autoritativos; persist decide la sobrescritura.
+    t = time.perf_counter()
+    try:
+        rama_judicial_enrich.run(db, case, fields)
+    except Exception as e:
+        logger.warning("rama_judicial_enrich falló (no-fatal) c%s: %s", case_id, str(e)[:120])
+    timing["rama_judicial_enrich"] = int((time.perf_counter() - t) * 1000)
 
     # 6. llm_gap_fill (último recurso, 0 o 1 llamada; no-op si use_llm=False o V9_DISABLE_LLM)
     t = time.perf_counter()

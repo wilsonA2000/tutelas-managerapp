@@ -528,3 +528,26 @@ class ExpedienteLink(Base):
     n_descargados = Column(Integer, default=0)   # bajados y registrados (acumulado)
     error_detail = Column(String, default="")
     created_at = Column(DateTime, default=_utcnow, server_default=func.now())
+
+
+class RamaJudicialSync(Base):
+    """Cache + estado de sincronización con la API pública CPNU de la Rama Judicial
+    (`services/rama_judicial_client.py`), por radicado de 23 dígitos.
+
+    Evita re-pegar la API en cada extracción: el `expediente_json` guarda la última
+    respuesta normalizada (proceso + actuaciones). `last_actuaciones_count` + el flujo
+    de sync permiten detectar actuaciones NUEVAS (Fase C: alertas de novedad).
+    """
+    __tablename__ = "rama_judicial_syncs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), nullable=True, index=True)
+    radicado_23_digitos = Column(String, index=True)
+
+    estado_sync = Column(String, default="PENDIENTE", index=True)  # PENDIENTE/SINCRONIZADO/NO_ENCONTRADO/ERROR
+    expediente_json = Column(Text, nullable=True)        # ProcesoCPNU.to_dict() serializado
+    last_actuaciones_count = Column(Integer, default=0)  # para detectar novedades
+    last_synced_at = Column(DateTime, nullable=True)
+    error_detail = Column(String, default="")
+    created_at = Column(DateTime, default=_utcnow, server_default=func.now())
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
