@@ -1315,6 +1315,15 @@ def check_inbox(db: Session) -> list[dict]:
                             "Email dup detectado (case=%d subj='%s'), skip",
                             case.id, subject[:50]
                         )
+                        # Marcar leído al saltar: si no, esta copia-duplicada (mismo
+                        # contenido, distinto message_id) queda no-leída para siempre y
+                        # cada sync la re-detecta y re-salta. Espeja los otros skips.
+                        try:
+                            service.users().messages().modify(
+                                userId="me", id=msg_ref["id"], body={"removeLabelIds": ["UNREAD"]}
+                            ).execute()
+                        except Exception as e:
+                            logger.debug("No se pudo marcar leído (F-DEDUP) %s: %s", msg_ref.get("id"), e)
                         continue
 
                 email_record = Email(
