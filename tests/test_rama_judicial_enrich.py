@@ -52,8 +52,9 @@ def test_flag_on_force_setea(db, monkeypatch):
     r = enrich.run(db, _case(db), f)
     assert r["found"] is True
     assert "juzgado" in r["applied"] and "fecha_ingreso" in r["applied"]
-    # force-set pisó el regex en `fields` con source API
-    assert f.values["juzgado"] == "JUZGADO 024 PENAL MUNICIPAL DE BUCARAMANGA"
+    # force-set pisó el regex en `fields` con source API; el numeral CPNU (024) se
+    # normaliza a la forma curada (VEINTICUATRO) antes de persistir.
+    assert f.values["juzgado"] == "JUZGADO VEINTICUATRO PENAL MUNICIPAL DE BUCARAMANGA"
     assert f.sources["juzgado"] == FieldSource.API_RAMA_JUDICIAL
     assert f.values["fecha_ingreso"] == "18/03/2026"
 

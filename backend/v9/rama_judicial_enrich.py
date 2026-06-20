@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import timedelta
 
 from sqlalchemy.orm import Session
@@ -32,6 +33,37 @@ logger = logging.getLogger("tutelas.v9.rama_judicial_enrich")
 
 CACHE_TTL_DAYS = 7
 _AUTHORITATIVE = ("juzgado", "fecha_ingreso")
+
+# CPNU nombra los juzgados con numeral cero-rellenado ("JUZGADO 008 ADMINISTRATIVO…").
+# El cuadro curado usa la forma colombiana: 1-10 ORDINALES (PRIMERO…DÉCIMO), 11+ CARDINALES
+# (ONCE, DOCE…). Sin esto, activar el enrich degradaría 433 juzgados curados al formato feo.
+_JUZGADO_NUMERAL = {
+    1: "PRIMERO", 2: "SEGUNDO", 3: "TERCERO", 4: "CUARTO", 5: "QUINTO",
+    6: "SEXTO", 7: "SÉPTIMO", 8: "OCTAVO", 9: "NOVENO", 10: "DÉCIMO",
+    11: "ONCE", 12: "DOCE", 13: "TRECE", 14: "CATORCE", 15: "QUINCE",
+    16: "DIECISÉIS", 17: "DIECISIETE", 18: "DIECIOCHO", 19: "DIECINUEVE", 20: "VEINTE",
+    21: "VEINTIUNO", 22: "VEINTIDÓS", 23: "VEINTITRÉS", 24: "VEINTICUATRO", 25: "VEINTICINCO",
+    26: "VEINTISÉIS", 27: "VEINTISIETE", 28: "VEINTIOCHO", 29: "VEINTINUEVE", 30: "TREINTA",
+    31: "TREINTA Y UNO", 32: "TREINTA Y DOS", 33: "TREINTA Y TRES", 34: "TREINTA Y CUATRO",
+    35: "TREINTA Y CINCO", 36: "TREINTA Y SEIS", 37: "TREINTA Y SIETE", 38: "TREINTA Y OCHO",
+    39: "TREINTA Y NUEVE", 40: "CUARENTA",
+}
+_JUZ_NUM_RE = re.compile(r"\bJUZGADO\s+0*(\d{1,3})\b", re.IGNORECASE)
+
+
+def normalize_juzgado_cpnu(raw: str | None) -> str | None:
+    """Convierte el numeral CPNU del nombre del juzgado a la forma curada
+    ('JUZGADO 008 ADMINISTRATIVO  DE BUCARAMANGA' → 'JUZGADO OCTAVO ADMINISTRATIVO DE
+    BUCARAMANGA'). Colapsa espacios. Fuera de rango (>40) deja el numeral intacto."""
+    if not raw:
+        return raw
+    s = re.sub(r"\s+", " ", raw).strip()
+
+    def _sub(m: "re.Match") -> str:
+        word = _JUZGADO_NUMERAL.get(int(m.group(1)))
+        return f"JUZGADO {word}" if word else m.group(0)
+
+    return _JUZ_NUM_RE.sub(_sub, s)
 
 
 def enabled() -> bool:
@@ -88,7 +120,9 @@ def run(db: Session, case, fields: ExtractedFields) -> dict:
 
     applied = []
     if data.get("juzgado"):
-        fields.values["juzgado"] = data["juzgado"]
+        # Normaliza el numeral CPNU ("008") a la forma curada ("OCTAVO") para no
+        # degradar el formato del cuadro al sobrescribir (decisión Wilson 2026-06-20).
+        fields.values["juzgado"] = normalize_juzgado_cpnu(data["juzgado"])
         fields.sources["juzgado"] = FieldSource.API_RAMA_JUDICIAL
         applied.append("juzgado")
     if data.get("fecha_radicacion"):
