@@ -4,6 +4,12 @@ DB temporal en /tmp, sin dependencia de IA ni Gmail.
 """
 
 import os
+
+# Blindaje: forzar OFF los flags que disparan red externa (CPNU) en tests, por si el
+# entorno los trae activos. Los tests del pipeline nunca deben pegar a la API real.
+os.environ["RAMA_JUDICIAL_ENABLED"] = "false"
+os.environ["RAMA_JUDICIAL_SYNC_CRON"] = "false"
+
 import sys
 import shutil
 import tempfile
