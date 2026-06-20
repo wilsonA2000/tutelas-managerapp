@@ -15,13 +15,18 @@ if [ -f "$DIR/venv/bin/activate" ]; then
     echo "venv activado: $(which python3)"
 fi
 
-# Activar SOLO los flags Rama Judicial desde .env hacia el entorno del proceso
-# (el backend los lee con os.getenv; start.sh no cargaba .env, así que sin esto
-# quedaban inertes). A propósito NO se exporta el resto del .env: otros flags
-# os.getenv (GMAIL_READ_ONLY, USE_COGNITIVE_PIPELINE, …) corren en sus defaults
-# probados y activarlos en bloque sería riesgoso. Ver project_env_flags_inertes.
+# Exportar al entorno los flags que el backend lee con os.getenv() (start.sh no carga
+# .env, así que sin esto quedan inertes). Selectivo a propósito:
+#   - RAMA_JUDICIAL_*: enrich + cron de novedades.
+#   - V9_LLM_* y LLM_*: la config LLM VALIDADA (single-call + soft_json + sampling
+#     0.7/0.8/20 + modelo Instruct-2507 + ctx 16384). Sin esto la app le manda al 2507
+#     greedy+schema+3-call → degenera (ver bench memoria project_ingesta_2026-06-10).
+# NO se exporta el resto del .env: los flags Clase-A (GMAIL_READ_ONLY, LOCAL_ONLY,
+# USE_COGNITIVE_PIPELINE…) ya los lee Pydantic settings desde el .env. Ver
+# project_env_flags_inertes.
 if [ -f "$DIR/.env" ]; then
-    export $(grep -E '^RAMA_JUDICIAL_(ENABLED|SYNC_CRON)=' "$DIR/.env" | xargs)
+    export $(grep -E '^(RAMA_JUDICIAL_|V9_LLM_|LLM_)[A-Z0-9_]+=' "$DIR/.env" \
+             | grep -vE 'KEY|SECRET|TOKEN' | xargs)
 fi
 
 # Matar procesos previos en los puertos
