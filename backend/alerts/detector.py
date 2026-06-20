@@ -53,6 +53,45 @@ def _create_alert(db: Session, case_id: int | None, alert_type: str, severity: s
     return 1
 
 
+# Tipos de actuación CPNU que merecen alerta de novedad (match por substring, minúsculas).
+# Orden: el primero que matchee gana → poner los más específicos/graves arriba.
+_NOVELTY_RULES: list[tuple[str, str, str]] = [
+    ("sanci",     "HIGH",   "Sanción por desacato"),
+    ("desacato",  "HIGH",   "Movimiento en incidente de desacato"),
+    ("nulidad",   "HIGH",   "Nulidad"),
+    ("revoca",    "HIGH",   "Revocatoria"),
+    ("sentencia", "HIGH",   "Nueva sentencia"),
+    ("fallo",     "HIGH",   "Nuevo fallo"),
+    ("impugn",    "MEDIUM", "Movimiento de impugnación"),
+    ("consulta",  "MEDIUM", "Grado jurisdiccional de consulta"),
+    ("incidente", "MEDIUM", "Movimiento de incidente"),
+]
+
+
+def emit_actuacion_novelty_alerts(db: Session, case, nuevas: list[dict]) -> int:
+    """Emite una Alert por cada actuación CPNU NUEVA *significativa* (fallo, sentencia,
+    sanción, desacato, etc.). `nuevas` es la lista [{fecha, tipo}] que retorna
+    `rama_judicial_sync.sync_case_actuaciones`. El dedup lo hace `_create_alert`
+    (por case_id+alert_type+title); el título incluye la fecha para que dos actuaciones
+    del mismo tipo en fechas distintas generen alertas distintas, pero re-sincronizar la
+    misma no duplique. Returns: nº de alertas creadas."""
+    count = 0
+    for n in nuevas or []:
+        tipo = (n.get("tipo") or "").strip()
+        fecha = (n.get("fecha") or "").strip()
+        low = tipo.lower()
+        rule = next(((sev, lbl) for kw, sev, lbl in _NOVELTY_RULES if kw in low), None)
+        if not rule:
+            continue
+        sev, lbl = rule
+        title = f"{lbl} — {fecha}" if fecha else lbl
+        desc = (f"Rama Judicial (CPNU) reportó una actuación nueva: «{tipo}»"
+                + (f" con fecha {fecha}" if fecha else "")
+                + f" en el caso {getattr(case, 'folder_name', None) or ('#' + str(case.id))}.")
+        count += _create_alert(db, case.id, "NOVEDAD_RAMA_JUDICIAL", sev, title, desc)
+    return count
+
+
 def _detect_deadlines(db: Session) -> int:
     """Detectar casos con fallo CONCEDE sin cumplimiento registrado."""
     count = 0

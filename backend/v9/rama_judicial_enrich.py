@@ -98,11 +98,19 @@ def run(db: Session, case, fields: ExtractedFields) -> dict:
 
     # Fase C: vuelca la línea de actuaciones reales a case_actuaciones y detecta novedades.
     nuevas = []
+    alertas = 0
     try:
         from backend.services.rama_judicial_sync import sync_case_actuaciones
         nuevas = sync_case_actuaciones(db, case, data).get("nuevas", [])
+        # Hook de novedad: emite Alert por cada actuación nueva significativa
+        # (fallo/sentencia/sanción/desacato). Cierra la Fase C.
+        if nuevas:
+            from backend.alerts.detector import emit_actuacion_novelty_alerts
+            alertas = emit_actuacion_novelty_alerts(db, case, nuevas)
     except Exception as e:
         logger.warning("sync actuaciones c%s falló (no-fatal): %s", case.id, str(e)[:120])
 
-    logger.info("CPNU enrich c%s: aplicó %s, +%d actuaciones nuevas", case.id, applied, len(nuevas))
-    return {"found": True, "rad23": rad, "applied": applied, "actuaciones_nuevas": nuevas}
+    logger.info("CPNU enrich c%s: aplicó %s, +%d actuaciones nuevas, %d alertas",
+                case.id, applied, len(nuevas), alertas)
+    return {"found": True, "rad23": rad, "applied": applied,
+            "actuaciones_nuevas": nuevas, "alertas_novedad": alertas}

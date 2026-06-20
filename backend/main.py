@@ -324,6 +324,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         add_monitor_log(f"Active learning no activado: {e}", level="warning")
 
+    # Pendiente A (2026-06-20): cron de sync Rama Judicial (~3:30 AM). Gentil + gated
+    # por RAMA_JUDICIAL_SYNC_CRON (default OFF) → el thread vive pero es inerte hasta
+    # activar el flag. Detecta actuaciones nuevas (fallo/sanción) y emite alertas.
+    try:
+        from backend.services.rama_judicial_cron import run_scheduler_thread as _rj_thread
+        rj_thread = threading.Thread(target=_rj_thread, daemon=True, name="rama-judicial-cron")
+        rj_thread.start()
+        add_monitor_log("Rama Judicial sync scheduler activado (cron 3:30 AM, gated)")
+    except Exception as e:
+        add_monitor_log(f"Rama Judicial cron no activado: {e}", level="warning")
+
     # P16 (2026-06-10): watchdog del appliance — cada 15 min evalúa el chequeo único
     # (db/llm/v9/gmail/fallbacks). En TRANSICIÓN a degraded/down crea una Alert
     # (NotificationCenter) + monitor_log; al recuperarse, log informativo. Razón:
