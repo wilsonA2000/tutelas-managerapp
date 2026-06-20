@@ -101,6 +101,21 @@ def preview(
     return payload
 
 
+def _promote_status_on_success(db: Session, case_id: int) -> None:
+    """Tras una extracción v9 APLICADA con éxito, promover PENDIENTE→COMPLETO
+    (espeja `routers/extraction.py`, que es quien históricamente flipea el status).
+    Conservador: NO toca REVISION ni DUPLICATE_MERGED para preservar flags humanos.
+    Sin esto, el status quedaba stale (260 casos curados marcados PENDIENTE →
+    candidatas falsas en /extraction). Idempotente."""
+    try:
+        c = db.query(Case).filter(Case.id == case_id).first()
+        if c is not None and c.processing_status == "PENDIENTE":
+            c.processing_status = "COMPLETO"
+            db.commit()
+    except Exception:
+        db.rollback()
+
+
 @router.post("/extract/{case_id}")
 def extract_one(
     case_id: int,
@@ -131,6 +146,9 @@ def extract_one(
     finally:
         if _use_llm:
             end_extraction()
+
+    if apply:
+        _promote_status_on_success(db, case_id)
 
     payload = _result_to_payload(result)
     payload["dry_run"] = not apply
@@ -180,6 +198,8 @@ def extract_batch(
             try:
                 r = extract_case(db, cid, dry_run=not apply, use_llm=_use_llm)
                 results.append(_result_to_payload(r))
+                if apply:
+                    _promote_status_on_success(db, cid)
             except Exception as e:
                 logger.warning("v9 batch case=%d falló: %s", cid, str(e)[:200])
                 errors.append({"case_id": cid, "error": str(e)[:200]})
