@@ -315,6 +315,20 @@ def _clean_agenciado(raw: str) -> Optional[str]:
     return v
 
 
+# FIX (2026-05-28): "yo NOMBRE PROPIO ... interpongo/presento" → el accionante real es
+# esa persona, no la Personería (solo vinculada como ministerio público). Hoisted a nivel
+# módulo (de-sobreingeniería F6): antes se recompilaba en cada llamada.
+_PAT_YO_INTERPONGO = re.compile(
+    r"(?i)(?:yo|el\s+suscrito|la\s+suscrita)[\s,]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{4,80}?)"
+    r"[\s,]+(?:identificad[oa]\s+con|mayor\s+de\s+edad|en\s+nombre\s+propio|"
+    r"interpongo|presento|impetro)\b"
+)
+# Personería ACCIONANTE LEGÍTIMA solo si firma "en calidad de Personero/a Municipal de X"
+_PAT_PERSONERIA_EN_CALIDAD = re.compile(
+    r"(?i)en\s+(?:mi\s+)?calidad\s+de\s+personer[oa]\s+municipal"
+)
+
+
 def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str], Optional[str]]:
     """Extrae (accionante, nota_observaciones) del case.
 
@@ -397,20 +411,6 @@ def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str],
                 if c:
                     return c
         return None
-
-    # FIX (2026-05-28): pattern "yo NOMBRE PROPIO ... interpongo/presento" indica
-    # que el verdadero accionante es esa persona, no la Personería que solo está
-    # vinculada como ministerio público. Patrón "yo, JUAN PÉREZ ... interpongo" o
-    # "El suscrito, NOMBRE ... presento acción". Si match → priorizar la persona.
-    _PAT_YO_INTERPONGO = re.compile(
-        r"(?i)(?:yo|el\s+suscrito|la\s+suscrita)[\s,]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{4,80}?)"
-        r"[\s,]+(?:identificad[oa]\s+con|mayor\s+de\s+edad|en\s+nombre\s+propio|"
-        r"interpongo|presento|impetro)\b"
-    )
-    # Personería ACCIONANTE LEGÍTIMA solo si firma "en calidad de Personero/a Municipal de X"
-    _PAT_PERSONERIA_EN_CALIDAD = re.compile(
-        r"(?i)en\s+(?:mi\s+)?calidad\s+de\s+personer[oa]\s+municipal"
-    )
 
     for _dt, head in texts_by_priority:
         # --- Caso 0 (NUEVO 2026-05-28): si hay "yo NOMBRE ... interpongo",
@@ -1501,6 +1501,13 @@ _RE_DESTINO_CTX = re.compile(
 )
 
 
+# Sede de la I.E./colegio/vereda → municipio de afectación. Hoisted (F6, antes recompilado por llamada).
+_RE_SEDE_IE = re.compile(
+    r"(?i)(?:instituci[óo]n\s+educativa|i\.?\s*e\.?|colegio|centro\s+educativo|sede\s+educativa|"
+    r"vereda|corregimiento)\s+[^.,;\n]{0,60}?(?:del?\s+municipio\s+de[l]?|,?\s+municipio\s+de[l]?|\s+de[l]?)\s+"
+    r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40})")
+
+
 def _extract_municipio_afectacion(db: Session, case: Case) -> Optional[str]:
     """Municipio de la I.E./plaza donde se afecta el derecho (no la sede del juzgado).
     CONSERVADOR (alta precisión, baja cobertura): solo el ancla fuerte de PLAZA DE ORIGEN
@@ -1524,12 +1531,7 @@ def _extract_municipio_afectacion(db: Session, case: Case) -> Optional[str]:
         if v:
             return v
 
-    # Ancla 0.5: sede de la I.E./colegio/vereda en la demanda o el auto — la sede
-    # escolar es la afectación (regla del usuario: colegio del menor / plaza docente).
-    _RE_SEDE_IE = re.compile(
-        r"(?i)(?:instituci[óo]n\s+educativa|i\.?\s*e\.?|colegio|centro\s+educativo|sede\s+educativa|"
-        r"vereda|corregimiento)\s+[^.,;\n]{0,60}?(?:del?\s+municipio\s+de[l]?|,?\s+municipio\s+de[l]?|\s+de[l]?)\s+"
-        r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40})")
+    # Ancla 0.5: sede de la I.E./colegio/vereda = la afectación (colegio del menor / plaza docente).
     for dt0 in ("DEMANDA_TUTELA", "AUTO_ADMISORIO", "PDF_AUTO_ADMISORIO"):
         for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt0).all():
             t = d.extracted_text or ""
@@ -3905,6 +3907,10 @@ _TEMPLATE_DATE_MARKERS = (
 )
 
 
+# Asunto de email "RESPUESTA … TUTELA". Hoisted (F6, antes recompilado por llamada).
+_RE_RESP_SUBJ = re.compile(r"(?i)\brespuesta\b[^|\n]{0,60}?\b(?:tutela|acci[óo]n\s+de\s+tutela|auto\s+(?:de\s+traslado|admisori\w+)|requerimiento)|\bcontestaci[óo]n\b[^|\n]{0,40}?tutela")
+
+
 def extract_fecha_respuesta_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
     """`fecha_respuesta` = fecha del oficio de respuesta de la SED (dateline "Ciudad, DD
     de MMMM de AAAA" o header de email "Fecha … DD/MM/AAAA"). Si hay varias respuestas,
@@ -3970,7 +3976,6 @@ def extract_fecha_respuesta_for_case(db: Session, case: Case) -> tuple[Optional[
         return min(cands, key=_key), "docx_respuesta"
 
     # 2) fallback: email .md "RESPUESTA … TUTELA …" → su date_received
-    _RE_RESP_SUBJ = re.compile(r"(?i)\brespuesta\b[^|\n]{0,60}?\b(?:tutela|acci[óo]n\s+de\s+tutela|auto\s+(?:de\s+traslado|admisori\w+)|requerimiento)|\bcontestaci[óo]n\b[^|\n]{0,40}?tutela")
     best: Optional[str] = None
     for e in db.query(Email).filter(Email.case_id == case.id).order_by(Email.date_received.asc()).all():
         s = e.subject or ""
