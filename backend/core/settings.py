@@ -87,11 +87,6 @@ class Settings(BaseSettings):
     # el pipeline cognitivo de 7 capas (borrado): hoy solo gatea el assignment bayesiano.
     USE_COGNITIVE_PIPELINE: bool = False
 
-    # F2 (2026-05-02): confidence scoring por campo (IURIS appliance vendible con SLA jurídico)
-    USE_FIELD_CONFIDENCE: bool = False     # True = computa y persiste field_confidences_json post-extracción
-    CONFIDENCE_OK_THRESHOLD: float = 0.85  # ≥ → banda OK
-    CONFIDENCE_REVIEW_THRESHOLD: float = 0.50  # entre [REVIEW, OK) → banda REVISAR; < REVIEW → BAJO
-
     # IURIS LLM Local (2026-05-03): enrutar IA cuantizada local
     # Cuando LLM_LOCAL_URL está set y LLM_LOCAL_PRIMARY=True, smart_router
     # usa este endpoint como primary, con fallback a Anthropic/DeepSeek.

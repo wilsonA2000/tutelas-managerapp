@@ -315,15 +315,6 @@ async def lifespan(app: FastAPI):
     wal_thread.start()
     add_monitor_log("Scheduler de WAL checkpoint activado (cada 5 min)")
 
-    # v5.3.3: Active learning nocturno (3:00 AM)
-    try:
-        from backend.services.active_learning_scheduler import run_scheduler_thread as _al_thread
-        al_thread = threading.Thread(target=_al_thread, daemon=True, name="active-learning")
-        al_thread.start()
-        add_monitor_log("Active learning scheduler activado (cron 3:00 AM)")
-    except Exception as e:
-        add_monitor_log(f"Active learning no activado: {e}", level="warning")
-
     # Pendiente A (2026-06-20): cron de sync Rama Judicial (~3:30 AM). Gentil + gated
     # por RAMA_JUDICIAL_SYNC_CRON (default OFF) → el thread vive pero es inerte hasta
     # activar el flag. Detecta actuaciones nuevas (fallo/sanción) y emite alertas.
@@ -1423,11 +1414,7 @@ def _extraction_worker_init():
     logging.getLogger("tutelas.extraction.worker").info(
         "Worker process started: pid=%s ppid=%s", os.getpid(), os.getppid()
     )
-    try:
-        from backend.cognition.ner_spacy import _get_nlp
-        _get_nlp()
-    except Exception:
-        pass
+    # (v9 no usa spaCy NER; el preload se retiró con la cadena cognitive_fill)
 
 
 def _process_one_case_extraction(case_id: int) -> dict:

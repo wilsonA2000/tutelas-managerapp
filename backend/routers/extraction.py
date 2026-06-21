@@ -173,11 +173,7 @@ def _extraction_worker_init():
     logging.getLogger("tutelas.extraction.worker").info(
         "Worker process started: pid=%s ppid=%s", os.getpid(), os.getppid()
     )
-    try:
-        from backend.cognition.ner_spacy import _get_nlp
-        _get_nlp()
-    except Exception:
-        pass
+    # (v9 no usa spaCy NER; el preload se retiró con la cadena cognitive_fill)
 
 
 def _process_one_case_router(args: tuple) -> tuple:
