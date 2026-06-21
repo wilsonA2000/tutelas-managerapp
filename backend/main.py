@@ -446,8 +446,6 @@ from backend.alerts.router import router as alerts_router
 app.include_router(alerts_router)
 from backend.routers.intelligence import router as intelligence_router
 app.include_router(intelligence_router)
-from backend.routers.agent import router as agent_router
-app.include_router(agent_router)
 from backend.routers.cleanup import router as cleanup_router
 app.include_router(cleanup_router)
 # (Modernización Fase 6) router `cognitive` retirado: el botón flotante usa /api/chat/.
@@ -459,9 +457,6 @@ app.include_router(v9_router)
 # API CPNU Rama Judicial (Fase E): preview + descarga de expediente por rad23
 from backend.routers.rama_judicial import router as rama_judicial_router
 app.include_router(rama_judicial_router)
-# Pipeline experimental DeepSeek end-to-end (módulo aislado — eliminar si no se adopta)
-from backend.routers.deepseek_pipeline import router as deepseek_pipeline_router
-app.include_router(deepseek_pipeline_router)
 
 
 # ============================================================

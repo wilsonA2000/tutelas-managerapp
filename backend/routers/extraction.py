@@ -480,31 +480,6 @@ def api_extract_batch(req: BatchRequest):
 
 
 
-@router.post("/agent/{case_id}")
-def api_agent_extract(case_id: int, classify: bool = False, force: bool = False, db: Session = Depends(get_db)):
-    """(Modernización Fase 7.3) Alias de "Extraer un caso" sobre el pipeline v9.
-
-    El antiguo "Agente IA v3" (multi-modelo, multi-paso) ya no se usa — generaba ruido.
-    Este endpoint ahora corre `backend.v9.pipeline.extract_case`, igual que `/single/{id}`;
-    `persist.py` solo rellena campos vacíos (no pisa el cuadro). El query param `classify`
-    se ignora (v9 clasifica los docs en la ingesta vía `doc_librarian`).
-    """
-    case = db.query(Case).filter(Case.id == case_id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Caso no encontrado")
-
-    _guard_folder_consistency(db, case_id, force)
-
-    return _extract_case_sync(db, case, use_llm=True, audit=True)
-
-
-@router.get("/agent/{case_id}/reasoning")
-def api_agent_reasoning(case_id: int, db: Session = Depends(get_db)):
-    """Obtener cadena de razonamiento de la última extracción de un caso."""
-    from backend.agent.reasoning import get_reasoning
-    return get_reasoning(db, case_id)
-
-
 @router.get("/review")
 def api_review_queue(db: Session = Depends(get_db)):
     return get_review_queue(db)

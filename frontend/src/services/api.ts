@@ -299,10 +299,6 @@ export const markAlertsSeen = () =>
 export const dismissAlert = (id: number) =>
   api.post(`/alerts/${id}/dismiss`).then(r => r.data);
 
-// Agent Extraction v3
-export const agentExtract = (caseId: number, classify: boolean = false, force: boolean = false) =>
-  api.post(`/extraction/agent/${caseId}?classify=${classify}&force=${force}`, {}, { timeout: 600000 }).then(r => r.data);
-
 // Intelligence
 export const getIntelFavorability = () =>
   api.get('/intelligence/favorability').then(r => r.data);
@@ -327,13 +323,6 @@ export const getCalendarEvents = () =>
 
 export const getDeadlineSummary = () =>
   api.get('/intelligence/deadlines').then(r => r.data);
-
-// Agent
-export const runAgent = (instruction: string) =>
-  api.post('/agent/run', { instruction }, { timeout: 180000 }).then(r => r.data);
-
-export const getAgentTools = () =>
-  api.get('/agent/tools').then(r => r.data);
 
 // Document management
 export const suggestDocTarget = (docId: number) =>
@@ -428,44 +417,6 @@ export const v9Extract = (caseId: number, apply = false) =>
 
 export const v9ExtractBatch = (params: { case_ids?: number[]; limit?: number; apply?: boolean }) =>
   api.post<V9BatchResponse>('/v9/extract-batch', params).then(r => r.data);
-
-// ── Pipeline experimental DeepSeek end-to-end ─────────────────────────────
-export interface DsFieldValue { valor: string; fuente: string; confianza: string }
-export interface DsDocClassification { doc_id: number; filename: string; tipo: string; instancia: string; confianza: string; razon: string }
-export interface DsDiff { campo: string; semaforo: 'VERDE' | 'AMARILLO' | 'GRIS'; v9: string; deepseek: string }
-export interface DsPipelineResult {
-  case_id: number; folder_name: string;
-  doc_classifications: DsDocClassification[];
-  extraction: {
-    campos: Record<string, DsFieldValue>;
-    docs_usados: string[];
-    completitud: number;
-    elapsed_ms: number;
-    error?: string;
-  } | null;
-  diff_vs_v9: DsDiff[];
-  elapsed_ms_total: number;
-  error?: string;
-}
-
-export const dsHealth = () =>
-  api.get<{ available: boolean; message: string }>('/deepseek/health').then(r => r.data);
-
-export const dsProcess = (caseId: number, opts?: { classify_docs?: boolean; extract?: boolean; use_cached?: boolean }) =>
-  api.post<DsPipelineResult>(`/deepseek/process/${caseId}`, opts ?? {}).then(r => r.data);
-
-export const dsGetResult = (caseId: number) =>
-  api.get<DsPipelineResult>(`/deepseek/result/${caseId}`).then(r => r.data);
-
-export const dsApply = (caseId: number, mode: 'fill-empty' | 'all-non-manual' = 'fill-empty') =>
-  api.post<{ updated: string[]; updated_count: number; skipped_manual: string[] }>(
-    `/deepseek/apply/${caseId}`, { mode }
-  ).then(r => r.data);
-
-export const dsStats = () =>
-  api.get<{ total_procesados: number; diff_verde_total: number; diff_amarillo_total: number; completitud_promedio: number }>(
-    '/deepseek/stats'
-  ).then(r => r.data);
 
 // ── Rama Judicial (CPNU) — consulta oficial por radicado ──────────────────
 export interface RamaJudicialActuacion {

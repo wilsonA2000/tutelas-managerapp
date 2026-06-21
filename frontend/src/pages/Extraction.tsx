@@ -4,9 +4,9 @@ import toast from 'react-hot-toast'
 import {
   Cpu, Play, RefreshCw, AlertCircle, Loader2,
   CheckCircle, XCircle, Clock, ChevronRight,
-  Zap, ShieldAlert, Trash2, FileWarning, Search as SearchIcon, ClipboardCheck, Brain, FolderCheck,
+  Zap, ShieldAlert, Trash2, FileWarning, Search as SearchIcon, ClipboardCheck, FolderCheck,
 } from 'lucide-react'
-import { extractBatch, extractSingle, agentExtract, getReviewQueue, getCases, syncFolders, getSyncStatus, getMismatchedDocs, dismissMismatchedDoc, dismissAllMismatchedDocs, verifyAllDocs, getSuspiciousDocs, markDocOk, runFullAudit, getLlmStatus, dsProcess, dsApply, type DsPipelineResult } from '../services/api'
+import { extractBatch, extractSingle, getReviewQueue, getCases, syncFolders, getSyncStatus, getMismatchedDocs, dismissMismatchedDoc, dismissAllMismatchedDocs, verifyAllDocs, getSuspiciousDocs, markDocOk, runFullAudit, getLlmStatus } from '../services/api'
 import { useNavigate } from 'react-router-dom'
 import PageHeader from '../components/PageHeader'
 import PageShell from '../components/PageShell'
@@ -51,11 +51,7 @@ export default function Extraction() {
   const [caseSearch, setCaseSearch] = useState('')
   const [showCaseDropdown, setShowCaseDropdown] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
-  const [extractionMode, setExtractionMode] = useState<'single' | 'agent'>('single')
   const [classifyDocs, setClassifyDocs] = useState(false)
-  // Pipeline experimental DeepSeek
-  const [dsResult, setDsResult] = useState<DsPipelineResult | null>(null)
-  const [dsShowPanel, setDsShowPanel] = useState(false)
   // Casos seleccionados para extracción por lotes (checkboxes en la Cola de Revisión).
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
@@ -136,7 +132,6 @@ export default function Extraction() {
   }
 
   const singleMutation = useMutation({ mutationFn: ({ id, force }: { id: number; force?: boolean }) => extractSingle(id, force, true), onSuccess: handleExtractionSuccess, onError: (e, vars) => handleExtractError(e, () => singleMutation.mutate({ id: vars.id, force: true })) })
-  const agentMutation = useMutation({ mutationFn: ({ id, classify, force }: { id: number; classify: boolean; force?: boolean }) => agentExtract(id, classify, force), onSuccess: handleExtractionSuccess, onError: (e, vars) => handleExtractError(e, () => agentMutation.mutate({ id: vars.id, classify: vars.classify, force: true })) })
   const dismissOneMut = useMutation({ mutationFn: dismissMismatchedDoc, onSuccess: () => { qc.invalidateQueries({ queryKey: ['mismatched-docs'] }); toast.success('Alerta resuelta') } })
   const dismissAllMut = useMutation({ mutationFn: dismissAllMismatchedDocs, onSuccess: (data) => { qc.invalidateQueries({ queryKey: ['mismatched-docs'] }); toast.success(data.message) } })
 
@@ -147,7 +142,7 @@ export default function Extraction() {
     onError: () => toast.error('Error al ejecutar auditoria'),
   })
 
-  const isLoading = batchMutation.isPending || singleMutation.isPending || agentMutation.isPending
+  const isLoading = batchMutation.isPending || singleMutation.isPending
   const reviewQueue: ReviewCase[] = reviewQ.data ?? []
   const allCases = allCasesQ.data?.items ?? []
 
@@ -385,46 +380,18 @@ export default function Extraction() {
           </CardContent>
         </Card>
 
-        {/* Single / Agent */}
+        {/* Extracción individual (motor único v9) */}
         <Card>
           <CardContent className="pt-4 space-y-3">
             <div className="flex items-start gap-3">
-              <div className={cn('p-2 rounded-lg', extractionMode === 'agent' ? 'bg-emerald-50' : 'bg-primary/10')}>
-                {extractionMode === 'agent' ? <Brain size={18} className="text-emerald-600" /> : <Cpu size={18} className="text-primary" />}
+              <div className="p-2 rounded-lg bg-primary/10">
+                <Cpu size={18} className="text-primary" />
               </div>
               <div>
                 <h2 className="font-medium text-foreground text-sm">Extraccion Individual</h2>
-                <p className="text-xs text-muted-foreground mt-0.5">Extrae campos de un caso especifico</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Extrae los campos de un caso con el pipeline v9</p>
               </div>
             </div>
-
-            <div>
-              <label className="text-xs text-muted-foreground font-medium">Metodo de extraccion:</label>
-              <div className="flex gap-1.5 mt-1">
-                <Button variant={extractionMode === 'single' ? 'default' : 'outline'} size="sm" className="flex-1" onClick={() => setExtractionMode('single')}>
-                  <Cpu size={13} /> Estandar
-                </Button>
-                <Button
-                  variant={extractionMode === 'agent' ? 'default' : 'outline'}
-                  size="sm"
-                  className={cn('flex-1', extractionMode === 'agent' && 'bg-emerald-600 hover:bg-emerald-700')}
-                  onClick={() => setExtractionMode('agent')}
-                >
-                  <Brain size={13} /> Avanzado
-                </Button>
-              </div>
-              <p className="text-[10px] text-muted-foreground mt-1">
-                {extractionMode === 'single' ? 'Extraccion rapida de campos desde los documentos' : 'Extraccion avanzada con mayor precision y validacion cruzada'}
-              </p>
-            </div>
-
-            {extractionMode === 'agent' && (
-              <label className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors">
-                <input type="checkbox" checked={classifyDocs} onChange={(e) => setClassifyDocs(e.target.checked)} className="rounded border-amber-300 text-amber-600 focus:ring-amber-500" />
-                <FolderCheck size={14} className="text-amber-600" />
-                <span className="text-xs text-amber-800">Clasificar documentos (mover los que no pertenecen)</span>
-              </label>
-            )}
 
             <div className="relative" ref={dropdownRef}>
               <Input
@@ -457,142 +424,17 @@ export default function Extraction() {
             </div>
 
             <Button
-              onClick={() => {
-                if (!selectedCaseId) return
-                if (extractionMode === 'agent') agentMutation.mutate({ id: selectedCaseId as number, classify: classifyDocs })
-                else singleMutation.mutate({ id: selectedCaseId as number })
-              }}
+              onClick={() => { if (selectedCaseId) singleMutation.mutate({ id: selectedCaseId as number }) }}
               disabled={isLoading || !selectedCaseId}
-              className={cn('w-full', extractionMode === 'agent' && 'bg-emerald-600 hover:bg-emerald-700')}
+              className="w-full"
               size="lg"
             >
-              {(singleMutation.isPending || agentMutation.isPending) ? <Loader2 size={15} className="animate-spin" /> : extractionMode === 'agent' ? <Brain size={15} /> : <Play size={15} />}
-              {(singleMutation.isPending || agentMutation.isPending) ? 'Extrayendo...' : extractionMode === 'agent' ? `Extraer con Agente${classifyDocs ? ' + Clasificar' : ''}` : 'Extraer Caso Individual'}
-            </Button>
-          </CardContent>
-        </Card>
-
-        {/* ── Pipeline experimental DeepSeek ──────────────────────────── */}
-        <Card className="border-violet-200 bg-violet-50/40">
-          <CardContent className="pt-4 space-y-3">
-            <div className="flex items-start gap-3">
-              <div className="p-2 rounded-lg bg-violet-100">
-                <Zap size={18} className="text-violet-600" />
-              </div>
-              <div>
-                <h2 className="font-medium text-foreground text-sm">Pipeline DeepSeek <span className="text-[10px] text-violet-500 font-normal ml-1">[EXPERIMENTAL]</span></h2>
-                <p className="text-xs text-muted-foreground mt-0.5">Clasifica docs + extrae 43 campos en una sola llamada</p>
-              </div>
-            </div>
-
-            <Button
-              onClick={async () => {
-                if (!selectedCaseId) { toast.error('Selecciona un caso primero'); return }
-                setDsShowPanel(false); setDsResult(null)
-                const tid = toast.loading('Procesando con DeepSeek…')
-                try {
-                  const r = await dsProcess(selectedCaseId as number, { classify_docs: true, extract: true })
-                  setDsResult(r); setDsShowPanel(true)
-                  const verde = r.diff_vs_v9.filter(d => d.semaforo === 'VERDE').length
-                  const amarillo = r.diff_vs_v9.filter(d => d.semaforo === 'AMARILLO').length
-                  toast.success(`DeepSeek: ${r.extraction?.completitud ?? 0}% completitud · ${verde} vacíos llenados · ${amarillo} difs`, { id: tid, duration: 5000 })
-                } catch (e: any) {
-                  toast.error(e?.response?.data?.detail ?? 'Error en pipeline DeepSeek', { id: tid })
-                }
-              }}
-              disabled={!selectedCaseId}
-              className="w-full bg-violet-600 hover:bg-violet-700 text-white"
-              size="lg"
-            >
-              <Zap size={15} /> Procesar con DeepSeek
+              {singleMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
+              {singleMutation.isPending ? 'Extrayendo...' : 'Extraer Caso Individual'}
             </Button>
           </CardContent>
         </Card>
       </div>
-
-      {/* ── Panel resultados DeepSeek ──────────────────────────────────── */}
-      {dsShowPanel && dsResult && (
-        <Card className="border-violet-200">
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-violet-100 bg-violet-50 rounded-t-lg">
-            <div className="flex items-center gap-2">
-              <Zap size={15} className="text-violet-600" />
-              <span className="text-sm font-medium text-violet-800">Resultado DeepSeek — {dsResult.folder_name}</span>
-              {dsResult.extraction && (
-                <span className="text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full">
-                  {dsResult.extraction.completitud}% completitud
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={async () => {
-                  if (!dsResult) return
-                  const tid = toast.loading('Aplicando campos vacíos a la DB…')
-                  try {
-                    const r = await dsApply(dsResult.case_id, 'fill-empty')
-                    toast.success(`${r.updated_count} campos aplicados (${r.skipped_manual.length} manuales protegidos)`, { id: tid })
-                  } catch (e: any) {
-                    toast.error('Error al aplicar', { id: tid })
-                  }
-                }}
-                className="text-xs bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-2 py-1 rounded transition-colors"
-              >
-                ✓ Aplicar VERDE a DB
-              </button>
-              <button onClick={() => setDsShowPanel(false)} className="text-xs text-muted-foreground hover:text-foreground">✕ Cerrar</button>
-            </div>
-          </div>
-
-          {/* Doc classifications */}
-          {dsResult.doc_classifications.length > 0 && (
-            <div className="px-4 py-2 border-b border-violet-100">
-              <p className="text-xs font-medium text-muted-foreground mb-1.5">Documentos clasificados:</p>
-              <div className="flex flex-wrap gap-1.5">
-                {dsResult.doc_classifications.map(dc => (
-                  <span key={dc.doc_id} className={cn(
-                    'text-[10px] px-2 py-0.5 rounded-full border',
-                    dc.confianza === 'alta' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
-                    dc.confianza === 'media' ? 'bg-amber-50 border-amber-200 text-amber-700' :
-                    'bg-gray-50 border-gray-200 text-gray-600'
-                  )}>
-                    {dc.tipo}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Diff table */}
-          <CardContent className="p-0 max-h-96 overflow-y-auto">
-            {dsResult.diff_vs_v9.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-6">Sin diferencias — DeepSeek coincide con v9</p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-8"></TableHead>
-                    <TableHead className="text-xs">Campo</TableHead>
-                    <TableHead className="text-xs">Valor actual (v9)</TableHead>
-                    <TableHead className="text-xs">DeepSeek propone</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {dsResult.diff_vs_v9.map(d => (
-                    <TableRow key={d.campo} className={d.semaforo === 'VERDE' ? 'bg-emerald-50/50' : d.semaforo === 'AMARILLO' ? 'bg-amber-50/50' : ''}>
-                      <TableCell className="text-center text-xs">
-                        {d.semaforo === 'VERDE' ? '🟢' : d.semaforo === 'AMARILLO' ? '🟡' : '⚫'}
-                      </TableCell>
-                      <TableCell className="text-xs font-mono text-muted-foreground">{d.campo}</TableCell>
-                      <TableCell className="text-xs max-w-[160px] truncate" title={d.v9}>{d.v9 || <span className="text-muted-foreground/50 italic">vacío</span>}</TableCell>
-                      <TableCell className="text-xs max-w-[200px] truncate font-medium" title={d.deepseek}>{d.deepseek || <span className="text-muted-foreground/50 italic">vacío</span>}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {/* Results */}
       {showResults && results.length > 0 && (

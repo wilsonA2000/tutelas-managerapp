@@ -16,7 +16,6 @@ import {
   Table2,
   LogOut,
   Brain,
-  Wrench,
   Sparkles,
   AlertTriangle,
   TrendingUp,
@@ -33,7 +32,6 @@ import SettingsPage from './pages/Settings'
 import Seguimiento from './pages/Seguimiento'
 import Cuadro from './pages/Cuadro'
 import Intelligence from './pages/Intelligence'
-import AgentTools from './pages/AgentTools'
 import CleanupPanel from './pages/CleanupPanel'
 import EarlyWarning from './pages/EarlyWarning'
 import ExecutiveDashboard from './pages/ExecutiveDashboard'
@@ -67,7 +65,6 @@ const adminItems = [
   { to: '/alertas', label: 'Alertas tempranas', icon: AlertTriangle },
   { to: '/extraction', label: 'Procesamiento (v9)', icon: Cpu },
   { to: '/cleanup', label: 'Mantenimiento', icon: Sparkles },
-  { to: '/agent', label: 'Herramientas IA (v9)', icon: Wrench },
   { to: '/settings', label: 'Configuración', icon: Settings },
 ]
 
@@ -148,8 +145,8 @@ export default function App() {
       </a>
       <div className="flex h-screen bg-background overflow-hidden">
         <ProgressModal />
-        {/* (Retirado) Botón flotante "Asistente jurídico" — tapaba la paginación del listado.
-            El endpoint POST /api/chat/ sigue vivo; el componente quedó en src/_legacy/CognitiveChat.tsx. */}
+        {/* (Retirado) Botón flotante "Asistente jurídico" — tapaba la paginación.
+            El endpoint POST /api/chat/ sigue vivo. */}
 
         {/* Mobile overlay */}
         <AnimatePresence>
@@ -315,7 +312,6 @@ export default function App() {
                   <Route path="/reports" element={<Reports />} />
                   <Route path="/cuadro" element={<Cuadro />} />
                   <Route path="/intelligence" element={<Intelligence />} />
-                  <Route path="/agent" element={<AgentTools />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/seguimiento" element={<Seguimiento />} />
                   <Route path="/cleanup" element={<CleanupPanel />} />
