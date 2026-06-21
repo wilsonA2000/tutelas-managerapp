@@ -26,28 +26,11 @@ from backend.v9.regex_pass import _extract_forest
 
 logger = logging.getLogger("tutelas.v9.field_extractor")
 
-
-def _read_doc_text(doc: Document) -> str:
-    """Devuelve el texto del doc. Para .md lee del disco; para PDF/DOCX usa extracted_text."""
-    if doc.doc_type in ("EMAIL_JUDICIAL", "EMAIL_INTERNO") or (doc.filename or "").endswith(".md"):
-        p = Path(doc.file_path) if doc.file_path else None
-        if p and p.exists():
-            try:
-                return p.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                return ""
-        return ""
-    return doc.extracted_text or ""
-
-
-def _emails_chronological(db: Session, case_id: int) -> list[Email]:
-    """Emails del case ordenados del más antiguo al más reciente."""
-    return (
-        db.query(Email)
-        .filter(Email.case_id == case_id)
-        .order_by(Email.date_received.asc())
-        .all()
-    )
+# Helpers cross-cutting → extractors/_shared.py (de-sobreingeniería F6). Se re-exportan
+# aquí para preservar el contrato público (tests/scripts importan estos nombres de field_extractor).
+from backend.v9.extractors._shared import (  # noqa: E402
+    _read_doc_text, _emails_chronological, _rad_year, _fold,
+)
 
 
 # ============================================================
@@ -863,10 +846,7 @@ _DERECHO_REGION_STOPSTART = re.compile(
 )
 
 
-def _fold(s: str) -> str:
-    """minúsculas + sin tildes (para matching robusto de keywords)."""
-    s = _ud.normalize("NFKD", s)
-    return "".join(c for c in s if not _ud.combining(c)).lower()
+# _fold → extractors/_shared.py (importado arriba)
 
 
 def _tags_in_region(region: str) -> list[str]:
@@ -1736,19 +1716,7 @@ def _parse_es_dates(text: str) -> list[tuple[int, str]]:
     return out
 
 
-def _rad_year(case: Case) -> Optional[int]:
-    """Año del radicado de 23 dígitos (chars 12-15) — usado como cota de cordura
-    para las fechas (el auto/admisión cae el mismo año o ±1 del radicado)."""
-    rad = getattr(case, "radicado_23_digitos", None) or ""
-    rad = re.sub(r"\D", "", rad)
-    if len(rad) >= 16:
-        try:
-            y = int(rad[12:16])
-            if 2018 <= y <= 2030:
-                return y
-        except ValueError:
-            pass
-    return None
+# _rad_year → extractors/_shared.py (importado arriba)
 
 
 def _first_date_near_year(dates: list[tuple[int, str]], year_hint: Optional[int], tol: int = 1) -> Optional[str]:
