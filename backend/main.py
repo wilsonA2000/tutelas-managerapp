@@ -1355,10 +1355,32 @@ def api_settings_status():
     from backend.config import GMAIL_USER, GMAIL_APP_PASSWORD, DB_PATH, BASE_DIR
 
     deepseek_key = os.getenv("DEEPSEEK_API_KEY", "")
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
     gmail_ok = bool(GMAIL_USER and GMAIL_APP_PASSWORD)
-    deepseek_ok = bool(deepseek_key)
     db_ok = DB_PATH.exists()
     folders_ok = BASE_DIR.exists()
+
+    # IA: en producción el motor real es el llama-server local (Qwen3-4B en :8765);
+    # DeepSeek/Anthropic son respaldos opcionales. El panel debe reportar la IA como
+    # operativa si CUALQUIER motor está disponible — no solo si hay key externa.
+    local_llm_url = os.getenv("LLM_LOCAL_URL", "http://127.0.0.1:8765")
+    local_llm_ok = False
+    try:
+        import urllib.request
+        urllib.request.urlopen(f"{local_llm_url}/v1/models", timeout=0.8)
+        local_llm_ok = True
+    except Exception:
+        local_llm_ok = False
+
+    ai_ok = local_llm_ok or bool(deepseek_key) or bool(anthropic_key)
+    if local_llm_ok:
+        ai_detail = f"Qwen3-4B local · llama-server ({local_llm_url})"
+    elif deepseek_key:
+        ai_detail = f"DeepSeek · Key: {deepseek_key[:12]}..."
+    elif anthropic_key:
+        ai_detail = "Claude Haiku 4.5 (Anthropic)"
+    else:
+        ai_detail = "Sin motor IA disponible (local apagado, sin keys externas)"
 
     # Contar casos y documentos
     cases_count = 0
@@ -1375,24 +1397,25 @@ def api_settings_status():
     return {
         # Campos que el frontend espera para los 4 servicios
         "gmail": gmail_ok,
-        "deepseek": deepseek_ok,
+        "deepseek": ai_ok,
         "database": db_ok,
         "folders": folders_ok,
         # Detalles extra
         "gmail_detail": f"Usuario: {GMAIL_USER}" if gmail_ok else "No configurado en .env",
-        "deepseek_detail": f"Key: {deepseek_key[:12]}..." if deepseek_ok else "No configurado en .env",
+        "deepseek_detail": ai_detail,
         "database_detail": f"SQLite: {DB_PATH}",
         "folders_detail": f"Ruta: {BASE_DIR}",
         # Info adicional
         "gmail_configured": gmail_ok,
-        "deepseek_configured": deepseek_ok,
+        "deepseek_configured": ai_ok,
+        "local_llm_ok": local_llm_ok,
         "monitor_enabled": gmail_monitor_enabled,
         "monitor_interval_minutes": GMAIL_CHECK_INTERVAL // 60,
         "last_gmail_check": last_gmail_check,
         "cases_count": cases_count,
         "documents_count": documents_count,
         # API fallback pagada
-        "anthropic_configured": bool(os.getenv("ANTHROPIC_API_KEY", "")),
+        "anthropic_configured": bool(anthropic_key),
     }
 
 

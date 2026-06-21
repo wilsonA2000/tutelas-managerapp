@@ -31,7 +31,7 @@ const SERVICES: StatusItem[] = [
   {
     key: 'deepseek',
     label: 'Inteligencia Artificial',
-    description: 'DeepSeek V3.2 + Claude Haiku 4.5 para extraccion de campos',
+    description: 'Qwen3-4B local (llama-server) · DeepSeek/Claude como respaldo opcional',
     icon: Cpu,
     iconColor: 'text-purple-500',
   },
@@ -208,7 +208,7 @@ export default function SettingsPage() {
             {[
               { label: 'Entidad', value: 'Gobernación de Santander' },
               { label: 'Módulo', value: 'Gestión de Tutelas 2026' },
-              { label: 'Versión', value: '4.9' },
+              { label: 'Versión', value: '9.2' },
             ].map((row) => (
               <div key={row.label} className="flex items-center px-5 py-3">
                 <span className="text-xs text-muted-foreground w-40 font-medium">{row.label}</span>
