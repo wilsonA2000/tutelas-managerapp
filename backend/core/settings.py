@@ -69,7 +69,6 @@ class Settings(BaseSettings):
 
     # Document Normalizer
     NORMALIZER_ENABLED: bool = True
-    NORMALIZER_USE_PADDLEOCR: bool = True  # Reemplaza Tesseract para español
 
     # (Retirado) PII Redaction (v5.3): la anonimización pre-IA-externa se quitó —
     # todo el procesamiento es local (Qwen3 en el equipo), el texto no sale del equipo.
@@ -95,19 +94,9 @@ class Settings(BaseSettings):
     LLM_LOCAL_MODEL_ID: str = "qwen3-4b-iuris"     # identificador para token_usage
     LLM_LOCAL_SYSTEM_PROMPT_PATH: str = "docs/iuris/SYSTEM_PROMPT_COMPILER.md"
 
-    # CSV
-    CSV_DELIMITER: str = ";"
-    CSV_COLUMNS: list[str] = [
-        "RADICADO_23_DIGITOS", "RADICADO_FOREST", "ABOGADO_RESPONSABLE",
-        "ACCIONANTE", "ACCIONADOS", "VINCULADOS", "DERECHO_VULNERADO",
-        "JUZGADO", "CIUDAD", "FECHA_INGRESO", "ASUNTO", "PRETENSIONES",
-        "OFICINA_RESPONSABLE", "ESTADO", "FECHA_RESPUESTA",
-        "SENTIDO_FALLO_1ST", "FECHA_FALLO_1ST", "IMPUGNACION",
-        "QUIEN_IMPUGNO", "FOREST_IMPUGNACION", "JUZGADO_2ND",
-        "SENTIDO_FALLO_2ND", "FECHA_FALLO_2ND", "INCIDENTE",
-        "FECHA_APERTURA_INCIDENTE", "RESPONSABLE_DESACATO",
-        "DECISION_INCIDENTE", "OBSERVACIONES",
-    ]
+    # (CSV_DELIMITER / CSV_COLUMNS vivían aquí pero estaban SOMBREADOS por las
+    #  constantes homónimas de backend/config.py, que son las que de verdad usa seed.py.
+    #  Retirados en de-sobreingeniería Fase 5.)
 
     # Derived paths (computed)
     # APP_DIR es FIJO (donde vive este código + DB), independiente de BASE_DIR.
