@@ -28,6 +28,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# El check D (no-clobber) prueba la pasada DETERMINISTA: re-extraer no debe pisar lo
+# curado. Con RAMA_JUDICIAL_ENABLED activo, el enrich CPNU pisa juzgado/fecha_ingreso
+# A PROPÓSITO (_API_AUTHORITATIVE_FIELDS, decisión Wilson) → no es un clobber a evaluar
+# aquí. Forzamos el flag OFF antes de importar settings (load_dotenv usa override=False,
+# respeta lo ya presente). También evita que el gate pegue a la API CPNU.
+import os  # noqa: E402
+os.environ.setdefault("RAMA_JUDICIAL_ENABLED", "false")
+os.environ.setdefault("RAMA_JUDICIAL_SYNC_CRON", "false")
+
 from backend.database.database import SessionLocal  # noqa: E402
 from backend.database.models import Case  # noqa: E402
 from backend.v9.field_extractor import _rad_year  # noqa: E402  (mismo "año usable del rad23" que usan los extractores)
