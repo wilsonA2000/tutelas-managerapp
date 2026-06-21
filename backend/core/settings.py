@@ -28,6 +28,21 @@ else:
     _EFFECTIVE_ENV_FILE = _DEFAULT_ENV_FILE
 
 
+# Cargar el .env EFECTIVO a os.environ. Pydantic Settings (abajo) solo puebla el objeto
+# `settings`, NO os.environ — pero gran parte del proyecto lee flags con os.getenv()
+# directo (V9_LLM_*, RAMA_JUDICIAL_*, LLM_GGUF/CTX/REASONING, LLM_LOCAL_PRIMARY en
+# chat.py, …). Sin esto esos flags quedaban INERTES en su default aunque el .env dijera
+# otra cosa (fuente única rota). settings.py se importa tempranísimo, así que cargarlo
+# aquí garantiza que os.getenv y Pydantic vean lo mismo. override=False: una var ya
+# presente en el entorno gana (exports de start.sh, TUTELAS_ENV_FILE, monkeypatch en
+# tests). (fix 2026-06-20 — ver project_env_flags_inertes.)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_EFFECTIVE_ENV_FILE, override=False)
+except Exception:  # pragma: no cover - dotenv siempre instalado, defensivo
+    pass
+
+
 class Settings(BaseSettings):
     """Configuración de la aplicación con validación."""
 

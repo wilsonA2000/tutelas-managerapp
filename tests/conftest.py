@@ -5,10 +5,13 @@ DB temporal en /tmp, sin dependencia de IA ni Gmail.
 
 import os
 
-# Blindaje: forzar OFF los flags que disparan red externa (CPNU) en tests, por si el
-# entorno los trae activos. Los tests del pipeline nunca deben pegar a la API real.
+# Blindaje: settings.py carga el .env a os.environ; los tests deben ser deterministas y
+# nunca pegar a red externa (CPNU) ni al LLM local. Forzamos estos flags ANTES de que se
+# importe backend.core.settings (load_dotenv usa override=False → respeta lo ya presente).
 os.environ["RAMA_JUDICIAL_ENABLED"] = "false"
 os.environ["RAMA_JUDICIAL_SYNC_CRON"] = "false"
+os.environ["V9_DISABLE_LLM"] = "true"          # chat/gap-fill Tier-1 determinista
+os.environ["LLM_LOCAL_PRIMARY"] = "false"
 
 import sys
 import shutil

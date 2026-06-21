@@ -15,19 +15,9 @@ if [ -f "$DIR/venv/bin/activate" ]; then
     echo "venv activado: $(which python3)"
 fi
 
-# Exportar al entorno los flags que el backend lee con os.getenv() (start.sh no carga
-# .env, así que sin esto quedan inertes). Selectivo a propósito:
-#   - RAMA_JUDICIAL_*: enrich + cron de novedades.
-#   - V9_LLM_* y LLM_*: la config LLM VALIDADA (single-call + soft_json + sampling
-#     0.7/0.8/20 + modelo Instruct-2507 + ctx 16384). Sin esto la app le manda al 2507
-#     greedy+schema+3-call → degenera (ver bench memoria project_ingesta_2026-06-10).
-# NO se exporta el resto del .env: los flags Clase-A (GMAIL_READ_ONLY, LOCAL_ONLY,
-# USE_COGNITIVE_PIPELINE…) ya los lee Pydantic settings desde el .env. Ver
-# project_env_flags_inertes.
-if [ -f "$DIR/.env" ]; then
-    export $(grep -E '^(RAMA_JUDICIAL_|V9_LLM_|LLM_)[A-Z0-9_]+=' "$DIR/.env" \
-             | grep -vE 'KEY|SECRET|TOKEN' | xargs)
-fi
+# (Los flags del .env ya NO se exportan aquí: backend/core/settings.py hace load_dotenv
+#  del .env efectivo a os.environ al importarse, así que os.getenv y Pydantic ven lo
+#  mismo, sin depender de start.sh. Ver project_env_flags_inertes.)
 
 # Matar procesos previos en los puertos
 fuser -k 8000/tcp 2>/dev/null
