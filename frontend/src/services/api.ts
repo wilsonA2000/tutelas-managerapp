@@ -117,21 +117,6 @@ export const getKPIs = () =>
 export const getCharts = () =>
   api.get('/dashboard/charts').then(r => r.data);
 
-export const getActivity = () =>
-  api.get('/dashboard/activity').then(r => r.data);
-
-export const chatWithAI = (question: string) =>
-  api.post('/chat/', { message: question }, { timeout: 30000 }).then(r => ({
-    response: r.data.answer,
-    intent: r.data.intent,
-    data: r.data.data,
-    confidence: r.data.confidence,
-    llm_used: r.data.llm_used,
-    template_used: r.data.template_used,
-  }));
-
-export const getChatIntents = () => api.get('/chat/intents').then(r => r.data);
-export const getChatHealth = () => api.get('/chat/health').then(r => r.data);
 
 export const runReverifySospechosos = (dryRun = true, includeRevisar = false, limit = 0) =>
   api.post('/cleanup/reverify-sospechosos', { dry_run: dryRun, include_revisar: includeRevisar, limit }, { timeout: 600000 }).then(r => r.data);
@@ -159,9 +144,6 @@ export const getDocumentPreviewUrl = (id: number) =>
 // Extraction — useLlm: true=Qwen local (default individual), false=determinista (default batch)
 export const extractSingle = (caseId: number, force: boolean = false, useLlm: boolean = true) =>
   api.post(`/extraction/single/${caseId}?force=${force}&use_llm=${useLlm}`, {}, { timeout: 600000 }).then(r => r.data);
-
-export const getFolderConsistency = (caseId: number) =>
-  api.get(`/extraction/folder-consistency/${caseId}`).then(r => r.data);
 
 // Semáforo del motor de IA: { server: 'off'|'starting'|'ready', extracting: boolean }
 export const getLlmStatus = (): Promise<{ server: 'off' | 'starting' | 'ready'; extracting: boolean }> =>
@@ -247,18 +229,11 @@ export const getSettingsStatus = () =>
   api.get('/settings/status').then(r => r.data);
 
 // Extraction control
-export const runExtractionAll = () =>
-  api.post('/extraction/run-all', {}, { timeout: 10000 }).then(r => r.data);
-
 export const stopExtraction = () =>
   api.post('/extraction/stop').then(r => r.data);
 
 export const getExtractionProgress = () =>
   api.get('/extraction/progress').then(r => r.data);
-
-// Monitor
-export const getMonitorStatus = () =>
-  api.get('/monitor/status').then(r => r.data);
 
 // Sync
 export const syncFolders = () =>
@@ -361,62 +336,9 @@ export const runMergeForestFragments = (dryRun = true, minConfidence = 'ALTA') =
 export const runBackfillRadicados = (dryRun = true) =>
   api.post('/cleanup/backfill-radicados', { dry_run: dryRun }).then(r => r.data);
 
-// ============================================================
-// v9 — pipeline simplificado (39 campos del cuadro Excel)
-// ============================================================
-
-export interface V9CanonicalInfo {
-  abogado: string | null;
-  abogado_confidence: number;
-  dependencia: string | null;
-  dependencia_confidence: number;
-  direccion_l1: string | null;
-  grupo_l2: string | null;
-  equipo_l3: string | null;
-}
-
-export interface V9ExtractionResult {
-  case_id: number;
-  folder_name: string;
-  completitud: number;
-  docs: { processed: number; failed: number };
-  llm_calls: number;
-  timing_ms: Record<string, number>;
-  warnings: string[];
-  values: Record<string, string>;
-  sources: Record<string, string>;
-  missing_fields: string[];
-  canonical: V9CanonicalInfo;
-  dry_run: boolean;
-  applied?: boolean;
-}
-
-export interface V9BatchResponse {
-  dry_run: boolean;
-  applied: boolean;
-  count: number;
-  errors_count: number;
-  summary: {
-    avg_completitud: number;
-    total_llm_calls: number;
-    total_ms: number;
-    ms_per_case: number;
-  };
-  results: V9ExtractionResult[];
-  errors: Array<{ case_id: number; error: string }>;
-}
-
-export const v9Health = () =>
-  api.get<{ status: string; version: string; fields_count: number; fields: string[] }>('/v9/health').then(r => r.data);
-
-export const v9Preview = (caseId: number) =>
-  api.get<V9ExtractionResult>(`/v9/preview/${caseId}`).then(r => r.data);
-
-export const v9Extract = (caseId: number, apply = false) =>
-  api.post<V9ExtractionResult>(`/v9/extract/${caseId}`, null, { params: { apply } }).then(r => r.data);
-
-export const v9ExtractBatch = (params: { case_ids?: number[]; limit?: number; apply?: boolean }) =>
-  api.post<V9BatchResponse>('/v9/extract-batch', params).then(r => r.data);
+// (Sección v9 REST [v9Health/Preview/Extract/ExtractBatch + tipos V9*] retirada en
+//  de-sobreingeniería Fase 7: sin consumidor en el frontend — la UI extrae vía
+//  /extraction/*. Los endpoints backend /api/v9/* siguen vivos para CLI/scripts.)
 
 // ── Rama Judicial (CPNU) — consulta oficial por radicado ──────────────────
 export interface RamaJudicialActuacion {
