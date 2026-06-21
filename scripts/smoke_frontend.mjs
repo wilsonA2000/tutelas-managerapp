@@ -21,7 +21,7 @@ const PASS = process.env.SMOKE_PASS || 'tutelas2026';
 // Rutas de frontend/src/App.tsx. {caseId} se sustituye por un id real descubierto en runtime.
 const ROUTES = [
   '/', '/cases', '/cuadro', '/seguimiento', '/auditoria', '/emails', '/intelligence',
-  '/reports', '/agent', '/settings', '/cleanup', '/alertas', '/ejecutivo', '/extraction',
+  '/reports', '/settings', '/cleanup', '/alertas', '/ejecutivo', '/extraction',
   '/cases/{caseId}',
 ];
 

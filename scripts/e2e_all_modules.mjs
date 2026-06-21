@@ -13,7 +13,7 @@ const ROUTES = [
   ['/seguimiento', 'Seguimiento'], ['/auditoria', 'Auditoría fallos'], ['/emails', 'Correos'],
   ['/intelligence', 'Inteligencia'], ['/reports', 'Reportes'], ['/ejecutivo', 'Tablero ejecutivo'],
   ['/alertas', 'Alertas tempranas'], ['/extraction', 'Procesamiento v9'], ['/cleanup', 'Mantenimiento'],
-  ['/agent', 'Herramientas IA'], ['/settings', 'Configuración'],
+  ['/settings', 'Configuración'],
 ];
 
 (async () => {
