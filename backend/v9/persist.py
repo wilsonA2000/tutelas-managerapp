@@ -354,6 +354,12 @@ def persist(
             v9_key in _API_AUTHORITATIVE_FIELDS
             and fields.sources.get(v9_key) == FieldSource.API_RAMA_JUDICIAL
             and (v9_key != "fecha_ingreso" or _fecha_ingreso_coherente(value, case))
+            # juzgado del cuadro = juzgado de 1RA instancia. CPNU devuelve el despacho
+            # ACTUAL, que en casos impugnados es el de 2DA instancia (c417). Solo dejamos
+            # que la API pise el juzgado cuando NO hubo impugnación (despacho CPNU = 1ra);
+            # si hubo impugnación, se conserva el juzgado de 1ra curado (decisión Wilson
+            # 2026-06-20). El despacho de 2da lo coloca el enrich en juzgado_2nd (fill-only).
+            and (v9_key != "juzgado" or (case.impugnacion or "").strip().upper() == "NO")
         )
         if (current and v9_key not in _RECOMPUTE_FIELDS
                 and not _inc_upgrade and not _api_authoritative):

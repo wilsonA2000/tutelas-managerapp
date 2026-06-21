@@ -122,9 +122,20 @@ def run(db: Session, case, fields: ExtractedFields) -> dict:
     if data.get("juzgado"):
         # Normaliza el numeral CPNU ("008") a la forma curada ("OCTAVO") para no
         # degradar el formato del cuadro al sobrescribir (decisión Wilson 2026-06-20).
-        fields.values["juzgado"] = normalize_juzgado_cpnu(data["juzgado"])
-        fields.sources["juzgado"] = FieldSource.API_RAMA_JUDICIAL
-        applied.append("juzgado")
+        juz_cpnu = normalize_juzgado_cpnu(data["juzgado"])
+        # El campo `juzgado` del cuadro = 1RA instancia. CPNU devuelve el despacho
+        # ACTUAL: en casos impugnados eso es la 2DA instancia. Por eso, si hubo
+        # impugnación, el despacho CPNU NO va a `juzgado` (persist lo bloquea con el
+        # gate impugnacion==NO) sino a `juzgado_2nd` (fill-only). Decisión Wilson 2026-06-20.
+        impugnado = (getattr(case, "impugnacion", None) or "").strip().upper() not in ("", "NO")
+        if impugnado:
+            fields.values["juzgado_2nd"] = juz_cpnu
+            fields.sources["juzgado_2nd"] = FieldSource.API_RAMA_JUDICIAL
+            applied.append("juzgado_2nd")
+        else:
+            fields.values["juzgado"] = juz_cpnu
+            fields.sources["juzgado"] = FieldSource.API_RAMA_JUDICIAL
+            applied.append("juzgado")
     if data.get("fecha_radicacion"):
         fields.values["fecha_ingreso"] = data["fecha_radicacion"]
         fields.sources["fecha_ingreso"] = FieldSource.API_RAMA_JUDICIAL

@@ -23,8 +23,8 @@ def db():
     s.close()
 
 
-def _case(db, rad="68001400902420260005500"):
-    c = Case(folder_name="x", radicado_23_digitos=rad)
+def _case(db, rad="68001400902420260005500", impugnacion=None):
+    c = Case(folder_name="x", radicado_23_digitos=rad, impugnacion=impugnacion)
     db.add(c); db.commit()
     return c
 
@@ -57,6 +57,38 @@ def test_flag_on_force_setea(db, monkeypatch):
     assert f.values["juzgado"] == "JUZGADO VEINTICUATRO PENAL MUNICIPAL DE BUCARAMANGA"
     assert f.sources["juzgado"] == FieldSource.API_RAMA_JUDICIAL
     assert f.values["fecha_ingreso"] == "18/03/2026"
+
+
+def test_no_impugnado_pisa_juzgado_1ra(db, monkeypatch):
+    """impugnacion=NO → el despacho CPNU = 1ra instancia → va a `juzgado` (autoritativo)."""
+    monkeypatch.setenv("RAMA_JUDICIAL_ENABLED", "true")
+    monkeypatch.setattr(enrich, "_get_or_sync",
+                        lambda d, c, r: _proc(juzgado="JUZGADO 016 CIVIL MUNICIPAL DE BUCARAMANGA").to_dict())
+    f = ExtractedFields()
+    r = enrich.run(db, _case(db, impugnacion="NO"), f)
+    assert "juzgado" in r["applied"]
+    assert f.values["juzgado"] == "JUZGADO DIECISÉIS CIVIL MUNICIPAL DE BUCARAMANGA"
+    assert f.sources["juzgado"] == FieldSource.API_RAMA_JUDICIAL
+    assert not f.values["juzgado_2nd"]   # no se tocó la 2da
+
+
+def test_impugnado_no_pisa_1ra_va_a_juzgado_2nd(db, monkeypatch):
+    """impugnacion=SI → el despacho CPNU es 2DA instancia → va a `juzgado_2nd`,
+    NUNCA a `juzgado` (se conserva el de 1ra curado). Decisión Wilson 2026-06-20."""
+    monkeypatch.setenv("RAMA_JUDICIAL_ENABLED", "true")
+    monkeypatch.setattr(enrich, "_get_or_sync",
+                        lambda d, c, r: _proc(juzgado="JUZGADO 009 CIVIL CIRCUITO DE BUCARAMANGA").to_dict())
+    f = ExtractedFields()
+    f.set("juzgado", "JUZGADO PROMISCUO MUNICIPAL DE ZAPATOCA", FieldSource.REGEX)  # 1ra curada
+    r = enrich.run(db, _case(db, impugnacion="SI"), f)
+    assert "juzgado_2nd" in r["applied"]
+    assert "juzgado" not in r["applied"]
+    # la 1ra instancia curada NO fue pisada
+    assert f.values["juzgado"] == "JUZGADO PROMISCUO MUNICIPAL DE ZAPATOCA"
+    assert f.sources["juzgado"] == FieldSource.REGEX
+    # la 2da instancia se llenó con el despacho CPNU normalizado
+    assert f.values["juzgado_2nd"] == "JUZGADO NOVENO CIVIL CIRCUITO DE BUCARAMANGA"
+    assert f.sources["juzgado_2nd"] == FieldSource.API_RAMA_JUDICIAL
 
 
 def test_rad_invalido(db, monkeypatch):

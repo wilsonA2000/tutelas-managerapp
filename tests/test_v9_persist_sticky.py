@@ -172,13 +172,25 @@ def _fields_api(**kw):
     return f
 
 
-def test_api_pisa_juzgado_no_manual(db):
-    c = _make_case(db, juzgado="JUZGADO REGEX MALO")
+def test_api_pisa_juzgado_no_manual_si_impugnacion_no(db):
+    # impugnacion=NO → el despacho CPNU = 1ra instancia → la API SÍ pisa el regex malo.
+    c = _make_case(db, juzgado="JUZGADO REGEX MALO", impugnacion="NO")
     f = _fields_api(juzgado="JUZGADO 024 PENAL MUNICIPAL DE BUCARAMANGA")
     r = persist(db, c.id, f, dry_run=False)
     assert r["changes"].get("juzgado", {}).get("new") == "JUZGADO 024 PENAL MUNICIPAL DE BUCARAMANGA"
     db.refresh(c)
     assert c.juzgado == "JUZGADO 024 PENAL MUNICIPAL DE BUCARAMANGA"
+
+
+def test_api_no_pisa_juzgado_si_impugnado(db):
+    # impugnacion=SI → el despacho CPNU es 2DA instancia → NO debe pisar el juzgado de
+    # 1ra (decisión Wilson 2026-06-20). El de 2da lo coloca el enrich en juzgado_2nd.
+    c = _make_case(db, juzgado="JUZGADO PROMISCUO MUNICIPAL DE ZAPATOCA", impugnacion="SI")
+    f = _fields_api(juzgado="JUZGADO NOVENO CIVIL CIRCUITO DE BUCARAMANGA")
+    r = persist(db, c.id, f, dry_run=False)
+    assert "juzgado" not in r["changes"]
+    db.refresh(c)
+    assert c.juzgado == "JUZGADO PROMISCUO MUNICIPAL DE ZAPATOCA"
 
 
 def test_api_no_pisa_juzgado_manual(db):
