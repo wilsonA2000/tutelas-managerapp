@@ -90,7 +90,8 @@ class Settings(BaseSettings):
     # la config del proveedor (las lee ai_extractor._call_local + chat + llm_gap_fill);
     # conservan el prefijo LLM_LOCAL_* por compatibilidad de .env.
     LLM_LOCAL_URL: str = "https://api.deepseek.com"   # endpoint OpenAI-compatible
-    LLM_LOCAL_MODEL_ID: str = "deepseek-chat"          # modelo + identificador token_usage
+    LLM_LOCAL_MODEL_ID: str = "deepseek-chat"         # 1M ctx + ~5x más rápido que v4-flash hoy
+    #   (se depreca 2026-07-24 → migrar a deepseek-v4-flash; el código ya hace thinking-OFF auto)
 
     # (CSV_DELIMITER / CSV_COLUMNS vivían aquí pero estaban SOMBREADOS por las
     #  constantes homónimas de backend/config.py, que son las que de verdad usa seed.py.

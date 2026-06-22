@@ -875,9 +875,14 @@ def _llm_available() -> bool:
 def _llm_chat(messages: list[dict], *, max_tokens: int = 200, temperature: float = 0.1, timeout: float = 20.0) -> Optional[str]:
     try:
         headers = {"Authorization": f"Bearer {_LLM_API_KEY}"} if _LLM_API_KEY else {}
+        _payload = {"model": LLM_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        # DeepSeek V4 = thinking por defecto; el chat es conversacional → sin razonamiento
+        # (más rápido). Auto para v4, o V9_LLM_THINKING=off.
+        if "v4" in (LLM_MODEL or "").lower() or os.getenv("V9_LLM_THINKING", "").lower() == "off":
+            _payload["thinking"] = {"type": "disabled"}
         r = requests.post(
             f"{LLM_URL}/v1/chat/completions",
-            json={"model": LLM_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": temperature},
+            json=_payload,
             headers=headers,
             timeout=timeout,
         )

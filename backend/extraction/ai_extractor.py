@@ -108,6 +108,12 @@ def _call_local(messages: list[dict], model: str = _LOCAL_MODEL,
         payload["top_k"] = int(os.getenv("V9_LLM_TOP_K"))
     # Motor = DeepSeek API (proveedor OpenAI-compatible). Requiere model + auth.
     payload["model"] = _LOCAL_MODEL
+    # DeepSeek V4 (deepseek-v4-flash/pro) son THINKING por defecto → para extracción
+    # estructurada desactivamos el razonamiento (más rápido/barato, español estable; bake-off
+    # 2026-06-22: flash-thinking-off ≈ pro a ~1/10 del costo de tokens). Auto para modelos v4,
+    # o forzable con V9_LLM_THINKING=off. (deepseek-chat ya es non-thinking → no se le manda.)
+    if "v4" in (_LOCAL_MODEL or "").lower() or os.getenv("V9_LLM_THINKING", "").lower() == "off":
+        payload["thinking"] = {"type": "disabled"}
     headers = {"Authorization": f"Bearer {_LLM_API_KEY}"} if _LLM_API_KEY else {}
     response = requests.post(
         f"{_LOCAL_URL}/v1/chat/completions",
