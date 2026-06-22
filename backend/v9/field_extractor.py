@@ -484,6 +484,7 @@ from backend.v9.extractors.derecho import (  # noqa: E402,F401
 # ============================================================
 from backend.v9.extractors.juzgado import (  # noqa: E402,F401
     extract_juzgado_for_case, extract_juzgado_2nd_for_case, _clean_juzgado,
+    _juzgado_from_rj_sender, _juzgado_candidates_from_text, _juzgado_nivel,
 )
 # ============================================================
 # CIUDAD  (campo 9 — municipio del juzgado de 1ra instancia = lugar de los hechos)
