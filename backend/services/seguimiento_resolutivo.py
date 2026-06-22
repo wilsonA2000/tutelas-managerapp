@@ -251,18 +251,16 @@ def extract_ordenes_focalizado(
     # 2) LLM fallback
     if use_llm:
         try:
-            from backend.services import llm_mutex
-            if llm_mutex.is_up():
-                dicts = _llm_parse_resolutivo(tail)
-                llm_ordenes = []
-                for d in dicts:
-                    o = _dict_to_orden(d, fecha_fallo)
-                    if o and o.destinatario_tipo != SE.DEST_EXTERNO:
-                        # fecha_limite la calcula el caller; aquí solo órdenes
-                        llm_ordenes.append(o)
-                if llm_ordenes:
-                    metodo = "llm_tail_ocr" if fue_ocr else "llm_tail"
-                    return ResultadoResolutivo(llm_ordenes, metodo, len(tail), n_leidas, fue_ocr)
+            dicts = _llm_parse_resolutivo(tail)  # motor DeepSeek (siempre disponible)
+            llm_ordenes = []
+            for d in dicts:
+                o = _dict_to_orden(d, fecha_fallo)
+                if o and o.destinatario_tipo != SE.DEST_EXTERNO:
+                    # fecha_limite la calcula el caller; aquí solo órdenes
+                    llm_ordenes.append(o)
+            if llm_ordenes:
+                metodo = "llm_tail_ocr" if fue_ocr else "llm_tail"
+                return ResultadoResolutivo(llm_ordenes, metodo, len(tail), n_leidas, fue_ocr)
         except Exception as e:
             logger.debug("Fallback LLM resolutivo falló: %s", e)
 

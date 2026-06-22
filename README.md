@@ -147,16 +147,11 @@ cd tutelas-app
 bash start.sh   # arranca backend + frontend
 ```
 
-### LLM local (opcional)
-```bash
-# Solo si tienes el modelo descargado en data/lora-models/
-~/llama.cpp/build/bin/llama-server \
-  -m data/lora-models/Qwen3-4B-Q4_K_M.gguf \
-  --lora data/lora-models/iuris-lora-qwen3-4b.gguf \
-  --port 8765 --ctx-size 4096 -t 6 --host 127.0.0.1
-```
-
-Sin LLM: el chat funciona via Tier 1 (cubre 18 preguntas operativas).
+### Motor LLM = DeepSeek API
+La extracción y el chat usan **DeepSeek** (config en `.env`: `V9_ALLOW_DEEPSEEK=true` +
+`V9_LLM_API_KEY` + `LLM_LOCAL_URL=https://api.deepseek.com`). El 4B local se retiró
+(2026-06-22). Sin key / con `V9_DISABLE_LLM=true`: extracción determinista y chat Tier 1
+(cubre 18 preguntas operativas). Ver `docs/ESTRATEGIA_LLM_SOBERANIA_DATOS.md`.
 
 ### Login
 Usuario: `wilson` · Contraseña: `tutelas2026`
@@ -182,7 +177,7 @@ Usuario: `wilson` · Contraseña: `tutelas2026`
 | `GUIA_USUARIO.md` | Manual operativo del abogado |
 | `BENCHMARK_PIPELINE_VS_AGENT.md` | Comparativa de pipelines |
 | `docs/V8_FIXES_SESSION.md` | Cambios de la sesión v8 |
-| `docs/iuris/` | LoRA training y dataset |
+| `docs/ESTRATEGIA_LLM_SOBERANIA_DATOS.md` | Decisión DeepSeek + Ley 1581 + roadmap hardware |
 | `CLAUDE.md` | Instrucciones del proyecto para Claude |
 
 ---

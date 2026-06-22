@@ -42,6 +42,15 @@ else
   echo "           cd frontend && npx playwright install chromium"
 fi
 
+echo; echo ">>> [info] Mapa de consumidores (gate de código muerto — informativo, no falla)"
+echo "    Candidatos a muerto = VERIFICAR antes de borrar (entrypoints/cron/comentarios dan falsos)."
+"$PY" scripts/consumer_map.py backend 2>/dev/null | head -1
+"$PY" scripts/consumer_map.py api 2>/dev/null | head -1
+echo "    (detalle: scripts/consumer_map.py {backend|api|check SÍMBOLOS})"
+
+echo; echo ">>> [info] Oráculo de regresión (golden baseline) — correr manualmente por fase:"
+echo "    venv/bin/python3 scripts/golden_baseline.py diff data/golden_baseline.json --all   # diff=0 ⇒ sin regresión"
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "✅ RED DE SEGURIDAD: todo verde (salvo los FAIL de baseline documentados)."

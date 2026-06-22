@@ -67,7 +67,7 @@ def _is_garbage(v: str) -> bool:
 
 
 import urllib.request
-LLM_URL = os.getenv("LLM_LOCAL_URL", f"http://127.0.0.1:{os.getenv('LLM_LOCAL_PORT', '8765')}")
+LLM_URL = os.getenv("LLM_LOCAL_URL", "https://api.deepseek.com")  # DeepSeek API
 # Proveedor externo (DeepSeek) — DESCONECTADO por default. Requiere DOS cosas a la vez:
 # V9_ALLOW_DEEPSEEK=true (opt-in explícito del operador) Y V9_LLM_API_KEY seteada.
 # Sin el flag, jamás se usa DeepSeek aunque haya key (2026-05-25, decisión de Wilson).
@@ -297,22 +297,8 @@ def _call_llm(prompt: str, missing: list[str]) -> Optional[str]:
         return json.loads(raw)["choices"][0]["message"]["content"] or ""
 
     def _respawn_if_local_down(exc: Exception) -> bool:
-        """M3 2026-06-11: vk::DeviceLostError mata el llama-server bajo carga sostenida
-        (~100 llamadas/1h en el bench) y los casos siguientes quedaban con campos
-        vacíos en silencio ('Connection refused'). Si el server es LOCAL y la falla
-        es de conexión → ensure_llm_up (respawn) y se permite UN reintento."""
-        if "127.0.0.1" not in LLM_URL and "localhost" not in LLM_URL:
-            return False
-        msg = str(exc)
-        if not ("Connection refused" in msg or "Errno 111" in msg or "Remote end closed" in msg):
-            return False
-        try:
-            from backend.services.llm_mutex import ensure_llm_up
-            logger.warning("llama-server caído (¿DeviceLost?) — respawn + reintento")
-            return ensure_llm_up(wait_s=120)
-        except Exception as _re:  # noqa: BLE001
-            logger.warning("respawn falló: %s", str(_re)[:120])
-            return False
+        """Motor = DeepSeek API (nube): no hay server local que relanzar."""
+        return False
 
     try:
         return _post(body)

@@ -4,7 +4,7 @@ Agrupa: extracción individual/lote, semáforo del motor LLM, gate de consistenc
 de carpeta, auditorías de documentos (mismatched/suspicious) y movimiento de docs
 entre casos.
 
-Los imports de servicios (v9.pipeline, llm_mutex, doc_ops, …) son deliberadamente
+Los imports de servicios (v9.pipeline, doc_ops, …) son deliberadamente
 lazy: mantienen liviano el import del router y evitan ciclos con main.py.
 """
 
@@ -109,12 +109,7 @@ def _extract_case_sync(db: Session, case: Case, use_llm: bool, audit: bool = Fal
     from backend.v9.pipeline import extract_case
 
     start = time.time()
-    llm_lifecycle = False
     try:
-        if use_llm:
-            from backend.services.llm_mutex import begin_extraction
-            begin_extraction()
-            llm_lifecycle = True
         result = extract_case(db, case.id, dry_run=False, use_llm=use_llm)
         elapsed = int(time.time() - start)
         try:
@@ -158,10 +153,6 @@ def _extract_case_sync(db: Session, case: Case, use_llm: bool, audit: bool = Fal
             "case_id": case.id,
             "message": str(e),
         }
-    finally:
-        if llm_lifecycle:
-            from backend.services.llm_mutex import end_extraction
-            end_extraction()
 
 
 def _extraction_worker_init():
@@ -173,11 +164,7 @@ def _extraction_worker_init():
     logging.getLogger("tutelas.extraction.worker").info(
         "Worker process started: pid=%s ppid=%s", os.getpid(), os.getppid()
     )
-    try:
-        from backend.cognition.ner_spacy import _get_nlp
-        _get_nlp()
-    except Exception:
-        pass
+    # (v9 no usa spaCy NER; el preload se retiró con la cadena cognitive_fill)
 
 
 def _process_one_case_router(args: tuple) -> tuple:
@@ -289,26 +276,7 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False, use_
     elapsed_thread.start()
 
     try:
-        # Ciclo de vida del motor IA. Con use_llm (flujo del operador) la app
-        # ENCIENDE el server on-demand (begin_extraction) y lo apaga sola tras
-        # quedar idle (ver llm_mutex). Sin use_llm (scripts deterministas) se
-        # mantiene la pausa para liberar RAM. El finally llama end_extraction.
-        if use_llm:
-            try:
-                from backend.services.llm_mutex import begin_extraction
-                _update_progress(step="Encendiendo motor de IA...", phase="Setup")
-                begin_extraction()
-            except Exception as e:
-                logger.warning("llm_mutex begin_extraction falló: %s", e)
-        else:
-            try:
-                from backend.services.llm_mutex import pause_llm_for_extraction
-                paused = pause_llm_for_extraction()
-                if paused:
-                    _update_progress(step="LLM pausado para liberar RAM...", phase="Setup")
-            except Exception as e:
-                logger.warning("llm_mutex pause falló: %s", e)
-
+        # Motor = DeepSeek API (nube): siempre disponible, sin ciclo de vida de server local.
         _update_progress(step="Creando backup automatico...", phase="Backup")
         auto_backup("pre_extraction")
 
@@ -372,31 +340,8 @@ def _run_extraction_cases(case_ids: list[int], classify_docs: bool = False, use_
     except Exception as e:
         _main.add_monitor_log(f"Error en extraccion: {e}", level="error")
     finally:
-        if use_llm:
-            try:
-                from backend.services.llm_mutex import end_extraction
-                end_extraction()
-            except Exception as e:
-                logger.warning("llm_mutex end_extraction falló: %s", e)
         _main.extraction_in_progress = False
         _elapsed_stop.set()
-
-
-@router.get("/llm-status")
-def api_llm_status():
-    """Estado del motor de IA para el semáforo de la UI (solo lectura).
-
-    server: "off" · "starting" (encendiendo/cargando) · "ready".
-    extracting: hay una extracción en curso (individual, lote o avanzado).
-    """
-    try:
-        from backend.services.llm_mutex import lifecycle_state
-        st = lifecycle_state()
-    except Exception as e:
-        logger.warning("lifecycle_state falló: %s", e)
-        st = {"server": "off", "extracting": False}
-    st["extracting"] = bool(st.get("extracting")) or bool(_main.extraction_in_progress)
-    return st
 
 
 @router.get("/folder-consistency/{case_id}")
@@ -478,31 +423,6 @@ def api_extract_batch(req: BatchRequest):
     skip_msg = f" — {len(skipped)} omitidas por inconsistencias (depurar primero)" if skipped else ""
     return {"status": "started", "message": f"Extraccion de {len(case_ids)} casos iniciada ({MAX_WORKERS} en paralelo{classify_msg}){skip_msg}", "skipped": skipped}
 
-
-
-@router.post("/agent/{case_id}")
-def api_agent_extract(case_id: int, classify: bool = False, force: bool = False, db: Session = Depends(get_db)):
-    """(Modernización Fase 7.3) Alias de "Extraer un caso" sobre el pipeline v9.
-
-    El antiguo "Agente IA v3" (multi-modelo, multi-paso) ya no se usa — generaba ruido.
-    Este endpoint ahora corre `backend.v9.pipeline.extract_case`, igual que `/single/{id}`;
-    `persist.py` solo rellena campos vacíos (no pisa el cuadro). El query param `classify`
-    se ignora (v9 clasifica los docs en la ingesta vía `doc_librarian`).
-    """
-    case = db.query(Case).filter(Case.id == case_id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Caso no encontrado")
-
-    _guard_folder_consistency(db, case_id, force)
-
-    return _extract_case_sync(db, case, use_llm=True, audit=True)
-
-
-@router.get("/agent/{case_id}/reasoning")
-def api_agent_reasoning(case_id: int, db: Session = Depends(get_db)):
-    """Obtener cadena de razonamiento de la última extracción de un caso."""
-    from backend.agent.reasoning import get_reasoning
-    return get_reasoning(db, case_id)
 
 
 @router.get("/review")

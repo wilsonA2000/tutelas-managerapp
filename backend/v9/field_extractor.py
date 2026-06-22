@@ -26,28 +26,11 @@ from backend.v9.regex_pass import _extract_forest
 
 logger = logging.getLogger("tutelas.v9.field_extractor")
 
-
-def _read_doc_text(doc: Document) -> str:
-    """Devuelve el texto del doc. Para .md lee del disco; para PDF/DOCX usa extracted_text."""
-    if doc.doc_type in ("EMAIL_JUDICIAL", "EMAIL_INTERNO") or (doc.filename or "").endswith(".md"):
-        p = Path(doc.file_path) if doc.file_path else None
-        if p and p.exists():
-            try:
-                return p.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                return ""
-        return ""
-    return doc.extracted_text or ""
-
-
-def _emails_chronological(db: Session, case_id: int) -> list[Email]:
-    """Emails del case ordenados del más antiguo al más reciente."""
-    return (
-        db.query(Email)
-        .filter(Email.case_id == case_id)
-        .order_by(Email.date_received.asc())
-        .all()
-    )
+# Helpers cross-cutting → extractors/_shared.py (de-sobreingeniería F6). Se re-exportan
+# aquí para preservar el contrato público (tests/scripts importan estos nombres de field_extractor).
+from backend.v9.extractors._shared import (  # noqa: E402
+    _read_doc_text, _emails_chronological, _rad_year, _fold, _best_claim_text,
+)
 
 
 # ============================================================
@@ -315,6 +298,20 @@ def _clean_agenciado(raw: str) -> Optional[str]:
     return v
 
 
+# FIX (2026-05-28): "yo NOMBRE PROPIO ... interpongo/presento" → el accionante real es
+# esa persona, no la Personería (solo vinculada como ministerio público). Hoisted a nivel
+# módulo (de-sobreingeniería F6): antes se recompilaba en cada llamada.
+_PAT_YO_INTERPONGO = re.compile(
+    r"(?i)(?:yo|el\s+suscrito|la\s+suscrita)[\s,]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{4,80}?)"
+    r"[\s,]+(?:identificad[oa]\s+con|mayor\s+de\s+edad|en\s+nombre\s+propio|"
+    r"interpongo|presento|impetro)\b"
+)
+# Personería ACCIONANTE LEGÍTIMA solo si firma "en calidad de Personero/a Municipal de X"
+_PAT_PERSONERIA_EN_CALIDAD = re.compile(
+    r"(?i)en\s+(?:mi\s+)?calidad\s+de\s+personer[oa]\s+municipal"
+)
+
+
 def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str], Optional[str]]:
     """Extrae (accionante, nota_observaciones) del case.
 
@@ -398,20 +395,6 @@ def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str],
                     return c
         return None
 
-    # FIX (2026-05-28): pattern "yo NOMBRE PROPIO ... interpongo/presento" indica
-    # que el verdadero accionante es esa persona, no la Personería que solo está
-    # vinculada como ministerio público. Patrón "yo, JUAN PÉREZ ... interpongo" o
-    # "El suscrito, NOMBRE ... presento acción". Si match → priorizar la persona.
-    _PAT_YO_INTERPONGO = re.compile(
-        r"(?i)(?:yo|el\s+suscrito|la\s+suscrita)[\s,]+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s]{4,80}?)"
-        r"[\s,]+(?:identificad[oa]\s+con|mayor\s+de\s+edad|en\s+nombre\s+propio|"
-        r"interpongo|presento|impetro)\b"
-    )
-    # Personería ACCIONANTE LEGÍTIMA solo si firma "en calidad de Personero/a Municipal de X"
-    _PAT_PERSONERIA_EN_CALIDAD = re.compile(
-        r"(?i)en\s+(?:mi\s+)?calidad\s+de\s+personer[oa]\s+municipal"
-    )
-
     for _dt, head in texts_by_priority:
         # --- Caso 0 (NUEVO 2026-05-28): si hay "yo NOMBRE ... interpongo",
         # priorizar la PERSONA real sobre la Personería (vinculada/asesora). ---
@@ -474,257 +457,12 @@ def extract_accionante_for_case(db: Session, case: Case) -> tuple[Optional[str],
 
 
 # ============================================================
-# ACCIONADOS + VINCULADOS
+# ACCIONADOS + VINCULADOS → extractors/accionados.py (F6). Re-exportado.
 # ============================================================
-
-# Formas canónicas de las entidades de la SED (para normalizar)
-_CANON_GOBERNACION = "GOBERNACIÓN DE SANTANDER"
-_CANON_SECRETARIA = "SECRETARÍA DE EDUCACIÓN DEL DEPARTAMENTO DE SANTANDER"
-
-# Label "Accionado(s): ENTIDAD [- ENTIDAD ...]" — captura el valor de la línea de la
-# etiqueta + líneas de continuación INDENTADAS (algunos autos listan una entidad por
-# línea). Se detiene al ver una nueva etiqueta "Palabra:".
-_PAT_ACCIONADO_LABEL = re.compile(
-    r"(?im)^[ \t]*Accionad[oa]s?(?:\s*\(s\))?[ \t]*[:\.]+[ \t]*"
-    r"("
-    r"[^\r\n]{0,400}"
-    r"(?:\n[ \t]+(?![A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\s*[:\.])[^\r\n]{1,250}){0,8}"
-    r")"
+from backend.v9.extractors.accionados import (  # noqa: E402,F401
+    extract_accionados_for_case, extract_vinculados_for_case,
+    _normalize_entity_list, _canon_entity, _looks_like_accionado_value,
 )
-# Palabras que identifican una entidad (pública / privada / educativa). Sirve como
-# guarda para aceptar el valor de la etiqueta "Accionado:" y para validar fragmentos.
-_ENTITY_WORD_RE = re.compile(
-    r"(?i)\b(?:GOBERNACI[ÓO]N|GOBIERNO|DEPARTAMENTO|MUNICIPIO|ALCALD[ÍI]A|"
-    r"SECRETAR[ÍI]A|MINISTERIO|DIRECCI[ÓO]N\s+(?:DE|GENERAL|TERRITORIAL)|"
-    r"SUBDIRECCI[ÓO]N|UNIDAD\s+(?:ADMINISTRATIVA|DE)|AGENCIA|INSTITUTO|INSTITUCI[ÓO]N|"
-    r"COLEGIO|ESCUELA|LICEO|UNIVERSIDAD|CENTRO\s+EDUCATIVO|JARD[ÍI]N\s+INFANTIL|"
-    r"FUNDACI[ÓO]N|CORPORACI[ÓO]N|ASOCIACI[ÓO]N|COOPERATIVA|CAJA\b|FONDO\b|EMPRESA|"
-    r"HOSPITAL|CL[ÍI]NICA|E\.?S\.?E\.?\b|ESE\b|E\.?P\.?S\.?\b|EPS\b|A\.?R\.?L\.?\b|"
-    r"ARL\b|A\.?F\.?P\.?\b|AFP\b|FOMAG|FIDUPREVISORA|PORVENIR|PROTECCI[ÓO]N\s+S|"
-    r"COLFONDOS|COLPENSIONES|PERSONER[ÍI]A|FISCAL[ÍI]A|PROCURADUR[ÍI]A|DEFENSOR[ÍI]A|"
-    r"CONTRALOR[ÍI]A|REGISTRADUR[ÍI]A|CONSEJO\b|TRIBUNAL|JUZGADO|NACI[ÓO]N\b|RECTOR|"
-    r"SENA\b|ICBF|SIMAT|CNSC|COMISAR[ÍI]A|NOTAR[ÍI]A|S\.?A\.?S?\.?\b|LTDA|EICE|"
-    r"E\.?I\.?C\.?E\.?|S\.?A\.?S\.?\b|ENTIDAD|UAE\b|UAESP|ANSPE)\b"
-)
-# "en contra de [ENTIDAD]" — entidades reconocibles por keyword inicial
-_ENTITY_KW = (
-    r"GOBERNACI[ÓO]N|MUNICIPIO|ALCALD[ÍI]A|SECRETAR[ÍI]A|MINISTERIO|"
-    r"INSTITUCI[ÓO]N\s+EDUCATIVA|INSTITUTO|COLEGIO|ESCUELA|LICEO|UNIVERSIDAD|"
-    r"E\.?S\.?E\.?|ESE\b|EPS|HOSPITAL|FUNDACI[ÓO]N|PERSONER[ÍI]A|FISCAL[ÍI]A|"
-    r"DEPARTAMENTO|CONSEJO|UAE|RECTOR\w*|FONDO|PORVENIR|COLPENSIONES"
-)
-_PAT_EN_CONTRA_ENTITY = re.compile(
-    rf"(?i)\b(?:en\s+contra\s+de(?:l)?|contra\s+(?:el\s+|la\s+|los\s+|las\s+|del\s+)?)\s*"
-    rf"((?:LA\s+|EL\s+)?(?:{_ENTITY_KW})[A-ZÁÉÍÓÚÑ\s,\-–.0-9]{{3,180}}?)"
-    rf"(?=\s+(?:procurando|por\s+(?:considerar|cuanto|la|el|haber|no)|para\s+(?:que|la|el)|"
-    rf"toda\s+vez|y\s+(?:de\s+)?oficio|en\s+procura|solicitando|al\s+considerar|\.|\bquien\b))"
-)
-# Vinculación: "se ordena/dispone la vinculación de..." / "se vincula a..." / "vincúlese a..."
-_PAT_VINCULACION = re.compile(
-    r"(?i)(?:se\s+(?:ordena\s+(?:la\s+)?|dispone\s+(?:la\s+)?)?vinculaci[óo]n\s+(?:de\s+)?(?:oficio(?:sa)?\s+)?(?:al?\s+|a\s+l[aoes]+\s+|del?\s+)?"
-    r"|se\s+vincula(?:n)?\s+(?:de\s+oficio\s+)?(?:al?\s+|a\s+l[aoes]+\s+)?(?:tr[áa]mite\s+tutelar\s+a;?\s*|presente\s+(?:tr[áa]mite|asunto)\s+a\s+)?"
-    r"|vinc[úu]lese\s+(?:de\s+oficio\s+)?(?:al?\s+|a\s+l[aoes]+\s+)?"
-    # M2 2026-06-11 (bench: 33/60 golden con el VINCULAR a la vista sin capturar):
-    # infinitivo dispositivo del RESUELVE ("SEGUNDO: VINCULAR al MINISTERIO…",
-    # "VINCULAR a este trámite a la GOBERNACIÓN…") y pasado narrativo ("vinculó al MEN").
-    r"|vincular\s+(?:de\s+oficio\s+)?(?:a\s+(?:este|la\s+presente)\s+(?:tr[áa]mite|acci[óo]n|actuaci[óo]n|litis)\s+)?(?:al?\s+|a\s+l[aoes]+\s+)?"
-    r"|vincul[óo]\s+(?:de\s+oficio\s+)?(?:al?\s+|a\s+l[aoes]+\s+)?)"
-    r"([A-ZÁÉÍÓÚÑ][^\.]{8,400}?)(?=\s*(?:\.|,?\s*toda\s+vez|por\s+cuanto|quienes|para\s+que|en\s+atenci[óo]n|a\s+fin\s+(?:de|que)|debiendo|;\s*y\b))"
-)
-
-
-# Separadores entre entidades dentro del campo accionados: salto de línea, " - ",
-# " | ", " · ", ";", " + ", "  y otros". (NO partimos por coma sola: rompería nombres
-# como "SECRETARÍA DE EDUCACIÓN, CULTURA Y DEPORTE".)
-_ENTITY_SPLIT_RE = re.compile(
-    r"(?:[\r\n]+|\s+[-–—|·•]\s+|\s*;\s*|\s+\+\s+|\s+y\s+otr[oa]s?\b\s*)", re.IGNORECASE
-)
-# Placeholders que NO son una entidad real.
-_ACC_NON_VALUE_RE = re.compile(
-    r"(?i)^\s*(?:ningun[oa]s?|n\.?\s*a\.?|no\s+aplica|sin\s+(?:accionad|determin)|"
-    r"-+|\.+|s/?d|x+|por\s+determinar)\s*$"
-)
-
-
-# Cláusulas que cuelgan del nombre de la entidad pero no son parte de él
-# ("DEPARTAMENTO DE SANTANDER, REPRESENTADO LEGALMENTE POR JUVENAL DÍAZ MATEUS, O QUIEN…").
-_ENTITY_TAIL_CLAUSE_RE = re.compile(
-    r"(?i)[,;]?\s*(?:representad[oa]s?\b|en\s+cabeza\s+de\b|a\s+trav[ée]s\s+de\b|"
-    r"por\s+(?:conducto|intermedio)\s+de\b|en\s+la\s+persona\s+de\b|en\s+su\s+calidad\s+de\b|"
-    r"qui[eé]n(?:es)?\s+(?:haga|hagan)\b|o\s+qui[eé]n\b|representante\s+legal\b|"
-    r"identificad[oa]\b|con\s+(?:c\.?c\.?|nit)\b).*$"
-)
-
-
-def _canon_entity(s: str) -> str:
-    """Normaliza UNA entidad. Gobernación / Secretaría de Educación departamental de
-    Santander → forma canónica; cualquier otra (IE, municipio, EPS, fondo, secretaría
-    municipal, ministerio…) se conserva tal cual, limpia y en mayúsculas."""
-    u = re.sub(r"\s+", " ", s or "").strip().strip(",.;:·-–—()[]\"'").upper()
-    u = _ENTITY_TAIL_CLAUSE_RE.sub("", u).strip().strip(",.;:·-–—").strip()
-    if not u or len(u) < 3:
-        return ""
-    # Gobernación de Santander (también "DEPARTAMENTO/DEPARTAMENTAL DE SANTANDER" — misma
-    # persona jurídica, o un fragmento de "Secretaría de Educación Departamental de Santander")
-    if re.search(r"\bGOBERNACI[ÓO]N\b", u) or re.fullmatch(r"(?:EL\s+)?DEPARTAMENT(?:O|AL)\s+DE\s+SANTANDER\.?", u):
-        return _CANON_GOBERNACION
-    # Secretaría de Educación — ¿la DEPARTAMENTAL de Santander, o una municipal/nacional/otra?
-    if re.search(r"SECRETAR[ÍI]A\s+(?:DEPARTAMENTAL\s+)?DE\s+EDUCA[CS]I?[ÓO]?N?\b", u):
-        es_municipal = bool(re.search(r"\bMUNICIPAL\b", u))
-        es_nacional = bool(re.search(r"\bNACIONAL\b", u))
-        # ¿menciona un lugar que NO es Santander? (p.ej. "DE GIRÓN", "DE BARRANCABERMEJA")
-        otro_lugar = bool(
-            re.search(r"\bDE\s+(?!SANTANDER\b|EDUCA|LA\b|EL\b|LOS\b)[A-ZÁÉÍÓÚÑ]{4,}", u)
-            and not re.search(r"\bSANTANDER\b", u)
-        )
-        if not (es_municipal or es_nacional or otro_lugar):
-            return _CANON_SECRETARIA
-        return re.sub(r"^(?:LA|EL)\s+", "", u).strip()[:180]
-    # Otra entidad: quitar artículo inicial
-    u = re.sub(r"^(?:LA|EL|LOS|LAS|UNA?)\s+", "", u).strip()
-    return u[:180]
-
-
-def _looks_like_accionado_value(raw: str) -> bool:
-    """¿El texto tras la etiqueta 'Accionado:' parece una entidad (o lista de
-    entidades) y no un placeholder / basura de OCR?"""
-    if not raw:
-        return False
-    v = re.sub(r"\s+", " ", raw).strip()
-    if len(v) < 4 or len(v) > 500 or _ACC_NON_VALUE_RE.match(v):
-        return False
-    # Debe tener alguna palabra-entidad reconocible (o ser GOB/SecEdu, ya cubiertos por
-    # _ENTITY_WORD_RE vía GOBERNACI/SECRETAR), o al menos un bloque de 4+ mayúsculas.
-    return bool(_ENTITY_WORD_RE.search(v) or re.search(r"[A-ZÁÉÍÓÚÑ]{4,}", v))
-
-
-_CANON_ENTITIES = {_CANON_GOBERNACION, _CANON_SECRETARIA}
-
-
-def _normalize_entity_list(raw: str) -> str:
-    """Normaliza la lista de accionados PRESERVANDO TODAS las entidades listadas.
-    (Antes se descartaban las que no fueran GOB/SecEdu, dejando 'accionados' incompleto
-    — DeepSeek lo señaló en ~191 casos: Porvenir SA, Ministerio de Educación, IE, etc.)"""
-    pieces = [p for p in _ENTITY_SPLIT_RE.split(raw or "") if p and p.strip()]
-    if not pieces:
-        pieces = [raw or ""]
-    out: list[str] = []
-    dropped: list[str] = []
-    for p in pieces:
-        c = _canon_entity(p)
-        if not c or c in out:
-            continue
-        # Si hay >1 fragmento, descartar los que no parecen una entidad (suelen ser el
-        # nombre del representante legal o ruido de OCR colado tras un " - ").
-        if len(pieces) > 1 and c not in _CANON_ENTITIES and not _ENTITY_WORD_RE.search(c):
-            dropped.append(c)
-            continue
-        out.append(c)
-    if not out and dropped:  # todos quedaron descartados → mejor devolver algo
-        out = [dropped[0]]
-    if out:
-        return " - ".join(out)
-    return _canon_entity(raw or "")[:200]
-
-
-def extract_accionados_for_case(db: Session, case: Case) -> Optional[str]:
-    """Extrae los accionados. Estrategia:
-      1. Si el auto admisorio dice ACCIONADO: explícito → usarlo (puede ser IE,
-         municipio, Gobernación, Secretaría). Normaliza GOB/SEC a forma canónica.
-      2. "en contra de [ENTIDAD]" en cualquier doc.
-      3. Default: GOBERNACIÓN + SECRETARÍA DE EDUCACIÓN — porque las tutelas que
-         gestiona la SED son SIEMPRE contra ellos (lo confirmó el usuario), salvo
-         que el auto especifique otra entidad principal (caso: la SED es solo vinculada).
-
-    Default aplica a cualquier case con rad23 (= tutela válida).
-    """
-    # Texto de los autos admisorios primero, luego cualquier doc
-    autos = db.query(Document).filter(Document.case_id == case.id, Document.doc_type == "AUTO_ADMISORIO").all()
-    for d in autos:
-        text = d.extracted_text or ""
-        if not text or len(text) < 150:
-            continue
-        head = text[:4000]
-        # 1. Label ACCIONADO: (puede listar varias entidades, en una o varias líneas)
-        m = _PAT_ACCIONADO_LABEL.search(head)
-        if m:
-            raw = m.group(1).strip()
-            if _looks_like_accionado_value(raw):
-                return _normalize_entity_list(raw)
-        # 2. "en contra de [ENTIDAD]"
-        m = _PAT_EN_CONTRA_ENTITY.search(head)
-        if m:
-            return _normalize_entity_list(m.group(1))
-
-    # Sin auto admisorio claro → buscar "en contra de" en cualquier doc
-    for d in db.query(Document).filter(Document.case_id == case.id).all():
-        text = _read_doc_text(d)
-        if not text or len(text) < 150:
-            continue
-        m = _PAT_EN_CONTRA_ENTITY.search(text[:4000])
-        if m:
-            return _normalize_entity_list(m.group(1))
-        m = _PAT_ACCIONADO_LABEL.search(text[:4000])
-        if m:
-            raw = m.group(1).strip()
-            if _looks_like_accionado_value(raw):
-                return _normalize_entity_list(raw)
-
-    # 3. Default — toda tutela gestionada por la SED es contra GOB+SEC
-    if case.radicado_23_digitos:  # es una tutela válida
-        return f"{_CANON_GOBERNACION} - {_CANON_SECRETARIA}"
-    return None
-
-
-# Preámbulo de vinculación a recortar: el extractor (regex/LLM) suele capturar el
-# verbo + conectores antes de la 1ra entidad ("VINCULAR la presente acción a la
-# SECRETARÍA…", "trámite tutelar a; FUNDACIÓN…", "de manera oficiosa a…"). Se
-# recorta hasta el inicio de la entidad real. 2026-06-01.
-_RE_VINC_LEAD = re.compile(
-    r"(?i)^(?:\s*[-:;,]\s*)*"
-    r"(?:(?:la|el|los|las|al|a|de|del|en|por|y|este|esta|presente|tr[áa]mite|tutelar|"
-    r"tutela|demanda|asunto|actuaci[óo]n|acci[óo]n|accionar|litis|resguardo|"
-    r"constitucional|manera|oficios[ao]|oficiosamente|pasiva|calidad|accionad[oa]s|intermedio|sus|"
-    r"representantes|legales|adem[áa]s|oficio|orden[ae]se|v[íi]ncul\w*|cont[ée]stese|"
-    r"p[óo]ngase|conocimiento|se|se[ñn]or|director|los?|las?|siguientes?)\b[\s.,;:•·-]*)+"
-)
-
-
-def _clean_vinculados_lead(v: str) -> str:
-    """Recorta el preámbulo de vinculación. Devuelve "" si no queda entidad."""
-    s = (v or "").strip()
-    s = _RE_VINC_LEAD.sub("", s).strip(" .,;:-")
-    return s if len(s) >= 4 else ""
-
-
-def extract_vinculados_for_case(db: Session, case: Case) -> Optional[str]:
-    """Extrae los vinculados del cuerpo del auto admisorio (frases 'se vincula a...').
-
-    M2 2026-06-11: + PDF_AUTO_ADMISORIO (legacy por-filename — la query lo excluía y
-    perdía el auto entero, 14/60 golden) y ventana 5000→9000 (el VINCULAR del RESUELVE
-    suele caer pasada la pág. 2 en autos largos, 4/60)."""
-    autos = db.query(Document).filter(
-        Document.case_id == case.id,
-        Document.doc_type.in_(("AUTO_ADMISORIO", "PDF_AUTO_ADMISORIO")),
-    ).all()
-    for d in autos:
-        text = d.extracted_text or ""
-        if not text or len(text) < 150:
-            continue
-        head = text[:9000]
-        m = _PAT_VINCULACION.search(head)
-        if m:
-            raw = m.group(1)
-            v = re.sub(r"[\n\r]+", " ", raw)
-            v = re.sub(r"\s+", " ", v).strip().rstrip(",.;")
-            # Cortar antes de cláusulas de cierre
-            v = re.split(r"(?i)\b(?:toda\s+vez|por\s+cuanto|quienes|para\s+que|en\s+atenci[óo]n|a\s+fin\s+(?:de|que)|al\s+considerar)\b", v)[0].strip().rstrip(",.;")
-            v = _clean_vinculados_lead(v)  # recortar preámbulo "VINCULAR a la …"
-            if 8 <= len(v) <= 300:
-                return v[:250]
-    return None
-
-
 # ============================================================
 # DERECHO_VULNERADO  (campo 7 — semántico, regex de tags + LLM fallback)
 # ============================================================
@@ -733,667 +471,21 @@ def extract_vinculados_for_case(db: Session, case: Case) -> Optional[str]:
 # varios derechos, la columna los concatena "A - B - C" en ESTE orden (estable,
 # auditable). `OTRO` sólo lo puede emitir el LLM (derecho real fuera de la lista).
 # `SIN_DETERMINAR` es el default cuando ni regex ni LLM logran nada.
-DERECHO_VOCAB: tuple[str, ...] = (
-    "EDUCACION",
-    "SALUD",
-    "PETICION",
-    "DEBIDO_PROCESO",
-    "VIDA",
-    "SEGURIDAD_SOCIAL",
-    "MINIMO_VITAL",
-    "TRABAJO",
-    "IGUALDAD",
-    "INTIMIDAD",
-    "HABEAS_DATA",
-    "OTRO",
-)
-_DERECHO_PRIORITY = {tag: i for i, tag in enumerate(DERECHO_VOCAB)}
-DERECHO_SIN_DETERMINAR = "SIN_DETERMINAR"
-
-# Keyword (sobre texto sin tildes, minúsculas) → tag canónico. Multi-palabra
-# primero para que "seguridad social" gane antes que "social" suelto, etc.
-_DERECHO_KEYWORDS: tuple[tuple[str, str], ...] = (
-    ("seguridad social", "SEGURIDAD_SOCIAL"),
-    ("minimo vital", "MINIMO_VITAL"),
-    ("debido proceso", "DEBIDO_PROCESO"),
-    ("habeas data", "HABEAS_DATA"),
-    ("proteccion de datos", "HABEAS_DATA"),
-    ("datos personales", "HABEAS_DATA"),
-    ("transporte escolar", "EDUCACION"),
-    ("educac", "EDUCACION"),            # educación / educacion / educativa / educativo
-    ("ensenanza", "EDUCACION"),
-    ("escolar", "EDUCACION"),
-    ("salud", "SALUD"),
-    ("peticion", "PETICION"),
-    ("vida digna", "VIDA"),
-    ("dignidad humana", "VIDA"),
-    ("integridad personal", "VIDA"),
-    ("integridad fisica", "VIDA"),
-    (" vida", "VIDA"),                  # con espacio: evita "convivencia", etc.
-    ("trabajo", "TRABAJO"),
-    ("igualdad", "IGUALDAD"),
-    ("no discriminacion", "IGUALDAD"),
-    ("discriminacion", "IGUALDAD"),
-    ("intimidad", "INTIMIDAD"),
-    ("buen nombre", "INTIMIDAD"),
-)
-
-# Derechos "raros" que el LLM 4B tiende a ALUCINAR (sobre-etiqueta sistemática
-# medida 2026-06-02: ~50% de los cambios de derecho del 4B agregaban estos sin
-# respaldo). Solo se conservan si la demanda los EVIDENCIA textualmente; los "core"
-# (EDUCACION/SALUD/VIDA/TRABAJO/PETICION/DEBIDO_PROCESO/IGUALDAD) pasan sin filtro.
-# La evidencia REUSA `_DERECHO_KEYWORDS` (+ sinónimos inequívocos).
-_SPECULATIVE_DERECHOS = frozenset({"INTIMIDAD", "HABEAS_DATA", "MINIMO_VITAL", "SEGURIDAD_SOCIAL"})
-_SPEC_EVIDENCE: dict[str, tuple[str, ...]] = {
-    tag: tuple(kw for kw, t in _DERECHO_KEYWORDS if t == tag)
-    for tag in _SPECULATIVE_DERECHOS
-}
-_SPEC_EVIDENCE["SEGURIDAD_SOCIAL"] += ("pension", "pensional")
-_SPEC_EVIDENCE["MINIMO_VITAL"] += ("subsistencia",)
-
-
-def _ground_speculative_derechos(tags: list[str], text: str) -> list[str]:
-    """Descarta los derechos especulativos que el LLM propuso pero que la demanda
-    NO respalda textualmente (anti-alucinación del 4B). Determinista. Los tags core
-    pasan intactos."""
-    folded = _fold(text or "")
-    out: list[str] = []
-    for t in tags:
-        if t in _SPECULATIVE_DERECHOS and not any(kw in folded for kw in _SPEC_EVIDENCE.get(t, ())):
-            continue  # tag especulativo sin evidencia → descartar (alucinación)
-        out.append(t)
-    return out
-
-# Marcadores que CIERRAN la enumeración de derechos: lo que sigue ya no son
-# derechos del reclamo, sino quién los vulneró / a quién pertenecen / etc.
-# Se busca sobre el texto ORIGINAL de la región (con tildes, case-insensitive).
-_DERECHO_REGION_END = re.compile(
-    r"(?i)\b(?:"
-    r"los?\s+cuales?|las?\s+cuales?|"
-    r"que\s+(?:considera|estima|cree|denomina|fueron|han\s+sido|estim[oó]|se\b|le\b)|"
-    r"toda\s+vez|por\s+cuanto|presuntamente|supuestamente|en\s+raz[óo]n|debido\s+a|"
-    r"como\s+consecuencia|con\s+ocasi[óo]n|a\s+causa|"
-    r"por\s+(?:la|el|las|los)\s+(?:acci[óo]n|omisi[óo]n|negativa|falta|conducta|actuaci[óo]n|decisi[óo]n)|"
-    r"por\s+parte\s+de|vulnerad[oa]s?\s+por|amenazad[oa]s?\s+por|"
-    r"accionant|accionad|demandant|demandad|"
-    r"de\s+(?:la|el|su|mi|sus|mis)\s+(?:menor|ni[ñn][oa]s?|hij[oa]s?|agenciad[oa]s?|representad[oa]s?|poderdant|prohijad[oa])|"
-    r"contra\s+l[oa]s?\b|en\s+contra"
-    r")\b"
-)
-# Nombres de entidades que contienen "educación" pero NO son el derecho: la
-# Secretaría / Ministerio de Educación es la ACCIONADA, no el derecho vulnerado.
-_DERECHO_ENTITY_NOISE = (
-    "secretaria de educacion", "ministerio de educacion", "subsecretaria de educacion",
-    "departamental de educacion", "departamento de educacion", "secretaria de educa",
-    "direccion de educacion", "viceministerio de educacion",
-)
-
-# Ancla: el reclamo de la tutela se enuncia como "derechos fundamentales a la X,
-# Y y Z" (a veces "constitucionales"). Capturamos ~160 chars de "región" tras el
-# conector para escanear sólo ahí. El conector (a la / al / de) es opcional, pero
-# si la región empieza con boilerplate jurisprudencial ("...cuando no se dispone
-# de otro medio...", "...del actor", "...amenazados y vulnerados. En tal
-# sentido...") la descartamos: ahí "derechos fundamentales" se usa en abstracto,
-# no es la enumeración del caso.
-_DERECHO_ANCHOR = re.compile(
-    r"(?i)derechos?\s+(?:fundamental(?:es)?|constitucional(?:es)?(?:\s+y\s+legal(?:es)?)?)\s*"
-    r"(?:(?:presuntamente\s+|supuestamente\s+)?(?:vulnerad[oa]s?|amenazad[oa]s?)?\s*)?"
-    r"(?:a\s+l[oa]s?\s+|al\s+|a\s+las\s+|de\s+l[oa]s?\s+|de\s+|,\s*)?"
-    r"(.{0,180})",
-    re.DOTALL,
-)
-
-# Sólo escaneamos el encabezado del doc (parte resolutiva del auto / antecedentes
-# de la sentencia / petitorio de la demanda). Más allá vienen las "CONSIDERACIONES"
-# con jurisprudencia que menciona derechos en abstracto → ruido (mitigado además
-# por `_DERECHO_REGION_STOPSTART` y `_DERECHO_REGION_END`).
-_DERECHO_SCAN_CHARS = 8000
-# Si la región (lo que sigue al conector) ARRANCA con una de estas frases, NO es
-# la enumeración del reclamo sino texto considerativo / jurisprudencial.
-_DERECHO_REGION_STOPSTART = re.compile(
-    r"(?i)^\s*(?:"
-    r"cuando\b|respecto\b|consagrad|previst|son\b|como\b|que\b|y\b|cuy[oa]s?\b|"
-    r"seg[uú]n\b|tales?\b|los?\s+cuales?\b|las?\s+cuales?\b|del?\s+actor|"
-    r"del?\s+accionante|del?\s+demandante|del?\s+funcionario|del?\s+servidor|"
-    r"del?\s+peticionari|personas?\b|ciudadan|colombian|usuari|asociad[oa]s|"
-    r"en\s+(?:tal|el\s+presente|este|aras|virtud)|"
-    r"para\b|presunta|amenazad[oa]s?\b|vulnerad[oa]s?\s+(?:por|en\b|de\b|;|\.)|"
-    r"invocad|no\s+se\s+dispone|frente\s+a|sin\s+que|al\s+ser\b|reconocid"
-    r")"
-)
-
-
-def _fold(s: str) -> str:
-    """minúsculas + sin tildes (para matching robusto de keywords)."""
-    s = _ud.normalize("NFKD", s)
-    return "".join(c for c in s if not _ud.combining(c)).lower()
-
-
-def _tags_in_region(region: str) -> list[str]:
-    """Devuelve los tags canónicos presentes en una 'región' de texto, dedup.
-
-    Antes de buscar keywords: (1) trunca la región en el cierre de la enumeración
-    (`_DERECHO_REGION_END`), (2) trunca en el primer fin de oración ('. ' + may.),
-    (3) borra nombres de entidades que contienen 'educación' (la Secretaría es la
-    accionada, no el derecho).
-    """
-    m = _DERECHO_REGION_END.search(region)
-    if m:
-        region = region[:m.start()]
-    m = re.search(r"\.\s+[A-ZÁÉÍÓÚÑ]", region)
-    if m:
-        region = region[:m.start()]
-    folded = _fold(region)
-    for noise in _DERECHO_ENTITY_NOISE:
-        folded = folded.replace(noise, " ")
-    found: list[str] = []
-    for kw, tag in _DERECHO_KEYWORDS:
-        if kw in folded and tag not in found:
-            found.append(tag)
-    return found
-
-
-def _extract_derechos_from_text(text: str) -> list[str]:
-    """Escanea el ENCABEZADO del doc buscando enumeraciones de derechos tras el
-    ancla y devuelve la lista de tags canónicos (dedup, orden de prioridad).
-
-    Descarta las regiones que arrancan con boilerplate (`_DERECHO_REGION_STOPSTART`).
-    No corta en la primera región: una enumeración real puede partirse en varias
-    (p.ej. el auto repite el reclamo en su parte resolutiva), pero al limitar el
-    escaneo a `_DERECHO_SCAN_CHARS` se evita la zona de "CONSIDERACIONES".
-    """
-    if not text:
-        return []
-    head = text[:_DERECHO_SCAN_CHARS]
-    found: list[str] = []
-    for m in _DERECHO_ANCHOR.finditer(head):
-        region = m.group(1)
-        if _DERECHO_REGION_STOPSTART.search(region):
-            continue
-        for tag in _tags_in_region(region):
-            if tag not in found:
-                found.append(tag)
-    found.sort(key=lambda t: _DERECHO_PRIORITY.get(t, 999))
-    return found
-
-
-def _format_derechos(tags: list[str]) -> Optional[str]:
-    if not tags:
-        return None
-    return " - ".join(tags)
-
-
-# Doctypes donde el derecho invocado aparece con más fiabilidad (prioridad)
-_DERECHO_DOC_PRIORITY = ["AUTO_ADMISORIO", "DEMANDA_TUTELA", "SENTENCIA_1RA", "SENTENCIA_2DA"]
-
-
-def _llm_classify_derecho(text: str) -> Optional[str]:
-    """Fallback LLM (Qwen3-4B local): clasifica el/los derecho(s) invocado(s)
-    al vocabulario controlado. Devuelve "A - B" o None si falla / texto pobre.
-
-    Respeta `V9_DISABLE_LLM=true`. Si llama-server no responde, devuelve None
-    silenciosamente (NO rompe la extracción).
-    """
-    if os.getenv("V9_DISABLE_LLM", "false").lower() == "true":
-        return None
-    text = (text or "").strip()
-    if len(text) < 150:
-        return None
-    try:
-        from backend.extraction.ai_extractor import _call_local
-    except ImportError as e:
-        logger.warning("ai_extractor no importable: %s", e)
-        return None
-
-    vocab = ", ".join(t for t in DERECHO_VOCAB)
-    prompt = (
-        "/no_think\n"
-        "Eres un clasificador jurídico. Lee el texto de una acción de tutela y di "
-        "qué derecho(s) fundamental(es) se invocan como vulnerados.\n"
-        f"Responde ÚNICAMENTE con uno o varios de estos tags, separados por ' - ': {vocab}.\n"
-        "Usa 'OTRO' sólo si el derecho real no está en la lista. Si no puedes determinarlo, "
-        "responde exactamente 'SIN_DETERMINAR'. No expliques nada más.\n\n"
-        f"Texto:\n{text[:3500]}"
-    )
-    msgs = [
-        {"role": "system", "content": "Clasificas derechos fundamentales. Respondes sólo con los tags pedidos."},
-        {"role": "user", "content": prompt},
-    ]
-    try:
-        raw, _, _ = _call_local(msgs, "qwen3-4b-iuris", max_tokens=64)
-    except Exception as e:
-        logger.warning("LLM derecho_vulnerado falló: %s", str(e)[:200])
-        return None
-    if not raw:
-        return None
-    raw_fold = _fold(raw)
-    # 1. ¿el modelo dijo explícitamente SIN_DETERMINAR? respétalo
-    if re.search(r"\bsin[ _]determinar\b", raw_fold) and not re.search(
-        r"\b(?:educac|salud|peticion|debido|vida|trabajo|igualdad|intimidad|habeas)\b", raw_fold
-    ):
-        return DERECHO_SIN_DETERMINAR
-    # 2. Buscar tags del vocab por nombre (tolerando ' ' por '_') o por keyword del dominio
-    tags: list[str] = []
-    for tag in DERECHO_VOCAB:
-        tag_pat = re.escape(tag).replace(r"\_", r"[ _]").lower()
-        if re.search(rf"\b{tag_pat}\b", raw_fold) and tag not in tags:
-            tags.append(tag)
-    # 3. fallback: si el modelo respondió en prosa, mapear keywords del dominio
-    if not tags:
-        tags = _tags_in_region(" " + raw + " ")
-    if not tags:
-        return None
-    # Grounding: descartar derechos especulativos que el LLM alucinó sin evidencia.
-    tags = _ground_speculative_derechos(tags, text)
-    if not tags:
-        return None
-    if "OTRO" in tags and len(tags) > 1:
-        tags = [t for t in tags if t != "OTRO"]  # OTRO sólo si es lo único
-    tags.sort(key=lambda t: _DERECHO_PRIORITY.get(t, 999))
-    return " - ".join(tags)
-
-
 # ============================================================
-# Selección de doc fuente para campos SEMÁNTICOS (asunto / derecho)
+# DERECHO_VULNERADO → extractors/derecho.py (de-sobreingeniería F6). Re-exportado.
 # ============================================================
-# El asunto y el derecho describen el RECLAMO ORIGINAL del accionante. Si se lee
-# el doc equivocado —un auto de desacato, un informe de cumplimiento, o un PDF
-# mal rotulado como DEMANDA_TUTELA que en realidad es un AutoNoSanciona— el
-# clasificador (regex o LLM) describe la ETAPA PROCESAL en vez del reclamo.
-# `_best_claim_text` elige el doc que mejor refleja el reclamo original.
-_CLAIM_DEM_MARK = [r"BAJO LA GRAVEDAD DEL JURAMENTO", r"NO HE PRESENTADO OTRA",
-                   r"PRETENSIONES", r"\bHECHOS\b", r"JURAMENTO", r"ACCION DE TUTELA",
-                   r"instaur", r"interpong", r"agente oficios", r"en mi calidad de"]
-# Head que delata una etapa procesal POSTERIOR (no la demanda original).
-_CLAIM_NOT_DEMANDA = re.compile(
-    r"INCIDENTE DE DESACATO|\bAUTO\b|INFORME DE CUMPLIMIENTO|VISITA OCULAR|"
-    r"REQUERIMIENTO PREVIO|DECIDE SANCI|APERTURA.{0,8}PRUEBAS|NO SANCIONA", re.I)
-
-
-def _best_claim_text(db: Session, case: Case, max_chars: int = 9000) -> tuple[str, bool]:
-    """Devuelve (texto, es_demanda_real) del doc que mejor refleja el reclamo
-    original del accionante. Penaliza autos/desacato/informes (etapa procesal).
-    `es_demanda_real=False` ⇒ no hay demanda fiable → el caller debe ser honesto
-    (SIN_DETERMINAR/flag) en vez de clasificar una etapa procesal."""
-    scored: list[tuple[int, str]] = []
-    for d in db.query(Document).filter(Document.case_id == case.id).all():
-        t = d.extracted_text if d.extracted_text else (_read_doc_text(d) or "")
-        if len(t) < 250:
-            continue
-        head = t[:6000]
-        sc = sum(2 for m in _CLAIM_DEM_MARK if re.search(m, head, re.I))
-        dt = d.doc_type or "OTRO"
-        if dt in ("DEMANDA_TUTELA", "ANEXO_DEMANDA"):
-            sc += 2
-        if dt == "AUTO_ADMISORIO":
-            sc += 3  # el auto admisorio reenuncia el reclamo original limpio
-        if dt in ("RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"):
-            sc -= 4   # defensa de la SED, NO el reclamo del accionante
-        if _CLAIM_NOT_DEMANDA.search(t[:1400]):
-            sc -= 6   # head de etapa procesal posterior → NO es la demanda
-        scored.append((sc, t[:max_chars]))
-    if not scored:
-        return "", False
-    scored.sort(key=lambda x: (-x[0], -len(x[1])))
-    sc, t = scored[0]
-    return t, sc >= 4
-
-
-def extract_derecho_vulnerado_for_case(
-    db: Session, case: Case, *, use_llm: bool = True
-) -> tuple[Optional[str], str]:
-    """Extrae derecho_vulnerado del case. Campo SEMÁNTICO → autoridad = LLM.
-
-    Estrategia (2026-06, LLM-first):
-      1. Si `use_llm` y el LLM local está disponible: lee la demanda real
-         (`_best_claim_text`, que excluye autos/desacato/informes) y clasifica
-         al vocabulario controlado. ESTA es la autoridad — el regex de keywords
-         sobre-aplica EDUCACION (lo dispara el nombre del accionado
-         "Secretaría de Educación" o una mención de paso) y no distingue el
-         derecho del ESTUDIANTE del reclamo LABORAL del docente.
-      2. FALLBACK regex (determinista; airgapped / `V9_DISABLE_LLM=true` / el LLM
-         no concluyó): tags por DOCTYPE en orden de prioridad; el primero con
-         señal gana.
-      3. Si todo falla: ("SIN_DETERMINAR", "default").
-
-    Returns: (valor, fuente)  — fuente ∈ {"llm", "regex", "default"}.
-    """
-    # 1. LLM-first (autoridad del campo semántico)
-    if use_llm and os.getenv("V9_DISABLE_LLM", "false").lower() != "true":
-        claim_text, _is_real = _best_claim_text(db, case)
-        if claim_text and len(claim_text) >= 150:
-            val = _llm_classify_derecho(claim_text)
-            # "OTRO" pelado = el LLM no identificó un derecho del vocab → inconcluso;
-            # preferir el regex (no regresar un EDUCACION correcto a OTRO).
-            if val and val not in (DERECHO_SIN_DETERMINAR, "OTRO"):
-                return val, "llm"
-
-    # 2. FALLBACK regex por doctype, en orden de prioridad — el primero con señal gana
-    docs_by_type: dict[str, list[Document]] = {}
-    for d in db.query(Document).filter(Document.case_id == case.id).all():
-        docs_by_type.setdefault(d.doc_type or "OTRO", []).append(d)
-
-    ordered_types = _DERECHO_DOC_PRIORITY + [t for t in docs_by_type if t not in _DERECHO_DOC_PRIORITY]
-    for dt in ordered_types:
-        found: list[str] = []
-        for d in docs_by_type.get(dt, []):
-            text = d.extracted_text if d.extracted_text else _read_doc_text(d)
-            if not text or len(text) < 200:
-                continue
-            for tag in _extract_derechos_from_text(text):
-                if tag not in found:
-                    found.append(tag)
-        if found:
-            found.sort(key=lambda t: _DERECHO_PRIORITY.get(t, 999))
-            return _format_derechos(found), "regex"
-
-    # 3. Default
-    return DERECHO_SIN_DETERMINAR, "default"
-
-
+from backend.v9.extractors.derecho import (  # noqa: E402,F401
+    DERECHO_VOCAB, DERECHO_SIN_DETERMINAR, _ground_speculative_derechos,
+    _extract_derechos_from_text, _format_derechos, _llm_classify_derecho,
+    extract_derecho_vulnerado_for_case,
+)
 # ============================================================
-# JUZGADO  (campo 8 — estructural; 1ra y 2da instancia)
+# JUZGADO → extractors/juzgado.py (de-sobreingeniería F6). Re-exportado.
 # ============================================================
-#
-# El juzgado aparece en todo doc oficial del despacho. La fuente CANÓNICA es el
-# remitente/destinatario de los emails de la Rama Judicial: las cuentas de
-# cendoj.ramajudicial.gov.co / notificacionesrj.gov.co se llaman, p.ej.:
-#   "Juzgado 04 Civil Municipal - Santander - Girón <j04cmpalgiron@cendoj...>"
-#   "Juzgado 03 Laboral Circuito - Santander - Barrancabermeja <...>"
-#   "Notificaciones Secretaría Sala Civil Familia - Santander - Bucaramanga <...>"
-# → de ahí salen número, especialidad, NIVEL (Municipal/Circuito) y municipio.
-#
-# Dos slots:
-#   - juzgado     → 1ra instancia (el que lleva la tutela; en tutelas contra la
-#                   SED departamental, por reparto, casi siempre es un Juez
-#                   Municipal del lugar de los hechos → nivel MUNICIPAL).
-#   - juzgado_2nd → 2da instancia (solo si hubo impugnación) → nivel CIRCUITO o
-#                   TRIBUNAL. Si no se puede extraer explícito, se DERIVA con el
-#                   mapa judicial canónico (`backend/cognition/legal_schema.py`).
-
-# Remitente/destinatario Rama Judicial: "<nombre> - Santander - <municipio> <email@(cendoj|notificacionesrj)>"
-_RE_RJ_SENDER = re.compile(
-    r"(?i)\b(?P<nombre>(?:juzgado|tribunal|notificaciones)[^<>\n]{3,70}?)\s*[-–]\s*santander\s*[-–]\s*"
-    r"(?P<muni>[^<>\n]{2,40}?)\s*<[^>\n]*@(?:cendoj\.ramajudicial|notificacionesrj|ramajudicial)\.gov\.co>"
+from backend.v9.extractors.juzgado import (  # noqa: E402,F401
+    extract_juzgado_for_case, extract_juzgado_2nd_for_case, _clean_juzgado,
+    _juzgado_from_rj_sender, _juzgado_candidates_from_text, _juzgado_nivel,
 )
-# Fallback: "JUZGADO ..." / "TRIBUNAL ..." dentro del cuerpo de un doc (header/sello).
-_RE_JUZGADO_RAW = re.compile(r"(?i)\b(juzgad[oa]\s+[^\n]{4,95})")
-_RE_TRIBUNAL_RAW = re.compile(r"(?i)\b(tribunal\s+(?:superior|administrativo|contencioso)[^\n]{0,80})")
-# Donde "termina" el nombre del juzgado en texto libre (a partir de aquí es basura).
-_JUZGADO_STOP = re.compile(
-    r"(?i)\b(?:acta\b|reparto\b|radicaci|radicad|expediente\b|accionant|accionad|"
-    r"demandant|demandad|se[ñn]or\b|se[ñn]ora\b|doctor\b|doctora\b|asunto\b|ref\b|"
-    r"referencia\b|oficio\b|n[uú]mero\b|n[°º]\b|nro\b|fecha\b|d[ií]a\b|me\s+permito|"
-    r"corre[ol]?\b|e-?mail\b|tel[eé]?f?\w*\b|celular\b|carrera\b|calle\b|c[oó]digo\b|piso\b|"
-    r"buen\s+d[ií]a|cordial|atentamente|avoca\b|avoqu|admite\b|adm[ií]t|conoce\b|"
-    r"profiri|profer|emiti|dentro\s+de|mediante\b|notific|para\s+reparto|"
-    r"sala\s+de\s+decisi|de\s+conformidad|conforme\s+a|sobre\s+la\b|en\s+raz[óo]n|"
-    r"al\s+confirmar|por\s+considerar|de\s+este\s+distrito|de\s+esta\s+ciudad|"
-    r"veinti\w+|trein\w+|cuaren\w+|cincuen\w+|sesen\w+|seten\w+|"
-    r"ochen\w+|noven\w+|actuando\b|quien\b|en\s+su\b|el\s+cual\b|la\s+cual\b)"
-)
-# Salas válidas de un Tribunal Superior (para no capturar texto de más).
-_RE_SALA = re.compile(
-    r"(?i)\bsala\s+(civil[\s\-]*familia[\s\-]*laboral|civil[\s\-]*familia|civil|penal|laboral|familia|[úu]nica|mixta)\b"
-)
-_JUZGADO_KEY_TOKENS = re.compile(
-    r"(?i)\b(?:municipal|del\s+circuito|circuito|civil|penal|laboral|administrativ[oa]|"
-    r"promiscu[oa]|familia|peque[ñn]as\s+causas|ejecuci[oó]n|oralidad|garant[íi]as|adolescentes|sala)\b"
-)
-
-
-def _juzgado_nivel(name: str) -> str:
-    """'TRIBUNAL' | 'CIRCUITO' | 'MUNICIPAL' | 'OTRO' a partir del nombre."""
-    t = _fold(name)
-    if "tribunal" in t or re.search(r"\bsala\b", t):
-        return "TRIBUNAL"
-    if "circuito" in t:
-        return "CIRCUITO"
-    if "municipal" in t or "pequenas causas" in t:
-        return "MUNICIPAL"
-    return "OTRO"
-
-
-def _norm_muni_titlecase(m: str) -> str:
-    """'san vicente de chucurí' → 'San Vicente de Chucurí' (sin tocar tildes)."""
-    small = {"de", "del", "la", "las", "los", "y"}
-    parts = re.sub(r"\s+", " ", m).strip().split(" ")
-    out = []
-    for i, p in enumerate(parts):
-        out.append(p if (i and p.lower() in small) else (p[:1].upper() + p[1:].lower()))
-    return " ".join(out)
-
-
-def _juzgado_from_rj_sender(line: str) -> Optional[str]:
-    """Parsea una línea de remitente/destinatario de la Rama Judicial.
-    'Juzgado 04 Civil Municipal - Santander - Girón <j04...@cendoj...>'
-    → 'JUZGADO 04 CIVIL MUNICIPAL DE GIRÓN (SANTANDER)'.
-    'Notificaciones Secretaría Sala Civil Familia - Santander - Bucaramanga <...>'
-    → 'TRIBUNAL SUPERIOR DEL DISTRITO JUDICIAL DE BUCARAMANGA - SALA CIVIL FAMILIA'.
-    """
-    m = _RE_RJ_SENDER.search(line)
-    if not m:
-        return None
-    nombre = re.sub(r"\s+", " ", m.group("nombre")).strip(" -–")
-    muni = _norm_muni_titlecase(m.group("muni"))
-    nombre_low = _fold(nombre)
-    if "sala" in nombre_low and not nombre_low.startswith("juzgado"):
-        # Secretaría de una Sala de Tribunal Superior
-        ms = _RE_SALA.search(nombre)
-        sala = re.sub(r"\s+", " ", ms.group(1)).strip().upper().replace("  ", " ") if ms else ""
-        sala = re.sub(r"\s*-\s*", " ", sala)
-        distrito = "BUCARAMANGA" if _fold(muni) == "bucaramanga" else ("SAN GIL" if "gil" in _fold(muni) else muni.upper())
-        base = f"TRIBUNAL SUPERIOR DEL DISTRITO JUDICIAL DE {distrito}"
-        return f"{base} - SALA {sala}" if sala else base
-    if nombre_low.startswith("tribunal"):
-        nu = nombre.upper()
-        return nu if _fold(muni) in nombre_low else f"{nu} ({muni.upper()})"
-    # Juzgado normal
-    return f"{nombre.upper()} DE {muni.upper()} (SANTANDER)"
-
-
-def _clean_juzgado(raw: str) -> Optional[str]:
-    """Limpia un candidato de juzgado extraído de texto libre (header/sello).
-    Devuelve MAYÚSCULAS, recortado al final del municipio Santander si aparece,
-    o None si no parece válido."""
-    if not raw:
-        return None
-    v = re.sub(r"[\s\n\r]+", " ", raw).strip()
-    m = _JUZGADO_STOP.search(v)
-    if m and m.start() > 8:
-        v = v[:m.start()].strip()
-    v = v.rstrip(" ,.;:-–—").strip()
-    try:
-        from backend.cognition.legal_schema import MUNICIPIOS_SANTANDER as _MUNIS
-    except Exception:
-        _MUNIS = set()
-    v_fold_up = _fold(v).upper()
-    best_end = -1
-    for muni in sorted(_MUNIS, key=len, reverse=True):
-        idx = v_fold_up.find(" " + muni)
-        if idx >= 0:
-            end = idx + 1 + len(muni)
-            nxt = v_fold_up[end:end + 1]
-            if nxt in ("", " ", ",", ".", ";", ":"):
-                if best_end == -1 or end < best_end:
-                    best_end = end
-    if best_end > 0:
-        kept = v[:best_end].rstrip(" ,.;")
-        rest = v[best_end:].lstrip(" ,")
-        if rest[:9].upper().startswith("SANTANDER"):
-            kept = kept + " " + rest.split()[0].rstrip(",.;")
-        v = kept
-    v = re.sub(r"\s+", " ", v).strip(" ,.;:-–—").upper()
-    if not (10 <= len(v) <= 90):
-        return None
-    if not (v.startswith("JUZGADO") or v.startswith("TRIBUNAL")):
-        return None
-    if not _JUZGADO_KEY_TOKENS.search(v):
-        return None
-    return v
-
-
-def _rj_sender_candidates(db: Session, case_id: int) -> list[str]:
-    """Todos los juzgados normalizados que aparecen como remitente/destinatario
-    Rama Judicial (cendoj/notificacionesrj) en el case — la fuente más limpia.
-
-    Escanea CUALQUIER doc (no solo EMAIL_JUDICIAL/EMAIL_INTERNO) + el `sender` de los
-    emails: el remitente RJ suele venir embebido en un PDF de demanda/auto forwarded
-    o en el header del email, no solo en los .md (gap que dejaba juzgados incompletos
-    en c411/c369/c219/… — fix 2026-06-02). El ranking del caller (MUNICIPAL>CIRCUITO)
-    resuelve los casos con varios remitentes (p.ej. 1ra inst. municipal vs 2da circuito)."""
-    out: list[str] = []
-    blobs: list[str] = []
-    for d in db.query(Document).filter(Document.case_id == case_id).all():
-        t = d.extracted_text if d.extracted_text else _read_doc_text(d)
-        if t:
-            blobs.append(t[:8000])  # cota: el remitente va en el encabezado
-    for e in db.query(Email).filter(Email.case_id == case_id).all():
-        if e.sender:
-            blobs.append(e.sender)
-    for t in blobs:
-        for m in _RE_RJ_SENDER.finditer(t):
-            j = _juzgado_from_rj_sender(m.group(0))
-            if j and j not in out:
-                out.append(j)
-    return out
-
-
-def _juzgado_candidates_from_text(text: str) -> list[str]:
-    """Nombres de juzgado/tribunal limpios que aparecen en un texto libre."""
-    if not text:
-        return []
-    out: list[str] = []
-    for pat in (_RE_TRIBUNAL_RAW, _RE_JUZGADO_RAW):
-        for m in pat.finditer(text):
-            c = _clean_juzgado(m.group(1))
-            if c and c not in out:
-                out.append(c)
-    return out
-
-
-_JUZGADO_2ND_DOCTYPES = ["SENTENCIA_2DA", "AUTO_2DA", "AUTO_CONCEDE_IMPUGNACION", "IMPUGNACION"]
-
-
-def extract_juzgado_for_case(db: Session, case: Case) -> Optional[str]:
-    """Extrae el juzgado de 1ra instancia (el que lleva la tutela).
-
-    Reúne candidatos de dos fuentes y ordena por (nivel, fuente, longitud):
-      - remitente/destinatario Rama Judicial (cendoj/notificacionesrj) — fuente
-        más limpia y canónica (`source=0`).
-      - header/sello de AUTO_ADMISORIO / SENTENCIA_1RA / NOTIFICACION / OFICIO
-        (`source=1..6`).
-    Nivel MUNICIPAL gana sobre CIRCUITO/TRIBUNAL (la 1ra instancia de una tutela
-    contra la SED departamental casi siempre es un Juez Municipal del lugar de
-    los hechos).
-    """
-    cands: list[tuple[int, str]] = []  # (source_rank, name)  — menor source_rank = mejor fuente
-
-    # Fuente 0: remitente Rama Judicial (limpio, formato estándar "JUZGADO NN ...")
-    for j in _rj_sender_candidates(db, case.id):
-        cands.append((0, j))
-
-    # Fuentes 1..6: texto de docs oficiales del despacho (header/sello)
-    src_map = {"AUTO_ADMISORIO": 1, "SENTENCIA_1RA": 2, "NOTIFICACION": 3,
-               "NOTIFICACION_FALLO": 4, "OFICIO_CUMPLIMIENTO": 5, "RESPUESTA": 6}
-    for dt, src in src_map.items():
-        for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt).all():
-            text = d.extracted_text or ""
-            if not text:
-                continue
-            for c in _juzgado_candidates_from_text(text[:2800]):
-                cands.append((src, c))
-
-    if not cands:
-        return None
-
-    def sort_key(item: tuple[int, str]):
-        src, name = item
-        rank = {"MUNICIPAL": 0, "CIRCUITO": 1, "TRIBUNAL": 2, "OTRO": 3}[_juzgado_nivel(name)]
-        return (rank, src, len(name))
-
-    cands.sort(key=sort_key)
-    raw = cands[0][1]
-    # 2026-06-10: pasar el ganador por _clean_juzgado ANTES de normalizar — algunos
-    # candidatos llegan con cola basura del header ("…DE IBAGUÉ Corre[o]", "…DE
-    # SANTANDER Referencia", c543/c549 de la ingesta). Si el limpiador lo rechaza
-    # (forma rara pero real), se conserva el raw para no perder dato.
-    raw = _clean_juzgado(raw) or raw
-    # 1B: normalizar a forma canónica (número → escrito, sin paréntesis depto)
-    from backend.v9.catalog_resolve import normalize_juzgado
-    return normalize_juzgado(raw)
-
-
-def extract_juzgado_2nd_for_case(db: Session, case: Case, juzgado_1st: Optional[str]) -> tuple[Optional[str], str]:
-    """Extrae (o deriva) el juzgado de 2da instancia. Solo si hubo impugnación
-    (`impugnacion == 'SI'` o existe un doc de 2da instancia).
-
-    Returns: (valor, fuente) — fuente ∈ {"regex", "derivado", "none"}.
-    """
-    has_2nd_doc = (
-        db.query(Document)
-        .filter(Document.case_id == case.id, Document.doc_type.in_(_JUZGADO_2ND_DOCTYPES))
-        .first()
-        is not None
-    )
-    impugno = (getattr(case, "impugnacion", None) or "").upper() == "SI"
-    if not (has_2nd_doc or impugno):
-        return None, "none"
-
-    j1_fold = _fold(juzgado_1st) if juzgado_1st else ""
-
-    # M5 2026-06-11: el avocamiento real exige doc de 2ª (SENTENCIA_2DA/AUTO_2DA).
-    # Con solo impugnacion=SI, el remitente CIRCUITO suele ser la REMISIÓN por
-    # reparto ("remítase al Juzgado X") y el cuadro curado deja juzgado_2nd vacío
-    # hasta que la 2ª avoque — 3 'alucinaciones' en el golden (c406/c408/c420).
-    has_avoc_doc = (
-        db.query(Document)
-        .filter(Document.case_id == case.id, Document.doc_type.in_(("SENTENCIA_2DA", "AUTO_2DA")))
-        .first() is not None
-    )
-    if not has_avoc_doc:
-        return None, "none"  # sin avocamiento documentado → vacío honesto (semántica del cuadro)
-    # 1) remitente Rama Judicial de nivel CIRCUITO/TRIBUNAL, distinto al de 1ra
-    rj = _rj_sender_candidates(db, case.id)
-    rj_2nd = [j for j in rj if _juzgado_nivel(j) in ("CIRCUITO", "TRIBUNAL") and _fold(j) != j1_fold]
-    if rj_2nd and has_avoc_doc:
-        rj_2nd.sort(key=lambda j: (0 if _juzgado_nivel(j) == "TRIBUNAL" else 1, len(j)))
-        from backend.v9.catalog_resolve import normalize_juzgado
-        return normalize_juzgado(rj_2nd[0]), "regex"
-
-    # 2) extracción explícita en docs de 2da instancia
-    cands: list[str] = []
-    for dt in _JUZGADO_2ND_DOCTYPES:
-        for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt).all():
-            text = d.extracted_text or ""
-            if not text:
-                continue
-            for c in _juzgado_candidates_from_text(text[:3500]):
-                if _fold(c) != j1_fold and _juzgado_nivel(c) in ("CIRCUITO", "TRIBUNAL"):
-                    cands.append(c)
-    if cands:
-        cands.sort(key=lambda c: (0 if _juzgado_nivel(c) == "TRIBUNAL" else 1, len(c)))
-        from backend.v9.catalog_resolve import normalize_juzgado
-        return normalize_juzgado(cands[0]), "regex"
-
-    # 3) derivación con el mapa judicial canónico
-    if juzgado_1st:
-        try:
-            from backend.cognition.legal_schema import derivar_juzgado_segunda
-            ciudad = getattr(case, "ciudad", None)
-            der = derivar_juzgado_segunda(juzgado_1st, municipio_hechos=ciudad)
-            if der and der.juzgado_2nd:
-                jl = der.juzgado_2nd.lower()
-                if "no determin" not in jl and "no identificad" not in jl:
-                    val = der.juzgado_2nd
-                    if der.sala and der.sala.lower() not in jl:
-                        val = f"{val} - Sala {der.sala}"
-                    return val.upper() + " (DERIVADO)", "derivado"
-        except Exception as e:
-            logger.warning("derivar_juzgado_segunda falló: %s", str(e)[:200])
-    return None, "none"
-
-
 # ============================================================
 # CIUDAD  (campo 9 — municipio del juzgado de 1ra instancia = lugar de los hechos)
 # ============================================================
@@ -1501,6 +593,13 @@ _RE_DESTINO_CTX = re.compile(
 )
 
 
+# Sede de la I.E./colegio/vereda → municipio de afectación. Hoisted (F6, antes recompilado por llamada).
+_RE_SEDE_IE = re.compile(
+    r"(?i)(?:instituci[óo]n\s+educativa|i\.?\s*e\.?|colegio|centro\s+educativo|sede\s+educativa|"
+    r"vereda|corregimiento)\s+[^.,;\n]{0,60}?(?:del?\s+municipio\s+de[l]?|,?\s+municipio\s+de[l]?|\s+de[l]?)\s+"
+    r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40})")
+
+
 def _extract_municipio_afectacion(db: Session, case: Case) -> Optional[str]:
     """Municipio de la I.E./plaza donde se afecta el derecho (no la sede del juzgado).
     CONSERVADOR (alta precisión, baja cobertura): solo el ancla fuerte de PLAZA DE ORIGEN
@@ -1524,12 +623,7 @@ def _extract_municipio_afectacion(db: Session, case: Case) -> Optional[str]:
         if v:
             return v
 
-    # Ancla 0.5: sede de la I.E./colegio/vereda en la demanda o el auto — la sede
-    # escolar es la afectación (regla del usuario: colegio del menor / plaza docente).
-    _RE_SEDE_IE = re.compile(
-        r"(?i)(?:instituci[óo]n\s+educativa|i\.?\s*e\.?|colegio|centro\s+educativo|sede\s+educativa|"
-        r"vereda|corregimiento)\s+[^.,;\n]{0,60}?(?:del?\s+municipio\s+de[l]?|,?\s+municipio\s+de[l]?|\s+de[l]?)\s+"
-        r"([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ ]{2,40})")
+    # Ancla 0.5: sede de la I.E./colegio/vereda = la afectación (colegio del menor / plaza docente).
     for dt0 in ("DEMANDA_TUTELA", "AUTO_ADMISORIO", "PDF_AUTO_ADMISORIO"):
         for d in db.query(Document).filter(Document.case_id == case.id, Document.doc_type == dt0).all():
             t = d.extracted_text or ""
@@ -1734,19 +828,7 @@ def _parse_es_dates(text: str) -> list[tuple[int, str]]:
     return out
 
 
-def _rad_year(case: Case) -> Optional[int]:
-    """Año del radicado de 23 dígitos (chars 12-15) — usado como cota de cordura
-    para las fechas (el auto/admisión cae el mismo año o ±1 del radicado)."""
-    rad = getattr(case, "radicado_23_digitos", None) or ""
-    rad = re.sub(r"\D", "", rad)
-    if len(rad) >= 16:
-        try:
-            y = int(rad[12:16])
-            if 2018 <= y <= 2030:
-                return y
-        except ValueError:
-            pass
-    return None
+# _rad_year → extractors/_shared.py (importado arriba)
 
 
 def _first_date_near_year(dates: list[tuple[int, str]], year_hint: Optional[int], tol: int = 1) -> Optional[str]:
@@ -3905,6 +2987,10 @@ _TEMPLATE_DATE_MARKERS = (
 )
 
 
+# Asunto de email "RESPUESTA … TUTELA". Hoisted (F6, antes recompilado por llamada).
+_RE_RESP_SUBJ = re.compile(r"(?i)\brespuesta\b[^|\n]{0,60}?\b(?:tutela|acci[óo]n\s+de\s+tutela|auto\s+(?:de\s+traslado|admisori\w+)|requerimiento)|\bcontestaci[óo]n\b[^|\n]{0,40}?tutela")
+
+
 def extract_fecha_respuesta_for_case(db: Session, case: Case) -> tuple[Optional[str], str]:
     """`fecha_respuesta` = fecha del oficio de respuesta de la SED (dateline "Ciudad, DD
     de MMMM de AAAA" o header de email "Fecha … DD/MM/AAAA"). Si hay varias respuestas,
@@ -3970,7 +3056,6 @@ def extract_fecha_respuesta_for_case(db: Session, case: Case) -> tuple[Optional[
         return min(cands, key=_key), "docx_respuesta"
 
     # 2) fallback: email .md "RESPUESTA … TUTELA …" → su date_received
-    _RE_RESP_SUBJ = re.compile(r"(?i)\brespuesta\b[^|\n]{0,60}?\b(?:tutela|acci[óo]n\s+de\s+tutela|auto\s+(?:de\s+traslado|admisori\w+)|requerimiento)|\bcontestaci[óo]n\b[^|\n]{0,40}?tutela")
     best: Optional[str] = None
     for e in db.query(Email).filter(Email.case_id == case.id).order_by(Email.date_received.asc()).all():
         s = e.subject or ""

@@ -251,8 +251,10 @@ def _checks_field_extractor() -> list[tuple]:
         from backend.cognition.legal_schema import clasificar_sed_tematica, categoria_tematica_de_asunto
         from backend.v9.regex_pass import _extract_ciudad as _regex_ciudad
     except Exception as e:  # noqa: BLE001
-        print(f"\n  (checks de field_extractor omitidos: {e})")
-        return []
+        # NO tragar en silencio: un import roto de field_extractor (ej. helper movido a
+        # extractors/* sin re-exportar) DEBE fallar ruidosamente, no saltar ~73 checks.
+        print(f"\n  ❌ IMPORT ROTO de field_extractor (re-export faltante?): {e}")
+        return [("import field_extractor (re-export completo)", True, False)]
 
     def _asunto_cat(text: str):
         return clasificar_sed_tematica(text)[3]

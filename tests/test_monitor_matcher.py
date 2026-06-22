@@ -317,7 +317,7 @@ class TestQwenDisambiguation3C:
 
     def test_qwen_confirma_promueve_a_auto_match(self, db, cache, monkeypatch):
         import backend.email.matcher as m
-        monkeypatch.setattr(m, "_qwen_is_running", lambda: True)
+        monkeypatch.setattr(m, "_llm_available", lambda: True)
         monkeypatch.setattr(m, "_try_qwen_disambiguation", lambda db, sig, ranked: 100)
 
         r = score_case_match(db, cache, self._medium_signals())
@@ -329,7 +329,7 @@ class TestQwenDisambiguation3C:
 
     def test_qwen_discrepa_se_queda_medium(self, db, cache, monkeypatch):
         import backend.email.matcher as m
-        monkeypatch.setattr(m, "_qwen_is_running", lambda: True)
+        monkeypatch.setattr(m, "_llm_available", lambda: True)
         # Qwen elige OTRO caso → NO auto-asignar (anti-conflación)
         monkeypatch.setattr(m, "_try_qwen_disambiguation", lambda db, sig, ranked: 200)
 
@@ -341,7 +341,7 @@ class TestQwenDisambiguation3C:
 
     def test_qwen_ambiguo_se_queda_medium(self, db, cache, monkeypatch):
         import backend.email.matcher as m
-        monkeypatch.setattr(m, "_qwen_is_running", lambda: True)
+        monkeypatch.setattr(m, "_llm_available", lambda: True)
         monkeypatch.setattr(m, "_try_qwen_disambiguation", lambda db, sig, ranked: None)
 
         r = score_case_match(db, cache, self._medium_signals())
@@ -351,7 +351,7 @@ class TestQwenDisambiguation3C:
 
     def test_qwen_apagado_no_cambia_nada(self, db, cache, monkeypatch):
         import backend.email.matcher as m
-        monkeypatch.setattr(m, "_qwen_is_running", lambda: False)
+        monkeypatch.setattr(m, "_llm_available", lambda: False)
 
         r = score_case_match(db, cache, self._medium_signals())
         assert r.case_id == 100

@@ -315,15 +315,6 @@ async def lifespan(app: FastAPI):
     wal_thread.start()
     add_monitor_log("Scheduler de WAL checkpoint activado (cada 5 min)")
 
-    # v5.3.3: Active learning nocturno (3:00 AM)
-    try:
-        from backend.services.active_learning_scheduler import run_scheduler_thread as _al_thread
-        al_thread = threading.Thread(target=_al_thread, daemon=True, name="active-learning")
-        al_thread.start()
-        add_monitor_log("Active learning scheduler activado (cron 3:00 AM)")
-    except Exception as e:
-        add_monitor_log(f"Active learning no activado: {e}", level="warning")
-
     # Pendiente A (2026-06-20): cron de sync Rama Judicial (~3:30 AM). Gentil + gated
     # por RAMA_JUDICIAL_SYNC_CRON (default OFF) → el thread vive pero es inerte hasta
     # activar el flag. Detecta actuaciones nuevas (fallo/sanción) y emite alertas.
@@ -446,8 +437,6 @@ from backend.alerts.router import router as alerts_router
 app.include_router(alerts_router)
 from backend.routers.intelligence import router as intelligence_router
 app.include_router(intelligence_router)
-from backend.routers.agent import router as agent_router
-app.include_router(agent_router)
 from backend.routers.cleanup import router as cleanup_router
 app.include_router(cleanup_router)
 # (Modernización Fase 6) router `cognitive` retirado: el botón flotante usa /api/chat/.
@@ -459,9 +448,6 @@ app.include_router(v9_router)
 # API CPNU Rama Judicial (Fase E): preview + descarga de expediente por rad23
 from backend.routers.rama_judicial import router as rama_judicial_router
 app.include_router(rama_judicial_router)
-# Pipeline experimental DeepSeek end-to-end (módulo aislado — eliminar si no se adopta)
-from backend.routers.deepseek_pipeline import router as deepseek_pipeline_router
-app.include_router(deepseek_pipeline_router)
 
 
 # ============================================================
@@ -500,11 +486,11 @@ def appliance_health():
             _db.close()
     except Exception as e:  # noqa: BLE001
         checks["db"] = {"ok": False, "error": str(e)[:200]}
-    try:
-        from backend.services.llm_mutex import lifecycle_state, is_up
-        checks["llm"] = {"ok": True, "up": is_up(timeout=1.0), **lifecycle_state()}
-    except Exception as e:  # noqa: BLE001
-        checks["llm"] = {"ok": False, "error": str(e)[:200]}
+    # Motor LLM = DeepSeek API (nube): no hay server local que sondear.
+    _ds = (os.getenv("V9_ALLOW_DEEPSEEK", "false").lower() == "true"
+           and bool(os.getenv("V9_LLM_API_KEY", "")))
+    checks["llm"] = {"ok": True, "provider": "deepseek" if _ds else "none",
+                     "server": "ready" if _ds else "off"}
     try:
         from backend.v9.types import EXCEL_FIELDS
         checks["v9"] = {"ok": True, "fields": len(EXCEL_FIELDS)}
@@ -662,16 +648,7 @@ def _run_gmail_check_background():
                 f"Caso NUEVO '{case.folder_name}': queda PENDIENTE — candidata a extracción en /extraction",
             )
 
-        # Pausar llama-server antes de la re-extracción (precaución de RAM en equipos justos).
-        # Fase 7.3: la re-extracción ahora es v9 (`_v9_extract` → extract_case con use_llm=False),
-        # así que normalmente no toca el LLM; se conserva la pausa como salvaguarda.
-        if actualizados:
-            try:
-                from backend.services.llm_mutex import pause_llm_for_extraction
-                pause_llm_for_extraction()
-            except Exception as _mutex_err:
-                add_monitor_log(f"Mutex pre-Paso3 no disponible: {_mutex_err}", level="warning")
-
+        # (Motor = DeepSeek API: ya no hay llama-server local que pausar antes de re-extraer.)
         for i, (case, _nd) in enumerate(actualizados):
             gmail_check_result["current"] = 2 + i
             gmail_check_result["step"] = f"Paso 3/3: Analizando ({i+1}/{len(actualizados)}): {case.folder_name[:40]}..."
@@ -1428,11 +1405,7 @@ def _extraction_worker_init():
     logging.getLogger("tutelas.extraction.worker").info(
         "Worker process started: pid=%s ppid=%s", os.getpid(), os.getppid()
     )
-    try:
-        from backend.cognition.ner_spacy import _get_nlp
-        _get_nlp()
-    except Exception:
-        pass
+    # (v9 no usa spaCy NER; el preload se retiró con la cadena cognitive_fill)
 
 
 def _process_one_case_extraction(case_id: int) -> dict:

@@ -76,7 +76,10 @@ def test_deepseek_gateado_tras_flag(monkeypatch):
     NO usan DeepSeek (key inerte). Con el flag, se reactiva."""
     import importlib
     monkeypatch.setenv("V9_LLM_API_KEY", "sk-test")
-    monkeypatch.delenv("V9_ALLOW_DEEPSEEK", raising=False)
+    # setenv "false" (no delenv): desde la migración a DeepSeek el .env trae
+    # V9_ALLOW_DEEPSEEK=true y load_dotenv lo re-inyectaría tras un delenv → el test debe
+    # forzar "false" explícito para probar el gating de forma hermética.
+    monkeypatch.setenv("V9_ALLOW_DEEPSEEK", "false")
     import backend.v9.llm_gap_fill as g
     import backend.extraction.ai_extractor as a
     importlib.reload(g); importlib.reload(a)
@@ -84,7 +87,6 @@ def test_deepseek_gateado_tras_flag(monkeypatch):
     monkeypatch.setenv("V9_ALLOW_DEEPSEEK", "true")
     importlib.reload(g); importlib.reload(a)
     assert g._LLM_API_KEY == "sk-test" and a._LLM_API_KEY == "sk-test"  # reactivado
-    # restaurar estado limpio para otros tests
-    monkeypatch.delenv("V9_LLM_API_KEY", raising=False)
-    monkeypatch.delenv("V9_ALLOW_DEEPSEEK", raising=False)
+    # restaurar a la config real del .env (DeepSeek activo) para otros tests
+    monkeypatch.undo()
     importlib.reload(g); importlib.reload(a)
