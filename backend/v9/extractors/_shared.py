@@ -58,3 +58,44 @@ def _fold(s: str) -> str:
     """minúsculas + sin tildes (para matching robusto de keywords)."""
     s = _ud.normalize("NFKD", s)
     return "".join(c for c in s if not _ud.combining(c)).lower()
+
+
+# `_best_claim_text` elige el doc que mejor refleja el RECLAMO original del accionante
+# (no la etapa procesal posterior). Compartido por los semánticos (derecho/asunto) y
+# pipeline.py → vive en _shared.
+_CLAIM_DEM_MARK = [r"BAJO LA GRAVEDAD DEL JURAMENTO", r"NO HE PRESENTADO OTRA",
+                   r"PRETENSIONES", r"\bHECHOS\b", r"JURAMENTO", r"ACCION DE TUTELA",
+                   r"instaur", r"interpong", r"agente oficios", r"en mi calidad de"]
+# Head que delata una etapa procesal POSTERIOR (no la demanda original).
+_CLAIM_NOT_DEMANDA = re.compile(
+    r"INCIDENTE DE DESACATO|\bAUTO\b|INFORME DE CUMPLIMIENTO|VISITA OCULAR|"
+    r"REQUERIMIENTO PREVIO|DECIDE SANCI|APERTURA.{0,8}PRUEBAS|NO SANCIONA", re.I)
+
+
+def _best_claim_text(db: Session, case: Case, max_chars: int = 9000) -> tuple[str, bool]:
+    """Devuelve (texto, es_demanda_real) del doc que mejor refleja el reclamo
+    original del accionante. Penaliza autos/desacato/informes (etapa procesal).
+    `es_demanda_real=False` ⇒ no hay demanda fiable → el caller debe ser honesto
+    (SIN_DETERMINAR/flag) en vez de clasificar una etapa procesal."""
+    scored: list[tuple[int, str]] = []
+    for d in db.query(Document).filter(Document.case_id == case.id).all():
+        t = d.extracted_text if d.extracted_text else (_read_doc_text(d) or "")
+        if len(t) < 250:
+            continue
+        head = t[:6000]
+        sc = sum(2 for m in _CLAIM_DEM_MARK if re.search(m, head, re.I))
+        dt = d.doc_type or "OTRO"
+        if dt in ("DEMANDA_TUTELA", "ANEXO_DEMANDA"):
+            sc += 2
+        if dt == "AUTO_ADMISORIO":
+            sc += 3  # el auto admisorio reenuncia el reclamo original limpio
+        if dt in ("RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"):
+            sc -= 4   # defensa de la SED, NO el reclamo del accionante
+        if _CLAIM_NOT_DEMANDA.search(t[:1400]):
+            sc -= 6   # head de etapa procesal posterior → NO es la demanda
+        scored.append((sc, t[:max_chars]))
+    if not scored:
+        return "", False
+    scored.sort(key=lambda x: (-x[0], -len(x[1])))
+    sc, t = scored[0]
+    return t, sc >= 4
