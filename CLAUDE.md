@@ -8,6 +8,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **v9.2 — Consolidado a `main` (2026-06-10, tag `v9.2-consolidacion-20260610`).** `experiment-v5.5` y `main` apuntan al mismo commit; trabajar en `main` de aquí en adelante. Respaldo: `backup/pre-modernizacion`.
 
+### ⚠️ MOTOR LLM = DeepSeek API (migración 2026-06-22)
+Se **retiró el 4B local (Qwen3) y se conectó DeepSeek** como motor único (decisión Wilson:
+el 4B degeneraba en output largo y no hay recursos para hardware mayor). Ya **NO es
+LOCAL_ONLY**. Config en `.env` (gitignored): `V9_ALLOW_DEEPSEEK=true`, `V9_LLM_API_KEY`,
+`LLM_LOCAL_URL=https://api.deepseek.com`, `LLM_LOCAL_MODEL_ID=deepseek-chat`, sampling
+temp 0.2 / top_p 0.9 (sin `top_k` — la API de DeepSeek no lo soporta), `V9_LLM_MAX_TOKENS=2000`.
+El código ya soportaba DeepSeek (`ai_extractor._call_local` con `_LLM_API_KEY` → manda
+`Authorization` y usa `LLM_LOCAL_MODEL_ID`). `services/llm_mutex.py` es **no-op cuando
+`_EXTERNAL_LLM`** (no enciende/pausa llama-server). El `llama-server` ya no se lanza.
+Tests siguen deterministas (usan `V9_DISABLE_LLM`). Verificado: extracción real ~2.5s vía
+DeepSeek, 4B no revive (:8765 libre), safety net verde.
+**⚖️ PENDIENTE LEGAL (Ley 1581):** DeepSeek aloja en China (NO está en la lista SIC de países
+adecuados) → enviar PII de tutelas tiene riesgo. Wilson decidió avanzar sin anonimización
+por ahora. Ver `docs/ESTRATEGIA_LLM_SOBERANIA_DATOS.md` (incl. roadmap hardware DGX Spark).
+
 ### Estado al cierre 2026-06-03 (curación de datos + curación de CÓDIGO)
 
 Tras varias sesiones de curación campo-por-campo del cuadro (~440 casos), esta

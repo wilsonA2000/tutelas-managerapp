@@ -51,6 +51,13 @@ GGUF_BASE = Path(_GGUF_ENV) if os.path.isabs(_GGUF_ENV) \
     else PROJECT_ROOT / "data" / "lora-models" / _GGUF_ENV
 GGUF_LORA = PROJECT_ROOT / "data" / "lora-models" / "iuris-lora-qwen3-4b.gguf"
 
+# Migración 2026-06-22: motor LLM = DeepSeek API. Si hay LLM externo configurado, NO hay
+# llama-server local que encender/pausar → todo el ciclo de vida del server es no-op.
+_EXTERNAL_LLM = (
+    os.getenv("V9_ALLOW_DEEPSEEK", "false").lower() == "true"
+    and bool(os.getenv("V9_LLM_API_KEY", ""))
+)
+
 PAUSE_FLAG = Path("/tmp/iuris_llm_paused.flag")
 PID_FILE = Path("/tmp/iuris_llm_server.pid")
 _lock = Lock()
@@ -86,6 +93,8 @@ def pause_llm_for_extraction() -> bool:
     Retorna True si pausó algo, False si ya estaba abajo.
     Crea PAUSE_FLAG para señalar que debe relanzarse después.
     """
+    if _EXTERNAL_LLM:
+        return False  # DeepSeek: no hay server local que pausar
     with _lock:
         if not is_up(timeout=1.0):
             logger.info("LLM no está corriendo — nada que pausar")
@@ -186,6 +195,8 @@ def ensure_llm_up(wait_s: int = 60) -> bool:
     - Si LOADING (503): espera hasta wait_s. Si listo, True. Si timeout, False.
     - Si DOWN: lanza spawn fire-and-forget y espera wait_s.
     """
+    if _EXTERNAL_LLM:
+        return True  # DeepSeek: no se lanza server local
     if is_up(timeout=1.5):
         return True
 
@@ -290,6 +301,8 @@ def begin_extraction(wait_s: int = 90) -> bool:
     para que el semáforo muestre "encendiendo" durante el spawn. Retorna True
     si el server quedó listo (si no, la extracción cae a determinista, como antes).
     """
+    if _EXTERNAL_LLM:
+        return True  # DeepSeek: motor remoto siempre "listo", no se enciende nada local
     global _app_spawned, _extraction_active
     was_up = is_up(timeout=1.0)
     with _lifecycle_lock:
