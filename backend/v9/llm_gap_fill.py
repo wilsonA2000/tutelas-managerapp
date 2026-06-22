@@ -235,7 +235,7 @@ def _build_prompt(missing: list[str], text: str) -> str:
     # V1 (default): instrucciones solo de los campos faltantes, en medio del prompt.
     lines = [f"- {f}: {_FIELD_INSTRUCTIONS.get(f, 'extraer del texto')}" for f in missing]
     field_block = "Campos a extraer:\n" + "\n".join(lines)
-    t = (text or "")[:10000]
+    t = (text or "")[:_CONTEXT_CAP]
     return _PROMPT_TEMPLATE.format(field_block=field_block, text=t)
 
 
@@ -348,7 +348,9 @@ _FIELD_DOC_AFFINITY: dict[str, list[str]] = {
     "abogado_responsable":    ["RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"],
 }
 
-_CONTEXT_CAP = int(os.getenv("V9_LLM_CONTEXT_CAP", "8000"))  # chars máx del contexto LLM (env-tunable; se sube coordinado con la ventana en Fase 4)
+# Chars máx del contexto LLM por caso. Subido a 40k para DeepSeek (ventana 64K tokens,
+# 2026-06-22): antes 8k era la cota del 4B local. env-tunable V9_LLM_CONTEXT_CAP.
+_CONTEXT_CAP = int(os.getenv("V9_LLM_CONTEXT_CAP", "40000"))
 
 
 def build_context_for_fields(missing: list[str], doc_texts: dict[str, str]) -> str:

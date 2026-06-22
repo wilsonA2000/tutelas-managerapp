@@ -1040,7 +1040,7 @@ def _llm_classify_asunto(text: str, vocab: list[str]) -> Optional[str]:
         "el ASUNTO (de qué trata el reclamo).\n"
         f"Responde ÚNICAMENTE con UNO de estos tags: {', '.join(vocab)}.\n"
         "Si ninguno aplica, responde exactamente 'OTRO'. No expliques nada más.\n\n"
-        f"Texto:\n{text[:3500]}"
+        f"Texto:\n{text[:int(os.getenv('V9_LLM_FIELD_CAP', '20000'))]}"
     )
     try:
         raw, _, _ = _call_local(
@@ -1353,7 +1353,7 @@ def _llm_locate_pretensiones(text: str) -> Optional[str]:
         "TEXTUALMENTE (sin cambiar mayúsculas ni puntuación), de la primera pretensión del "
         "accionante. No expliques nada. Si no encuentras pretensiones del accionante, responde "
         "exactamente 'NO_HAY'.\n\n"
-        f"Texto:\n{text[:7000]}"
+        f"Texto:\n{text[:int(os.getenv('V9_LLM_FIELD_CAP', '20000'))]}"
     )
     try:
         raw, _, _ = _call_local(

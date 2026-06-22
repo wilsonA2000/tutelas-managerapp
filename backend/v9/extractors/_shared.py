@@ -6,6 +6,7 @@ y re-exporta para preservar el contrato público (tests/scripts importan estos n
 """
 from __future__ import annotations
 
+import os
 import re
 import unicodedata as _ud
 from pathlib import Path
@@ -72,7 +73,8 @@ _CLAIM_NOT_DEMANDA = re.compile(
     r"REQUERIMIENTO PREVIO|DECIDE SANCI|APERTURA.{0,8}PRUEBAS|NO SANCIONA", re.I)
 
 
-def _best_claim_text(db: Session, case: Case, max_chars: int = 9000) -> tuple[str, bool]:
+def _best_claim_text(db: Session, case: Case,
+                     max_chars: int = int(os.getenv("V9_LLM_FIELD_CAP", "20000"))) -> tuple[str, bool]:
     """Devuelve (texto, es_demanda_real) del doc que mejor refleja el reclamo
     original del accionante. Penaliza autos/desacato/informes (etapa procesal).
     `es_demanda_real=False` ⇒ no hay demanda fiable → el caller debe ser honesto

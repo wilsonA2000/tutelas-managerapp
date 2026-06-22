@@ -237,7 +237,7 @@ def _llm_classify_derecho(text: str) -> Optional[str]:
         f"Responde ÚNICAMENTE con uno o varios de estos tags, separados por ' - ': {vocab}.\n"
         "Usa 'OTRO' sólo si el derecho real no está en la lista. Si no puedes determinarlo, "
         "responde exactamente 'SIN_DETERMINAR'. No expliques nada más.\n\n"
-        f"Texto:\n{text[:3500]}"
+        f"Texto:\n{text[:int(os.getenv('V9_LLM_FIELD_CAP', '20000'))]}"
     )
     msgs = [
         {"role": "system", "content": "Clasificas derechos fundamentales. Respondes sólo con los tags pedidos."},

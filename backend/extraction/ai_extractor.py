@@ -238,11 +238,12 @@ def extract_with_ai(documents: list[dict], folder_name: str = "",
         text = doc.get("text", "").strip()
         if not text:
             continue
-        if not _is_critical_pdf(doc.get("filename", "")) and len(text) > 25000:
-            text = text[:20000] + "\n[...CONTENIDO TRUNCADO...]\n" + text[-5000:]
-        elif len(text) > 15000:
-            # cap también docs críticos para no inflar el prompt en CPU 4B
-            text = text[:10000] + "\n[...CONTENIDO TRUNCADO...]\n" + text[-3000:]
+        # Caps subidos para DeepSeek (ventana 64K tokens, 2026-06-22); antes eran cotas del
+        # 4B local en CPU. head+tail conserva inicio (partes/hechos) y final (RESUELVE).
+        if not _is_critical_pdf(doc.get("filename", "")) and len(text) > 70000:
+            text = text[:55000] + "\n[...CONTENIDO TRUNCADO...]\n" + text[-15000:]
+        elif len(text) > 55000:
+            text = text[:42000] + "\n[...CONTENIDO TRUNCADO...]\n" + text[-10000:]
         doc_type = doc.get("doc_type", "OTRO")
         doc_texts.append(f"\n===ARCHIVO: {doc['filename']} [TIPO: {doc_type}]===\n{text}")
 
