@@ -289,6 +289,11 @@ def _call_llm(prompt: str, missing: list[str]) -> Optional[str]:
         headers = {"Content-Type": "application/json"}
         if _LLM_API_KEY:  # proveedor externo (DeepSeek): requiere model + auth
             payload = {**payload, "model": _LLM_MODEL}
+            # DeepSeek V4 = thinking por defecto → off para extracción (más rápido, sin gastar
+            # tokens en razonamiento). Auto si el modelo es v4 (o V9_LLM_THINKING=off). Este
+            # path NO pasa por _call_local, así que el param se añade aquí también (fix latencia).
+            if "v4" in (_LLM_MODEL or "").lower() or os.getenv("V9_LLM_THINKING", "").lower() == "off":
+                payload["thinking"] = {"type": "disabled"}
             headers["Authorization"] = f"Bearer {_LLM_API_KEY}"
         req = urllib.request.Request(LLM_URL + "/v1/chat/completions",
                                      data=json.dumps(payload).encode(),
