@@ -531,7 +531,43 @@ def _normalize_rad_num(text: str) -> str | None:
     return f"{m.group(1)}:{m.group(2)}" if m else None
 
 
-def match_to_case(db: Session, radicado_data: dict, accionante: str) -> Case | None:
+def _adjudicate_ambiguous(db, candidate_ids, radicado_data, accionante, email_ctx):
+    """DeepSeek desempata candidatos AMBIGUOS de la ingesta (dead-end determinista).
+
+    Devuelve un Verdict (decision ∈ candidate_ids ∪ {NEW,AMBIGUOUS}). Gateado: si el LLM
+    está off → Verdict AMBIGUOUS y el caller hace lo determinista de antes (revisión humana).
+    Audita cada veredicto en audit_log. Le pasa a DeepSeek TODO el contexto del correo
+    (asunto + cuerpo completo + nombres de adjuntos) + el resumen de cada caso candidato.
+    """
+    from backend.email.llm_adjudicator import adjudicate_assignment, llm_on, Verdict
+    cand_ids = [c for c in (candidate_ids or [])]
+    if not llm_on() or len(cand_ids) < 1:
+        return Verdict("AMBIGUOUS", 0.0, "LLM off / sin candidatos", cand_ids)
+    from backend.email.matcher import EmailSignals
+    ctx = email_ctx or {}
+    signals = EmailSignals(
+        rad23=(radicado_data.get("radicado_23") or ""),
+        rad_corto=(radicado_data.get("radicado_corto") or ""),
+        forest=(radicado_data.get("forest") or ""),
+        cc_accionante=(radicado_data.get("cc_accionante") or ""),
+        accionante_name=(accionante or ""),
+        sender=(ctx.get("sender") or ""),
+    )
+    verdict = adjudicate_assignment(
+        db, signals, cand_ids,
+        email_subject=(ctx.get("subject") or ""),
+        email_body=(ctx.get("body") or ""),
+        attachment_names=(ctx.get("attachment_names") or []),
+    )
+    # Auditoría: NO usamos audit_log (es case-scoped, case_id NOT NULL; una adjudicación de
+    # ingesta puede no tener caso aún → NEW/AMBIGUOUS). El veredicto queda en el log de la app
+    # (logger.info aquí + en los callers) y, en el path del matcher, en match_signals_json.
+    logger.info("adjudicación ingesta: cands=%s → %s (conf=%.2f) %s",
+                cand_ids, verdict.decision, verdict.confidence, verdict.reason[:100])
+    return verdict
+
+
+def match_to_case(db: Session, radicado_data: dict, accionante: str, email_ctx: dict | None = None) -> Case | None:
     """Buscar caso existente para vincular email.
     Prioridad: rad_23 completo > rad_23 parcial > CC (v5.2) > FOREST > rad_corto > personería > accionante.
     Returns: Case o None."""
@@ -610,12 +646,19 @@ def match_to_case(db: Session, radicado_data: dict, accionante: str) -> Case | N
             if len(verified) == 1:
                 return verified[0]
             if len(verified) > 1:
-                # Homonimia year:seq y no se puede desambiguar por juzgado → NO auto-asignar
-                # (conflar dos expedientes es peor que dejar el email sin caso). El llamador
-                # lo deja PENDIENTE / lo manda a cuarentena.
+                # Homonimia year:seq y no se puede desambiguar por juzgado. ANTES → None
+                # (revisión humana, fuente histórica de conflaciones). AHORA: DeepSeek lee el
+                # correo + cada candidato y desempata; si está seguro, asigna; si no, None.
+                v = _adjudicate_ambiguous(db, [c.id for c in verified], radicado_data, accionante, email_ctx)
+                if v.is_confident and isinstance(v.decision, int):
+                    chosen = next((c for c in verified if c.id == v.decision), None)
+                    if chosen:
+                        logger.info("adjudicador: rad_corto %s ambiguo → case %s (conf %.2f) %s",
+                                    target, v.decision, v.confidence, v.reason[:80])
+                        return chosen
                 logger.warning(
-                    "match_to_case: rad_corto %s ambiguo (%d casos: %s) — no se auto-asigna",
-                    target, len(verified), [c.id for c in verified],
+                    "match_to_case: rad_corto %s ambiguo (%d casos: %s) — adjudicador no resolvió (%s) → revisión",
+                    target, len(verified), [c.id for c in verified], v.decision,
                 )
                 return None
             if matches and not verified:
@@ -663,7 +706,7 @@ def match_to_case(db: Session, radicado_data: dict, accionante: str) -> Case | N
     return None
 
 
-def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case | None:
+def create_new_case(db: Session, radicado_data: dict, accionante: str, email_ctx: dict | None = None) -> Case | None:
     """Crear carpeta y caso nuevo en la DB.
     Returns: Case creado o None si no hay radicado."""
     rad_corto = radicado_data.get("radicado_corto", "")
@@ -706,16 +749,26 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str) -> Case |
         if len(_matches) == 1:
             return _matches[0]
         if len(_matches) > 1:
-            # Guard 2026-06-12: rad corto compartido por VARIOS juzgados y el correo
-            # sin rad23 que desambigüe. Devolver el primero a ciegas conflaba
-            # expedientes (caso real e2042: impugnación de c516/Cimitarra cayó a
-            # c90/Bucaramanga, el de id más bajo). El matcher y F2 ya lo declararon
-            # ambiguo — aquí NO se adivina: el correo queda sin caso, para revisión.
-            logger.warning(
-                "create_new_case: rad corto %s AMBIGUO entre casos %s y el correo no "
-                "desambigua → no se asigna ni se crea (queda para revisión humana)",
-                rad_corto, [c.id for c in _matches])
-            return None
+            # Guard 2026-06-12: rad corto compartido por VARIOS juzgados y el correo sin
+            # rad23 que desambigüe (caso real e2042: c516/Cimitarra vs c90/Bucaramanga).
+            # ANTES → None (revisión, fuente de conflaciones). AHORA: DeepSeek lee el correo
+            # + candidatos. Si confía en un expediente → adjunta (NO crea duplicado). Si dice
+            # NUEVO con seguridad → cae al flujo de creación. Si duda → None (revisión).
+            v = _adjudicate_ambiguous(db, [c.id for c in _matches], radicado_data, accionante, email_ctx)
+            if v.is_confident and isinstance(v.decision, int):
+                chosen = next((c for c in _matches if c.id == v.decision), None)
+                if chosen:
+                    logger.info("adjudicador: rad corto %s ambiguo → adjunta a case %s (conf %.2f) %s",
+                                rad_corto, v.decision, v.confidence, v.reason[:80])
+                    return chosen
+            if not (v.is_confident and v.decision == "NEW"):
+                logger.warning(
+                    "create_new_case: rad corto %s AMBIGUO entre %s — adjudicador no resolvió (%s) → revisión",
+                    rad_corto, [c.id for c in _matches], v.decision)
+                return None
+            logger.info("adjudicador: rad corto %s → proceso NUEVO (conf %.2f) %s",
+                        rad_corto, v.confidence, v.reason[:80])
+            # cae al flujo de creación de caso nuevo abajo
 
     clean_acc = re.sub(r"[\n\r]", " ", accionante or "").strip()
     # Guard 2026-06-10: validar que el "nombre" sea un nombre real — un saludo de
@@ -1080,6 +1133,8 @@ def check_inbox(db: Session) -> list[dict]:
                 body = _extract_body_complete(msg.get("payload", {}))
                 att_parts = _find_attachment_parts(msg.get("payload", {}))
                 att_names = [a["filename"] for a in att_parts]
+                # Contexto completo del correo para el adjudicador DeepSeek (dead-ends ambiguos).
+                email_ctx = {"subject": subject, "body": body, "sender": sender, "attachment_names": att_names}
 
                 # ── CLASIFICAR ──
                 tipo = classify_email_type(subject, sender)
@@ -1193,7 +1248,7 @@ def check_inbox(db: Session) -> list[dict]:
                             accion = "AMBIGUO"
                     else:
                         # Fallback a matcher secuencial v5.3 si cache no está listo (cold start)
-                        case = match_to_case(db, radicado_data, accionante)
+                        case = match_to_case(db, radicado_data, accionante, email_ctx)
                         if case:
                             match_route = "cold_start_sequential"
 
@@ -1228,7 +1283,7 @@ def check_inbox(db: Session) -> list[dict]:
 
                 # Si no se encontró caso y no es SALIENTE/AMBIGUO → crear nuevo
                 if accion not in ("SALIENTE", "AMBIGUO") and not case:
-                    case = create_new_case(db, radicado_data, accionante)
+                    case = create_new_case(db, radicado_data, accionante, email_ctx)
                     if case:
                         created_new = True
                         accion = "CASO_NUEVO"

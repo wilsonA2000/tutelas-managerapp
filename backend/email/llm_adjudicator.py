@@ -152,6 +152,11 @@ def _case_brief(db, cache, cid: int) -> str:
     )
 
 
+# DeepSeek tiene ventana amplia → le damos TODO el contexto del correo (body completo +
+# nombres de adjuntos), no un snippet. Cota generosa para acotar costo/latencia.
+_ASSIGN_BODY_CAP = int(os.getenv("ADJUDICATOR_BODY_CAP", "12000"))
+
+
 def adjudicate_assignment(
     db,
     signals,
@@ -159,12 +164,15 @@ def adjudicate_assignment(
     *,
     cache=None,
     email_subject: str = "",
-    email_snippet: str = "",
+    email_body: str = "",
+    attachment_names: Optional[list[str]] = None,
 ) -> Verdict:
     """Decide a qué caso candidato pertenece un correo ambiguo (o si es NUEVO/ambiguo).
 
     `signals` = EmailSignals (matcher). `candidate_ids` = casos plausibles que el determinista
     no pudo desempatar. `cache` = CaseLookupCache del caller (o se obtiene uno fresco).
+    `email_body` = cuerpo COMPLETO del correo; `attachment_names` = nombres de adjuntos.
+    DeepSeek analiza todo eso + el resumen de cada candidato para decidir.
     Devuelve Verdict con decision ∈ candidate_ids ∪ {"NEW","AMBIGUOUS"}.
     """
     cands = [int(c) for c in candidate_ids if c is not None]
@@ -177,6 +185,7 @@ def adjudicate_assignment(
         from backend.email.case_lookup_cache import get_cache
         cache = get_cache()
     briefs = "\n".join(_case_brief(db, cache, cid) for cid in cands)
+    adj_names = ", ".join(attachment_names or []) or "(ninguno)"
     valid = {str(c) for c in cands} | {"NEW", "AMBIGUOUS"}
     system = (
         "Eres un adjudicador jurídico experto en tutelas colombianas. Asignas un correo a su "
@@ -186,13 +195,14 @@ def adjudicate_assignment(
         "Un correo de tutela podría pertenecer a uno de varios expedientes (mismo radicado corto "
         "pero quizá distinto juzgado/accionante = procesos DISTINTOS). Decide a cuál pertenece.\n\n"
         "CORREO:\n"
-        f"  asunto: {email_subject[:200]!r}\n"
+        f"  asunto: {email_subject[:300]!r}\n"
         f"  accionante detectado: {getattr(signals, 'accionante_name', '')[:50]!r}\n"
         f"  radicado corto: {getattr(signals, 'rad_corto', '')!r}\n"
         f"  radicado 23díg: {getattr(signals, 'rad23', '')!r}\n"
         f"  FOREST: {getattr(signals, 'forest', '')!r}\n"
-        f"  remitente: {getattr(signals, 'sender', '')[:50]!r}\n"
-        f"  fragmento: {email_snippet[:400]!r}\n\n"
+        f"  remitente: {getattr(signals, 'sender', '')[:80]!r}\n"
+        f"  adjuntos: {adj_names[:500]}\n"
+        f"  cuerpo:\n{(email_body or '')[:_ASSIGN_BODY_CAP]}\n\n"
         "EXPEDIENTES CANDIDATOS:\n" + briefs + "\n\n"
         "REGLAS:\n"
         "- Si el accionante y el juzgado/rad23 coinciden claramente con UN expediente → ese ID.\n"
