@@ -135,17 +135,11 @@ def extract_one(
         raise HTTPException(status_code=404, detail=f"Case {case_id} no existe")
 
     _use_llm = use_llm and apply  # LLM solo tiene sentido cuando se persiste
-    if _use_llm:
-        from backend.services.llm_mutex import begin_extraction, end_extraction
-        begin_extraction(wait_s=90)
     try:
         result = extract_case(db, case_id, dry_run=not apply, use_llm=_use_llm)
     except Exception as e:
         logger.exception("v9 extract falló para case=%d apply=%s", case_id, apply)
         raise HTTPException(status_code=500, detail=f"Pipeline v9 error: {e}")
-    finally:
-        if _use_llm:
-            end_extraction()
 
     if apply:
         _promote_status_on_success(db, case_id)
@@ -187,25 +181,18 @@ def extract_batch(
         case_ids = [r[0] for r in rows]
 
     _use_llm = use_llm and apply
-    if _use_llm:
-        from backend.services.llm_mutex import begin_extraction, end_extraction
-        begin_extraction(wait_s=90)
 
     results: list[dict] = []
     errors: list[dict] = []
-    try:
-        for cid in case_ids:
-            try:
-                r = extract_case(db, cid, dry_run=not apply, use_llm=_use_llm)
-                results.append(_result_to_payload(r))
-                if apply:
-                    _promote_status_on_success(db, cid)
-            except Exception as e:
-                logger.warning("v9 batch case=%d falló: %s", cid, str(e)[:200])
-                errors.append({"case_id": cid, "error": str(e)[:200]})
-    finally:
-        if _use_llm:
-            end_extraction()
+    for cid in case_ids:
+        try:
+            r = extract_case(db, cid, dry_run=not apply, use_llm=_use_llm)
+            results.append(_result_to_payload(r))
+            if apply:
+                _promote_status_on_success(db, cid)
+        except Exception as e:
+            logger.warning("v9 batch case=%d falló: %s", cid, str(e)[:200])
+            errors.append({"case_id": cid, "error": str(e)[:200]})
 
     if results:
         avg_completitud = sum(r["completitud"] for r in results) / len(results)

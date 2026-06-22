@@ -198,14 +198,12 @@ npm run lint                  # eslint .
 node ../scripts/e2e_<x>.mjs   # E2E Playwright (requiere frontend levantado)
 ```
 
-### LLM local opcional (Qwen3-4B + LoRA iuris)
-```bash
-~/llama.cpp/build/bin/llama-server \
-  -m data/lora-models/Qwen3-4B-Q4_K_M.gguf \
-  --lora data/lora-models/iuris-lora-qwen3-4b.gguf \
-  --port 8765 --ctx-size 4096 -t 6 --host 127.0.0.1
-```
-Sin LLM, el chat funciona con Tier 1 (templates determinísticos).
+### Motor LLM = DeepSeek API
+No hay LLM local (el 4B Qwen + llama-server se retiraron 2026-06-22). La extracción y el
+chat usan **DeepSeek** vía `ai_extractor._call_local` (endpoint OpenAI-compatible). Config
+en `.env`: `V9_ALLOW_DEEPSEEK=true` + `V9_LLM_API_KEY` + `LLM_LOCAL_URL=https://api.deepseek.com`
++ `LLM_LOCAL_MODEL_ID=deepseek-chat`. Con `V9_DISABLE_LLM=true` (o sin key) la extracción es
+100% determinista y el chat cae a Tier 1 (templates). Ver `docs/ESTRATEGIA_LLM_SOBERANIA_DATOS.md`.
 
 ## Arquitectura — el "big picture"
 
@@ -280,12 +278,10 @@ con 6 fases; ese archivo fue borrado. Hoy hay una sola autoridad de extracción:
 | `USE_REMOTE_EXTRACTION` | false | Delegar capas 0-5 a un pod RunPod GPU |
 | `EXPERIMENT_MODE` | false | DB fresca + workspace paralelo (no toca prod) |
 | `GMAIL_READ_ONLY` | false | No marcar emails leídos en Gmail |
-| `PII_REDACTION_ENABLED` | — | VESTIGIAL: `backend/privacy/` fue borrado (ver settings.py:74). Política de producto 2026-06-10: **LOCAL_ONLY — los datos nunca salen de la máquina**; no hay anonimización porque no hay salida externa |
-| `LLM_GGUF` | `Qwen3-4B-Q4_K_M.gguf` | Modelo del llama-server local (nombre en `data/lora-models/` o path absoluto). Bench Fase 0: `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` dio 0.869 vs 0.822 y ~2× más rápido |
-| `LLM_CTX_SIZE` | 4096 | Ventana del llama-server (8192/16384 experimentales) |
-| `LLM_REASONING` | (sin set) | `off\|on\|auto` → `--reasoning` del server; `off` recomendado con Instruct-2507 |
-| `V9_LLM_SINGLE_CALL` | **true en prod** | 1 llamada LLM multi-campo en vez de 3 por-campo. VALIDADO 2026-06-10 con Instruct-2507: 30.8× más rápido (271s→8.8s), mitad de llamadas, y ganó las 3 diferencias contra el cuadro curado |
-| `V9_ALLOW_DEEPSEEK` | false | Habilita DeepSeek externo (gap_fill v9 Y pipeline experimental `/api/deepseek/*`); la key sola NO basta |
+| `PII_REDACTION_ENABLED` | — | VESTIGIAL: `backend/privacy/` fue borrado. **Ya NO es LOCAL_ONLY** (migración DeepSeek 2026-06-22): los datos SÍ salen a DeepSeek. Base legal = consentimiento informado firmado por el titular (Ley 1581 art. 26). Ver `docs/ESTRATEGIA_LLM_SOBERANIA_DATOS.md` |
+| `V9_LLM_SINGLE_CALL` | **true en prod** | 1 llamada LLM multi-campo en vez de 3 por-campo |
+| `V9_ALLOW_DEEPSEEK` | **true en prod** | Motor LLM = DeepSeek API. Con `V9_LLM_API_KEY` + `LLM_LOCAL_URL`/`LLM_LOCAL_MODEL_ID` define el proveedor. La key sola NO basta (requiere el flag) |
+| `LLM_LOCAL_URL` / `LLM_LOCAL_MODEL_ID` | `https://api.deepseek.com` / `deepseek-chat` | Endpoint OpenAI-compatible + modelo (prefijo `LLM_LOCAL_*` histórico; hoy apunta a DeepSeek) |
 
 `TUTELAS_ENV_FILE=/path/to/.env.experiment` permite cambiar el `.env` cargado sin tocar el de producción. Si existe `/workspace/tutelas-app/.env.pod`, se autocarga (RunPod).
 
@@ -335,5 +331,5 @@ node ../scripts/e2e_v6016_validation.mjs
 | `BENCHMARK_PIPELINE_VS_AGENT.md` | Comparativa cuantitativa |
 | `docs/V8_FIXES_SESSION.md` | Cambios v8 |
 | `docs/TESIS_PROYECTO_AGENTE_JURIDICO.md` | Tesis 12 caps + protocolo 28 campos |
-| `docs/iuris/` | LoRA training y dataset |
+| `docs/ESTRATEGIA_LLM_SOBERANIA_DATOS.md` | Decisión DeepSeek + Ley 1581 + roadmap hardware |
 | `../CLAUDE.md` | Instrucciones del proyecto + historial v3-v6 |

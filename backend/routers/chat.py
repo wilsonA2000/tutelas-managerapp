@@ -29,16 +29,13 @@ from backend.database.models import Case, Document, Email
 logger = logging.getLogger("tutelas.chat")
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
-LLM_URL = os.getenv("LLM_LOCAL_URL", "http://127.0.0.1:8765")
-LLM_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "qwen3-4b-iuris")
-# El fallback LLM del chat (router + respuesta libre) se activa solo si
-# LLM_LOCAL_PRIMARY=true Y NO está puesto V9_DISABLE_LLM=true. En equipos justos de RAM
-# se arranca el backend con V9_DISABLE_LLM=true → el chat queda 100% Tier-1 (instantáneo);
-# quita esa variable para habilitar el asistente con el modelo local.
-LLM_ENABLED = (
-    os.getenv("LLM_LOCAL_PRIMARY", "false").lower() == "true"
-    and os.getenv("V9_DISABLE_LLM", "false").lower() != "true"
-)
+# Motor = DeepSeek API (LLM_LOCAL_URL/MODEL_ID apuntan a DeepSeek tras la migración 2026-06-22).
+LLM_URL = os.getenv("LLM_LOCAL_URL", "https://api.deepseek.com")
+LLM_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "deepseek-chat")
+_LLM_API_KEY = os.getenv("V9_LLM_API_KEY", "") if os.getenv("V9_ALLOW_DEEPSEEK", "false").lower() == "true" else ""
+# El Tier-2 (router + respuesta libre) se activa si DeepSeek está configurado y NO está
+# V9_DISABLE_LLM=true (modo determinista para tests). Sin key → chat 100% Tier-1.
+LLM_ENABLED = bool(_LLM_API_KEY) and os.getenv("V9_DISABLE_LLM", "false").lower() != "true"
 
 
 # ─── Conocimiento del cuadro (las 18 columnas que extrae v9 + vocabularios) ──────
@@ -872,23 +869,16 @@ def _ayuda(db: Session, msg: str) -> ChatResponse:
 # Si el modelo no está disponible o tarda, se degrada limpio (vuelve a Tier-1).
 
 def _llm_available() -> bool:
-    if not LLM_ENABLED:
-        return False
-    try:  # lazy restart si llama-server está pausado tras una extracción
-        from backend.services.llm_mutex import ensure_llm_up, PAUSE_FLAG
-        if PAUSE_FLAG.exists():
-            logger.info("LLM pausado — relanzando lazy")
-            return ensure_llm_up(wait_s=30)
-    except Exception as e:
-        logger.debug("ensure_llm_up falló: %s", e)
-    return True
+    return LLM_ENABLED  # DeepSeek (nube) siempre disponible si está configurado
 
 
-def _llm_chat(messages: list[dict], *, max_tokens: int = 200, temperature: float = 0.1, timeout: float = 12.0) -> Optional[str]:
+def _llm_chat(messages: list[dict], *, max_tokens: int = 200, temperature: float = 0.1, timeout: float = 20.0) -> Optional[str]:
     try:
+        headers = {"Authorization": f"Bearer {_LLM_API_KEY}"} if _LLM_API_KEY else {}
         r = requests.post(
             f"{LLM_URL}/v1/chat/completions",
             json={"model": LLM_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": temperature},
+            headers=headers,
             timeout=timeout,
         )
         r.raise_for_status()

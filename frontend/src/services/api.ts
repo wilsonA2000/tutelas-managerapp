@@ -145,10 +145,6 @@ export const getDocumentPreviewUrl = (id: number) =>
 export const extractSingle = (caseId: number, force: boolean = false, useLlm: boolean = true) =>
   api.post(`/extraction/single/${caseId}?force=${force}&use_llm=${useLlm}`, {}, { timeout: 600000 }).then(r => r.data);
 
-// Semáforo del motor de IA: { server: 'off'|'starting'|'ready', extracting: boolean }
-export const getLlmStatus = (): Promise<{ server: 'off' | 'starting' | 'ready'; extracting: boolean }> =>
-  api.get('/extraction/llm-status').then(r => r.data);
-
 export const extractBatch = (caseIds?: number[], classifyDocs: boolean = false, force: boolean = false, useLlm: boolean = false) =>
   api.post('/extraction/batch', { case_ids: caseIds, classify_docs: classifyDocs, force, use_llm: useLlm }, { timeout: 10000 }).then(r => r.data);
 

@@ -486,11 +486,11 @@ def appliance_health():
             _db.close()
     except Exception as e:  # noqa: BLE001
         checks["db"] = {"ok": False, "error": str(e)[:200]}
-    try:
-        from backend.services.llm_mutex import lifecycle_state, is_up
-        checks["llm"] = {"ok": True, "up": is_up(timeout=1.0), **lifecycle_state()}
-    except Exception as e:  # noqa: BLE001
-        checks["llm"] = {"ok": False, "error": str(e)[:200]}
+    # Motor LLM = DeepSeek API (nube): no hay server local que sondear.
+    _ds = (os.getenv("V9_ALLOW_DEEPSEEK", "false").lower() == "true"
+           and bool(os.getenv("V9_LLM_API_KEY", "")))
+    checks["llm"] = {"ok": True, "provider": "deepseek" if _ds else "none",
+                     "server": "ready" if _ds else "off"}
     try:
         from backend.v9.types import EXCEL_FIELDS
         checks["v9"] = {"ok": True, "fields": len(EXCEL_FIELDS)}
@@ -648,16 +648,7 @@ def _run_gmail_check_background():
                 f"Caso NUEVO '{case.folder_name}': queda PENDIENTE — candidata a extracción en /extraction",
             )
 
-        # Pausar llama-server antes de la re-extracción (precaución de RAM en equipos justos).
-        # Fase 7.3: la re-extracción ahora es v9 (`_v9_extract` → extract_case con use_llm=False),
-        # así que normalmente no toca el LLM; se conserva la pausa como salvaguarda.
-        if actualizados:
-            try:
-                from backend.services.llm_mutex import pause_llm_for_extraction
-                pause_llm_for_extraction()
-            except Exception as _mutex_err:
-                add_monitor_log(f"Mutex pre-Paso3 no disponible: {_mutex_err}", level="warning")
-
+        # (Motor = DeepSeek API: ya no hay llama-server local que pausar antes de re-extraer.)
         for i, (case, _nd) in enumerate(actualizados):
             gmail_check_result["current"] = 2 + i
             gmail_check_result["step"] = f"Paso 3/3: Analizando ({i+1}/{len(actualizados)}): {case.folder_name[:40]}..."

@@ -46,17 +46,11 @@ from backend.email.rad_utils import juzgado_code, normalize_rad23, same_juzgado
 
 logger = logging.getLogger("tutelas.matcher")
 
-_QWEN_URL = os.getenv("LLM_LOCAL_URL",
-                      f"http://127.0.0.1:{os.getenv('LLM_LOCAL_PORT', '8765')}")
-
-
-def _qwen_is_running() -> bool:
-    """Comprueba si llama-server está activo en el puerto local (timeout 0.5s)."""
-    try:
-        urllib.request.urlopen(_QWEN_URL + "/health", timeout=0.5)
-        return True
-    except Exception:
-        return False
+def _llm_available() -> bool:
+    """¿Hay LLM (DeepSeek) configurado para el matching asistido?"""
+    return (os.getenv("V9_ALLOW_DEEPSEEK", "false").lower() == "true"
+            and bool(os.getenv("V9_LLM_API_KEY", ""))
+            and os.getenv("V9_DISABLE_LLM", "false").lower() != "true")
 
 
 def _try_qwen_disambiguation(
@@ -91,18 +85,10 @@ def _try_qwen_disambiguation(
         "\n\n¿A qué ID corresponde este correo? "
         "Responde SOLO el número de ID o 'AMBIGUO' si no es claro."
     )
-    body = {
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 16, "temperature": 0,
-    }
     try:
-        req = urllib.request.Request(
-            _QWEN_URL + "/v1/chat/completions",
-            data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        raw = urllib.request.urlopen(req, timeout=15).read().decode()
-        answer = json.loads(raw)["choices"][0]["message"]["content"].strip()
+        from backend.extraction.ai_extractor import _call_local
+        answer, _, _ = _call_local([{"role": "user", "content": prompt}], max_tokens=16)
+        answer = (answer or "").strip()
         if answer.isdigit():
             candidate_ids = {cid for cid, _ in ranked[:3]}
             cid = int(answer)
@@ -372,7 +358,7 @@ def score_case_match(
     # el email caería entre las dos ramas del monitor y terminaría creando un duplicado).
     # Si Qwen elige OTRO candidato o es ambiguo → se mantiene MEDIUM (revisión humana).
     # Nunca falla el flujo (try/except total en el helper) ni crea casos.
-    if confidence == "MEDIUM" and 1 <= len(ranked) <= 3 and _qwen_is_running():
+    if confidence == "MEDIUM" and 1 <= len(ranked) <= 3 and _llm_available():
         qwen_cid = _try_qwen_disambiguation(db, signals, ranked)
         if qwen_cid is not None and qwen_cid == winner_id:
             confidence = "HIGH"

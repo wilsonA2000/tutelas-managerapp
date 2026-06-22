@@ -32,7 +32,6 @@ _logger = logger
 _LOCAL_URL = os.getenv("LLM_LOCAL_URL", "http://127.0.0.1:8765")
 _LOCAL_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "qwen3-4b-iuris")
 _LOCAL_TIMEOUT = int(os.getenv("LLM_LOCAL_TIMEOUT", "180"))
-_SYSTEM_PROMPT_PATH = os.getenv("LLM_LOCAL_SYSTEM_PROMPT_PATH", "docs/iuris/SYSTEM_PROMPT_COMPILER.md")
 # Proveedor externo (DeepSeek) — DESCONECTADO por default. Requiere V9_ALLOW_DEEPSEEK=true
 # (opt-in explícito) Y V9_LLM_API_KEY. Sin el flag, _call_local es SIEMPRE local puro
 # aunque haya key (2026-05-25, decisión de Wilson). Si se setea, _call_local apunta a un
@@ -42,15 +41,8 @@ _LLM_API_KEY = os.getenv("V9_LLM_API_KEY", "") if _ALLOW_DEEPSEEK else ""
 
 
 def _load_system_prompt() -> str:
-    """Carga prompt auditado desde disco; cae al hardcoded si no existe."""
-    try:
-        path = Path(_SYSTEM_PROMPT_PATH)
-        if not path.is_absolute():
-            path = Path(__file__).resolve().parent.parent.parent / _SYSTEM_PROMPT_PATH
-        if path.exists():
-            return path.read_text(encoding="utf-8")
-    except Exception as e:
-        logger.warning("No pude cargar system prompt %s: %s", _SYSTEM_PROMPT_PATH, e)
+    """System prompt jurídico para el LLM (DeepSeek). Inline; el prompt-compiler del 4B/LoRA
+    (docs/iuris) se retiró con el modelo local."""
     return SYSTEM_PROMPT
 
 
@@ -114,42 +106,19 @@ def _call_local(messages: list[dict], model: str = _LOCAL_MODEL,
     }
     if os.getenv("V9_LLM_TOP_K"):
         payload["top_k"] = int(os.getenv("V9_LLM_TOP_K"))
-    headers = {}
-    if not _LLM_API_KEY:
-        # Anti-degeneración: con greedy (temp=0) y sin penalización, el Qwen 4B local
-        # cae en bucles repetitivos ("1 1 1 1...", "_ _ _ _...") que además alargan el
-        # cómputo y disparan fence timeouts en la iGPU. repeat_penalty los corta.
-        payload["repeat_penalty"] = float(os.getenv("V9_LLM_REPEAT_PENALTY", "1.15"))
-    if _LLM_API_KEY:  # proveedor externo (DeepSeek): requiere model + auth.
-        # Los callers pasan model local ("qwen3-4b-iuris") que el externo no conoce →
-        # usar el modelo del env (_LOCAL_MODEL = LLM_LOCAL_MODEL_ID, ej. deepseek-chat).
-        payload["model"] = _LOCAL_MODEL
-        headers["Authorization"] = f"Bearer {_LLM_API_KEY}"
-    try:
-        response = requests.post(
-            f"{_LOCAL_URL}/v1/chat/completions",
-            json=payload,
-            headers=headers,
-            timeout=_LOCAL_TIMEOUT,
-        )
-    except requests.exceptions.ConnectionError:
-        # M3 2026-06-11: server local caído (vk::DeviceLostError bajo carga sostenida)
-        # → respawn + UN reintento, en vez de fallar el campo en silencio.
-        if not _LLM_API_KEY and ("127.0.0.1" in _LOCAL_URL or "localhost" in _LOCAL_URL):
-            from backend.services.llm_mutex import ensure_llm_up
-            if ensure_llm_up(wait_s=120):
-                response = requests.post(
-                    f"{_LOCAL_URL}/v1/chat/completions",
-                    json=payload, headers=headers, timeout=_LOCAL_TIMEOUT,
-                )
-            else:
-                raise
-        else:
-            raise
+    # Motor = DeepSeek API (proveedor OpenAI-compatible). Requiere model + auth.
+    payload["model"] = _LOCAL_MODEL
+    headers = {"Authorization": f"Bearer {_LLM_API_KEY}"} if _LLM_API_KEY else {}
+    response = requests.post(
+        f"{_LOCAL_URL}/v1/chat/completions",
+        json=payload,
+        headers=headers,
+        timeout=_LOCAL_TIMEOUT,
+    )
     response.raise_for_status()
     data = response.json()
     text = data["choices"][0]["message"]["content"]
-    # Filtrar bloque <think>...</think> que el LoRA-CoT genera
+    # Filtrar bloque <think>...</think> por si el modelo lo emite
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     usage = data.get("usage", {}) or {}
     return text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)

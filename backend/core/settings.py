@@ -86,13 +86,11 @@ class Settings(BaseSettings):
     # el pipeline cognitivo de 7 capas (borrado): hoy solo gatea el assignment bayesiano.
     USE_COGNITIVE_PIPELINE: bool = False
 
-    # IURIS LLM Local (2026-05-03): enrutar IA cuantizada local
-    # Cuando LLM_LOCAL_URL está set y LLM_LOCAL_PRIMARY=True, smart_router
-    # usa este endpoint como primary, con fallback a Anthropic/DeepSeek.
-    LLM_LOCAL_URL: str = "http://127.0.0.1:8765"   # llama-server con Qwen3 4B + LoRA IURIS
-    LLM_LOCAL_PRIMARY: bool = False                # True = primary; False = no usar local
-    LLM_LOCAL_MODEL_ID: str = "qwen3-4b-iuris"     # identificador para token_usage
-    LLM_LOCAL_SYSTEM_PROMPT_PATH: str = "docs/iuris/SYSTEM_PROMPT_COMPILER.md"
+    # Motor LLM = DeepSeek API (migración 2026-06-22; retirado el 4B local). Estas vars son
+    # la config del proveedor (las lee ai_extractor._call_local + chat + llm_gap_fill);
+    # conservan el prefijo LLM_LOCAL_* por compatibilidad de .env.
+    LLM_LOCAL_URL: str = "https://api.deepseek.com"   # endpoint OpenAI-compatible
+    LLM_LOCAL_MODEL_ID: str = "deepseek-chat"          # modelo + identificador token_usage
 
     # (CSV_DELIMITER / CSV_COLUMNS vivían aquí pero estaban SOMBREADOS por las
     #  constantes homónimas de backend/config.py, que son las que de verdad usa seed.py.

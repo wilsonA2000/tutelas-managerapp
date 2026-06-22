@@ -6,7 +6,7 @@ import {
   CheckCircle, XCircle, Clock, ChevronRight,
   Zap, ShieldAlert, Trash2, FileWarning, Search as SearchIcon, ClipboardCheck, FolderCheck,
 } from 'lucide-react'
-import { extractBatch, extractSingle, getReviewQueue, getCases, syncFolders, getSyncStatus, getMismatchedDocs, dismissMismatchedDoc, dismissAllMismatchedDocs, verifyAllDocs, getSuspiciousDocs, markDocOk, runFullAudit, getLlmStatus } from '../services/api'
+import { extractBatch, extractSingle, getReviewQueue, getCases, syncFolders, getSyncStatus, getMismatchedDocs, dismissMismatchedDoc, dismissAllMismatchedDocs, verifyAllDocs, getSuspiciousDocs, markDocOk, runFullAudit } from '../services/api'
 import { useNavigate } from 'react-router-dom'
 import PageHeader from '../components/PageHeader'
 import PageShell from '../components/PageShell'
@@ -69,8 +69,6 @@ export default function Extraction() {
   const reviewQ = useQuery({ queryKey: ['review-queue'], queryFn: getReviewQueue })
   const mismatchedQ = useQuery({ queryKey: ['mismatched-docs'], queryFn: getMismatchedDocs })
   const suspiciousQ = useQuery({ queryKey: ['suspicious-docs'], queryFn: getSuspiciousDocs })
-  // Semáforo del motor de IA (se enciende/apaga solo). Polling ligero.
-  const llmStatusQ = useQuery({ queryKey: ['llm-status'], queryFn: getLlmStatus, refetchInterval: 2500 })
 
   const verifyAllMut = useMutation({
     mutationFn: verifyAllDocs,
@@ -157,14 +155,6 @@ export default function Extraction() {
   const allQueueSelected = reviewQueue.length > 0 && reviewQueue.every(c => selectedIds.has(queueId(c)))
   const toggleSelectAll = () => setSelectedIds(allQueueSelected ? new Set() : new Set(reviewQueue.map(queueId).filter(Boolean)))
 
-  // --- Estado visual del motor de IA (semáforo) ---
-  const llm = llmStatusQ.data
-  const engine = (() => {
-    if (llm?.extracting) return { dot: 'bg-blue-500', pulse: true, label: 'Extrayendo…', sub: 'El sistema está leyendo los documentos y llenando los campos.' }
-    if (llm?.server === 'starting') return { dot: 'bg-amber-500', pulse: true, label: 'Encendiendo motor de IA…', sub: 'La primera extracción tarda unos segundos más mientras enciende.' }
-    if (llm?.server === 'ready') return { dot: 'bg-emerald-500', pulse: false, label: 'Motor de IA listo', sub: 'Puedes extraer; el motor ya está caliente.' }
-    return { dot: 'bg-slate-300', pulse: false, label: 'Motor de IA en reposo', sub: 'Se encenderá solo cuando inicies una extracción.' }
-  })()
 
   function statusIcon(status: string) {
     if (status === 'success') return <CheckCircle size={14} className="text-emerald-500" />
@@ -221,24 +211,6 @@ export default function Extraction() {
           </TooltipProvider>
         }
       />
-
-      {/* Semáforo del motor de IA — se enciende y apaga solo. Lenguaje de operador. */}
-      <Card>
-        <CardContent className="py-3">
-          <div className="flex items-center gap-3">
-            <span className={cn('relative flex h-3 w-3 flex-shrink-0', engine.pulse && 'animate-pulse')}>
-              <span className={cn('inline-flex h-3 w-3 rounded-full', engine.dot)} />
-            </span>
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-foreground">{engine.label}</p>
-              <p className="text-xs text-muted-foreground">{engine.sub}</p>
-            </div>
-            <span className="ml-auto text-[10px] text-muted-foreground hidden sm:block max-w-[15rem] text-right">
-              El motor de IA se enciende solo al procesar y se apaga si no lo usas por un rato.
-            </span>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Audit Results */}
       {auditResult && (
