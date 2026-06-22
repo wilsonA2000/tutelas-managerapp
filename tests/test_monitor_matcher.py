@@ -315,43 +315,49 @@ class TestQwenDisambiguation3C:
         # score 50 = MEDIUM, ganador determinista = case 100
         return EmailSignals(forest="20260019953", sender="tutelas@santander.gov.co")
 
-    def test_qwen_confirma_promueve_a_auto_match(self, db, cache, monkeypatch):
-        import backend.email.matcher as m
-        monkeypatch.setattr(m, "_llm_available", lambda: True)
-        monkeypatch.setattr(m, "_try_qwen_disambiguation", lambda db, sig, ranked: 100)
+    def test_adj_confirma_promueve_a_auto_match(self, db, cache, monkeypatch):
+        from backend.email import llm_adjudicator as adj
+        from backend.email.llm_adjudicator import Verdict
+        monkeypatch.setattr(adj, "llm_on", lambda: True)
+        monkeypatch.setattr(adj, "adjudicate_assignment",
+                            lambda *a, **k: Verdict(100, 0.95, "accionante+juzgado coinciden", [100]))
 
         r = score_case_match(db, cache, self._medium_signals())
         assert r.case_id == 100
         assert r.confidence == "HIGH"
         assert r.score >= 70          # subido para que is_auto_match funcione
         assert r.is_auto_match is True
-        assert r.breakdown.get("qwen_confirmed") == 1
+        assert r.breakdown.get("llm_confirmed") == 1
+        assert r.breakdown["llm_adjudication"]["decision"] == 100
 
-    def test_qwen_discrepa_se_queda_medium(self, db, cache, monkeypatch):
-        import backend.email.matcher as m
-        monkeypatch.setattr(m, "_llm_available", lambda: True)
-        # Qwen elige OTRO caso → NO auto-asignar (anti-conflación)
-        monkeypatch.setattr(m, "_try_qwen_disambiguation", lambda db, sig, ranked: 200)
-
-        r = score_case_match(db, cache, self._medium_signals())
-        assert r.case_id == 100        # ganador determinista intacto
-        assert r.confidence == "MEDIUM"
-        assert r.is_auto_match is False
-        assert r.breakdown.get("qwen_disagreed") == 200
-
-    def test_qwen_ambiguo_se_queda_medium(self, db, cache, monkeypatch):
-        import backend.email.matcher as m
-        monkeypatch.setattr(m, "_llm_available", lambda: True)
-        monkeypatch.setattr(m, "_try_qwen_disambiguation", lambda db, sig, ranked: None)
+    def test_adj_baja_confianza_se_queda_medium(self, db, cache, monkeypatch):
+        from backend.email import llm_adjudicator as adj
+        from backend.email.llm_adjudicator import Verdict
+        monkeypatch.setattr(adj, "llm_on", lambda: True)
+        # confía poco (< _AUTO_CONFIDENCE) → no auto-resuelve
+        monkeypatch.setattr(adj, "adjudicate_assignment",
+                            lambda *a, **k: Verdict(100, 0.50, "dudoso", [100]))
 
         r = score_case_match(db, cache, self._medium_signals())
         assert r.case_id == 100
         assert r.confidence == "MEDIUM"
         assert r.is_auto_match is False
 
-    def test_qwen_apagado_no_cambia_nada(self, db, cache, monkeypatch):
-        import backend.email.matcher as m
-        monkeypatch.setattr(m, "_llm_available", lambda: False)
+    def test_adj_ambiguo_se_queda_medium(self, db, cache, monkeypatch):
+        from backend.email import llm_adjudicator as adj
+        from backend.email.llm_adjudicator import Verdict
+        monkeypatch.setattr(adj, "llm_on", lambda: True)
+        monkeypatch.setattr(adj, "adjudicate_assignment",
+                            lambda *a, **k: Verdict("AMBIGUOUS", 0.0, "no se puede determinar", [100]))
+
+        r = score_case_match(db, cache, self._medium_signals())
+        assert r.case_id == 100
+        assert r.confidence == "MEDIUM"
+        assert r.is_auto_match is False
+
+    def test_adj_apagado_no_cambia_nada(self, db, cache, monkeypatch):
+        from backend.email import llm_adjudicator as adj
+        monkeypatch.setattr(adj, "llm_on", lambda: False)
 
         r = score_case_match(db, cache, self._medium_signals())
         assert r.case_id == 100

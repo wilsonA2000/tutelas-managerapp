@@ -37,7 +37,6 @@ import difflib
 import json
 import logging
 import os
-import urllib.request
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
@@ -46,58 +45,8 @@ from backend.email.rad_utils import juzgado_code, normalize_rad23, same_juzgado
 
 logger = logging.getLogger("tutelas.matcher")
 
-def _llm_available() -> bool:
-    """¿Hay LLM (DeepSeek) configurado para el matching asistido?"""
-    return (os.getenv("V9_ALLOW_DEEPSEEK", "false").lower() == "true"
-            and bool(os.getenv("V9_LLM_API_KEY", ""))
-            and os.getenv("V9_DISABLE_LLM", "false").lower() != "true")
-
-
-def _try_qwen_disambiguation(
-    db,
-    signals: "EmailSignals",
-    ranked: list,
-) -> "Optional[int]":
-    """Llama a Qwen 4B para desambiguar entre 1-3 candidatos MEDIUM.
-
-    Retorna case_id si el modelo identifica con certeza, o None si ambiguo/falla.
-    Solo se invoca cuando hay 1-3 candidatos y Qwen está activo.
-    """
-    from backend.database.models import Case
-
-    if len(ranked) > 3:
-        return None
-
-    # Preparar candidatos con nombre de carpeta para el modelo
-    candidate_lines = []
-    for cid, data in ranked[:3]:
-        case = db.query(Case).filter(Case.id == cid).first()
-        folder = (case.folder_name or f"caso-{cid}") if case else f"caso-{cid}"
-        candidate_lines.append(f"- ID {cid}: {folder} (score={data['score']})")
-
-    prompt = (
-        "/no_think\n"
-        f"Remitente: {signals.sender!r}\n"
-        f"Accionante detectado: {signals.accionante_name!r}\n"
-        f"Radicado detectado: {signals.rad_corto!r}\n"
-        f"FOREST detectado: {signals.forest!r}\n\n"
-        "Casos candidatos:\n" + "\n".join(candidate_lines) +
-        "\n\n¿A qué ID corresponde este correo? "
-        "Responde SOLO el número de ID o 'AMBIGUO' si no es claro."
-    )
-    try:
-        from backend.extraction.ai_extractor import _call_local
-        answer, _, _ = _call_local([{"role": "user", "content": prompt}], max_tokens=16)
-        answer = (answer or "").strip()
-        if answer.isdigit():
-            candidate_ids = {cid for cid, _ in ranked[:3]}
-            cid = int(answer)
-            if cid in candidate_ids:
-                logger.info("Qwen desambiguó MEDIUM → case %d (respuesta: %r)", cid, answer)
-                return cid
-    except Exception as e:
-        logger.debug("Qwen disambiguation falló: %s", str(e)[:80])
-    return None
+# El desempate LLM de candidatos MEDIUM vive ahora en backend/email/llm_adjudicator.py
+# (adjudicate_assignment). Aquí solo se invoca en el dead-end determinista.
 
 
 @dataclass
@@ -356,18 +305,23 @@ def score_case_match(
     # Si Qwen confirma al mismo ganador → promover a auto-match subiendo el score a 70
     # (is_auto_match keya en score>=70, no en confidence; si solo subiéramos confidence
     # el email caería entre las dos ramas del monitor y terminaría creando un duplicado).
-    # Si Qwen elige OTRO candidato o es ambiguo → se mantiene MEDIUM (revisión humana).
-    # Nunca falla el flujo (try/except total en el helper) ni crea casos.
-    if confidence == "MEDIUM" and 1 <= len(ranked) <= 3 and _llm_available():
-        qwen_cid = _try_qwen_disambiguation(db, signals, ranked)
-        if qwen_cid is not None and qwen_cid == winner_id:
+    # DeepSeek (adjudicador) desempata: si CONFIRMA el ganador con alta confianza → HIGH
+    # (auto-resuelve). Si elige OTRO candidato / es NUEVO / ambiguo → se queda MEDIUM
+    # (revisión humana) y se loguea la recomendación razonada en match_signals_json.
+    # Nunca falla el flujo (adjudicador abstención-segura) ni crea casos aquí.
+    from backend.email import llm_adjudicator as _adj
+    if confidence == "MEDIUM" and 1 <= len(ranked) <= 3 and _adj.llm_on():
+        cand_ids = [cid for cid, _ in ranked[:3]]
+        verdict = _adj.adjudicate_assignment(db, signals, cand_ids, cache=cache)
+        winner["signals"]["llm_adjudication"] = verdict.as_dict()
+        if verdict.is_confident and verdict.decision == winner_id:
             confidence = "HIGH"
             score = max(score, THRESHOLD_HIGH)  # garantiza is_auto_match → True
-            winner["signals"]["qwen_confirmed"] = 1
-        elif qwen_cid is not None and qwen_cid != winner_id:
-            # Qwen discrepa del scoring determinista → NO auto-asignar. Se queda MEDIUM
-            # (AMBIGUO/revisión humana). Solo dejamos rastro de la discrepancia.
-            winner["signals"]["qwen_disagreed"] = qwen_cid
+            winner["signals"]["llm_confirmed"] = 1
+        elif verdict.is_confident and isinstance(verdict.decision, int) and verdict.decision in cand_ids:
+            # DeepSeek confiado en OTRO candidato → NO auto-asignar aquí (anti-conflación):
+            # se queda MEDIUM con la recomendación; el monitor/humano decide.
+            winner["signals"]["llm_disagreed"] = verdict.decision
 
     alternatives = [(cid, data["score"]) for cid, data in ranked[1:4]]
 
