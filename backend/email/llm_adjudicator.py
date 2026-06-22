@@ -220,13 +220,14 @@ def adjudicate_assignment(
 # 2) Clasificación de documentos por CONTENIDO
 # ─────────────────────────────────────────────────────────────
 
-# Vocabulario controlado para clasificar un documento por su contenido cuando el filename
-# es genérico/desconocido. DEMANDA_TUTELA aporta lo que el filename casi nunca detecta.
+# Vocabulario controlado = tipos canónicos del doc_librarian (DocType). Esta función es el
+# FALLBACK de doc_librarian cuando su clasificador determinista no resuelve, así que debe
+# emitir los MISMOS nombres canónicos. DEMANDA_TUTELA aporta lo que el filename no detecta.
 DOC_TYPE_VOCAB = [
-    "DEMANDA_TUTELA", "PDF_AUTO_ADMISORIO", "PDF_SENTENCIA", "PDF_IMPUGNACION",
-    "PDF_INCIDENTE", "RESPUESTA", "OTRO",
+    "DEMANDA_TUTELA", "AUTO_ADMISORIO", "SENTENCIA_1RA", "SENTENCIA_2DA",
+    "RESPUESTA", "IMPUGNACION", "INCIDENTE_DESACATO", "AUTO_INCIDENTE", "OTRO",
 ]
-_DOC_CONTENT_CAP = int(os.getenv("ADJUDICATOR_DOC_CAP", "6000"))
+_DOC_CONTENT_CAP = int(os.getenv("ADJUDICATOR_DOC_CAP", "20000"))
 
 
 def classify_doc_by_content(text_head: str, filename: str = "") -> Verdict:
@@ -249,12 +250,14 @@ def classify_doc_by_content(text_head: str, filename: str = "") -> Verdict:
         f"Nombre de archivo: {filename[:80]!r}\n"
         f"Clasifica el documento en UNO de estos tipos: {vocab}.\n"
         "- DEMANDA_TUTELA: el escrito del accionante que interpone la tutela.\n"
-        "- PDF_AUTO_ADMISORIO: auto que admite/avoca la tutela.\n"
-        "- PDF_SENTENCIA: fallo (1ra o 2da instancia, 'administrando justicia').\n"
-        "- PDF_IMPUGNACION: escrito que impugna el fallo.\n"
-        "- PDF_INCIDENTE: incidente de desacato / sanción.\n"
-        "- RESPUESTA: contestación/respuesta de la entidad accionada (SED).\n"
-        "- OTRO: si no encaja claramente.\n\n"
+        "- AUTO_ADMISORIO: auto del juzgado que admite/avoca la tutela.\n"
+        "- SENTENCIA_1RA: fallo de PRIMERA instancia ('administrando justicia').\n"
+        "- SENTENCIA_2DA: fallo de SEGUNDA instancia (confirma/revoca/modifica el de 1ra).\n"
+        "- IMPUGNACION: escrito que impugna/apela el fallo.\n"
+        "- INCIDENTE_DESACATO: solicitud/apertura de incidente de desacato.\n"
+        "- AUTO_INCIDENTE: decisión del juez sobre el incidente (sanción/abstención).\n"
+        "- RESPUESTA: contestación/respuesta de la entidad accionada (SED/Gobernación).\n"
+        "- OTRO: si no encaja claramente en los anteriores.\n\n"
         f"CONTENIDO (inicio):\n{text[:_DOC_CONTENT_CAP]}\n\n"
         'Responde SOLO: {"decision": "<TIPO>", "confidence": <0.0-1.0>, "reason": "<breve>"}'
     )

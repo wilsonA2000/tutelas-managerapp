@@ -912,6 +912,28 @@ _LEGACY_DOC_TYPES = frozenset({
 })
 
 
+def _llm_classify_fallback(text: str, filename: str) -> str | None:
+    """Fallback DeepSeek cuando el clasificador determinista no resuelve (DESCONOCIDO o
+    baja confianza). Devuelve el DocType canónico (str) si el LLM confía y es válido
+    (≠OTRO/AMBIGUOUS), si no None. Gateado dentro de classify_doc_by_content (LLM off→None).
+
+    Consolidación 2026-06-22: ANTES la clasificación-por-contenido-DeepSeek era un pase
+    paralelo en la ingesta (gmail_monitor, P1.2). Se movió aquí para que doc_librarian sea la
+    ÚNICA autoridad de clasificación de documentos (evita dos autoridades / sedimentación).
+    """
+    try:
+        from backend.email.llm_adjudicator import classify_doc_by_content
+        v = classify_doc_by_content(text, filename)
+        if v.is_confident and v.decision not in ("OTRO", "AMBIGUOUS"):
+            try:
+                return DocType(v.decision).value  # valida que sea un DocType real
+            except ValueError:
+                logger.debug("LLM devolvió tipo no-canónico: %r", v.decision)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("doc_librarian fallback DeepSeek falló: %s", e)
+    return None
+
+
 def reclassify_legacy_docs(db, case, *, min_conf: float = 0.5) -> list[dict]:
     """Reclasifica con el doc_librarian (por contenido) los docs del `case` que aún
     tengan etiqueta legacy por-filename, persistiendo la etiqueta rica cuando la
@@ -939,10 +961,16 @@ def reclassify_legacy_docs(db, case, *, min_conf: float = 0.5) -> list[dict]:
                      method="db", pages=0, has_scanned_pages=False, error=None)
         cl = classify(dt)
         if cl.doc_type == DocType.DESCONOCIDO or cl.confidence < min_conf:
+            # El determinista no resolvió → fallback DeepSeek (gateado; off→None = sin cambio).
+            llm_new = _llm_classify_fallback(txt, d.filename or "")
+            if llm_new and llm_new != cur:
+                d.doc_type = llm_new
+                changes.append({"doc_id": d.id, "filename": d.filename,
+                                "old": cur, "new": llm_new, "conf": None, "source": "deepseek"})
             continue
         new = cl.doc_type.value
         if new != cur:
             d.doc_type = new
             changes.append({"doc_id": d.id, "filename": d.filename,
-                            "old": cur, "new": new, "conf": round(cl.confidence, 2)})
+                            "old": cur, "new": new, "conf": round(cl.confidence, 2), "source": "regex"})
     return changes
