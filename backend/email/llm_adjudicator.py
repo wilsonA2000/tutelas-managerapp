@@ -107,10 +107,8 @@ def _adjudicate(system: str, prompt: str, *, valid: set, candidates: list, max_t
     if dec_str not in valid:
         logger.info("adjudicador: decision %r fuera de candidatos %s → AMBIGUOUS", dec_str, sorted(valid))
         return _abstain(candidates, f"decisión inválida ({dec_str!r})")
-    if dec_str in ("NEW", "AMBIGUOUS"):
-        norm: Decision = dec_str
-    else:
-        norm = int(dec_str)
+    # case_ids son numéricos (→ int); doc_types / NEW / AMBIGUOUS quedan como string.
+    norm: Decision = int(dec_str) if dec_str.lstrip("-").isdigit() else dec_str
     return Verdict(norm, confidence, reason, candidates)
 
 
@@ -215,4 +213,52 @@ def adjudicate_assignment(
         "adjudicate_assignment: cands=%s → %s (conf=%.2f) %s",
         cands, verdict.decision, verdict.confidence, verdict.reason[:80],
     )
+    return verdict
+
+
+# ─────────────────────────────────────────────────────────────
+# 2) Clasificación de documentos por CONTENIDO
+# ─────────────────────────────────────────────────────────────
+
+# Vocabulario controlado para clasificar un documento por su contenido cuando el filename
+# es genérico/desconocido. DEMANDA_TUTELA aporta lo que el filename casi nunca detecta.
+DOC_TYPE_VOCAB = [
+    "DEMANDA_TUTELA", "PDF_AUTO_ADMISORIO", "PDF_SENTENCIA", "PDF_IMPUGNACION",
+    "PDF_INCIDENTE", "RESPUESTA", "OTRO",
+]
+_DOC_CONTENT_CAP = int(os.getenv("ADJUDICATOR_DOC_CAP", "6000"))
+
+
+def classify_doc_by_content(text_head: str, filename: str = "") -> Verdict:
+    """Clasifica el tipo de un documento por su contenido (cuando el filename no basta).
+
+    Devuelve Verdict con decision ∈ DOC_TYPE_VOCAB. Gateado/validado/abstención-segura.
+    El caller solo aplica el tipo si verdict.is_confident y decision != 'OTRO'.
+    """
+    text = (text_head or "").strip()
+    if not llm_on():
+        return _abstain(DOC_TYPE_VOCAB, "LLM off")
+    if len(text) < 200:
+        return _abstain(DOC_TYPE_VOCAB, "texto insuficiente")
+    vocab = ", ".join(DOC_TYPE_VOCAB)
+    system = (
+        "Clasificas el tipo de un documento de un proceso de tutela colombiano leyendo su "
+        "contenido. Respondes ÚNICAMENTE con un objeto JSON."
+    )
+    prompt = (
+        f"Nombre de archivo: {filename[:80]!r}\n"
+        f"Clasifica el documento en UNO de estos tipos: {vocab}.\n"
+        "- DEMANDA_TUTELA: el escrito del accionante que interpone la tutela.\n"
+        "- PDF_AUTO_ADMISORIO: auto que admite/avoca la tutela.\n"
+        "- PDF_SENTENCIA: fallo (1ra o 2da instancia, 'administrando justicia').\n"
+        "- PDF_IMPUGNACION: escrito que impugna el fallo.\n"
+        "- PDF_INCIDENTE: incidente de desacato / sanción.\n"
+        "- RESPUESTA: contestación/respuesta de la entidad accionada (SED).\n"
+        "- OTRO: si no encaja claramente.\n\n"
+        f"CONTENIDO (inicio):\n{text[:_DOC_CONTENT_CAP]}\n\n"
+        'Responde SOLO: {"decision": "<TIPO>", "confidence": <0.0-1.0>, "reason": "<breve>"}'
+    )
+    verdict = _adjudicate(system, prompt, valid=set(DOC_TYPE_VOCAB),
+                          candidates=list(DOC_TYPE_VOCAB), max_tokens=120)
+    logger.info("classify_doc_by_content: %r → %s (conf=%.2f)", filename[:40], verdict.decision, verdict.confidence)
     return verdict

@@ -82,3 +82,37 @@ def test_verdict_as_dict_serializable():
     v = Verdict(100, 0.9, "razón", [100, 200])
     d = v.as_dict()
     assert d["decision"] == 100 and d["confidence"] == 0.9 and d["candidates"] == [100, 200]
+
+
+# ── classify_doc_by_content ──────────────────────────────────
+_DOC_TEXT = "ACCION DE TUTELA. Yo, JUAN PEREZ, interpongo accion de tutela contra la Secretaria " * 6
+
+
+def test_doc_content_clasifica_demanda(monkeypatch):
+    _mock_llm(monkeypatch, '{"decision": "DEMANDA_TUTELA", "confidence": 0.93, "reason": "escrito del accionante"}')
+    v = adj.classify_doc_by_content(_DOC_TEXT, "adjunto1.pdf")
+    assert v.decision == "DEMANDA_TUTELA" and v.is_confident
+
+
+def test_doc_content_otro_no_se_aplica(monkeypatch):
+    _mock_llm(monkeypatch, '{"decision": "OTRO", "confidence": 0.9, "reason": "no encaja"}')
+    v = adj.classify_doc_by_content(_DOC_TEXT, "x.pdf")
+    assert v.decision == "OTRO"  # is_confident True, pero el caller NO aplica OTRO
+
+
+def test_doc_content_tipo_invalido_abstiene(monkeypatch):
+    _mock_llm(monkeypatch, '{"decision": "FACTURA", "confidence": 0.99, "reason": "alucinó"}')
+    v = adj.classify_doc_by_content(_DOC_TEXT, "x.pdf")
+    assert v.decision == "AMBIGUOUS"
+
+
+def test_doc_content_texto_corto_abstiene(monkeypatch):
+    monkeypatch.setattr(adj, "llm_on", lambda: True)
+    v = adj.classify_doc_by_content("muy corto", "x.pdf")
+    assert v.decision == "AMBIGUOUS" and "insuficiente" in v.reason
+
+
+def test_doc_content_gated_off(monkeypatch):
+    monkeypatch.setattr(adj, "llm_on", lambda: False)
+    v = adj.classify_doc_by_content(_DOC_TEXT, "x.pdf")
+    assert v.decision == "AMBIGUOUS"

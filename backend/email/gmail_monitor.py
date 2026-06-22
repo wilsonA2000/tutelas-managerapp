@@ -819,6 +819,11 @@ def create_new_case(db: Session, radicado_data: dict, accionante: str, email_ctx
 # 12-14. FUNCIONES DE DESCARGA Y GUARDADO
 # ═══════════════════════════════════════════════════════════
 
+# Tipos "genéricos" donde el filename no dice qué es el documento → vale la pena que
+# DeepSeek lo clasifique por contenido (P1.2). El resto ya está bien tipado por nombre.
+_GENERIC_DOC_TYPES = {"PDF_OTRO", "DOCX_OTRO", "PDF_GMAIL", "DESCONOCIDO"}
+
+
 def _sha256_bytes(data: bytes) -> str:
     """sha256 hex de bytes — clave de dedup byte-idéntico (F4, 2026-05-21)."""
     return hashlib.sha256(data).hexdigest()
@@ -877,13 +882,29 @@ def download_attachments(
         if case:
             # v4.8 Provenance: vincular al email de origen (si lo conocemos).
             # Garantiza que los hermanos del mismo email viajen juntos.
-            db.add(Document(
+            doc = Document(
                 case_id=case.id, filename=save_path.name, file_path=str(save_path),
                 doc_type=classify_document(save_path.name), file_size=len(file_data),
                 file_hash=file_hash,
                 email_id=email_id,
                 email_message_id=email_message_id or msg_id,
-            ))
+            )
+            db.add(doc)
+            # P1.2: si el filename es genérico, DeepSeek clasifica por CONTENIDO (lee el doc).
+            # Gateado (LLM off → se queda el tipo por filename). Abstención-segura.
+            if doc.doc_type in _GENERIC_DOC_TYPES and ext in (".pdf", ".docx", ".doc"):
+                try:
+                    from backend.email.llm_adjudicator import classify_doc_by_content, llm_on
+                    if llm_on():
+                        from backend.extraction.doc_ops import extract_document_text
+                        _txt, _ = extract_document_text(doc)
+                        v = classify_doc_by_content(_txt or "", save_path.name)
+                        if v.is_confident and v.decision != "OTRO":
+                            logger.info("doc-content: %s %s→%s (conf %.2f) %s",
+                                        save_path.name, doc.doc_type, v.decision, v.confidence, v.reason[:60])
+                            doc.doc_type = v.decision
+                except Exception as _e:
+                    logger.debug("clasificación por contenido falló (%s): %s", save_path.name, _e)
 
     # F3: reenvío que no aportó adjuntos nuevos (todos byte-idénticos ya en el caso).
     # Se marca el Email (no se borra: conserva provenance). NO se colapsa por subject.
