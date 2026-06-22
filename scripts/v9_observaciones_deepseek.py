@@ -14,7 +14,7 @@ porque el usuario quiere que el resumen se apoye en los documentos, no en la ext
     casos que aún no tengan ninguna.
 
 Requiere `DEEPSEEK_API_KEY` (en `.env` o variable de entorno). Es paralelo (ThreadPool).
-Coste aprox.: ~$0.30-0.60 para los ~398 casos (deepseek-chat ≈ $0.27/M in, $1.1/M out).
+Coste aprox.: ~$0.30-0.60 para los ~398 casos (deepseek-v4-flash ≈ $0.27/M in, $1.1/M out).
 
 Uso:
     ./venv/bin/python3 scripts/v9_observaciones_deepseek.py --limit 4            # dry-run, 4 casos
@@ -42,7 +42,7 @@ from backend.v9.field_extractor import _read_doc_text, case_has_dated_observacio
 from backend.core.settings import settings  # noqa: E402
 
 SHELL_FOLDER = "__SIN_RADICADO__"
-_MODEL_DEFAULT = "deepseek-chat"
+_MODEL_DEFAULT = "deepseek-v4-flash"
 
 # Qué documentos alimentar al modelo y cuánto texto de cada uno (chars).
 _DOC_FEED = [

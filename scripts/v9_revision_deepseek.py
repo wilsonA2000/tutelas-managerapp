@@ -44,7 +44,7 @@ from backend.database.models import Case, Document, Email  # noqa: E402
 from backend.v9.field_extractor import _read_doc_text, case_has_dated_observacion  # noqa: E402
 
 SHELL_FOLDER = "__SIN_RADICADO__"
-_MODEL_DEFAULT = "deepseek-chat"   # DeepSeek-V3: 64K de contexto, barato (~$0.27/M in, $1.1/M out)
+_MODEL_DEFAULT = "deepseek-v4-flash"   # DeepSeek-V3: 64K de contexto, barato (~$0.27/M in, $1.1/M out)
 # Tope de texto de documentos por caso. DeepSeek-V3 acepta 64K tokens y es barato, así que
 # damos contexto amplio: ~40K chars (~13K tokens) cubre demanda + auto admisorio + sentencias
 # 1ª/2ª + impugnación + las respuestas clave. Coste estimado: ~$1.5-2.5 para los ~398 casos.

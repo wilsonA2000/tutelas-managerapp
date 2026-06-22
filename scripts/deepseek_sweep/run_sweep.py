@@ -25,7 +25,7 @@ Env vars requeridas (leídas de data/experiment/.env.deepseek_sweep):
     V9_ALLOW_DEEPSEEK=true
     V9_LLM_API_KEY=<key>
     LLM_LOCAL_URL=https://api.deepseek.com
-    LLM_LOCAL_MODEL_ID=deepseek-chat
+    LLM_LOCAL_MODEL_ID=deepseek-v4-flash
 """
 from __future__ import annotations
 

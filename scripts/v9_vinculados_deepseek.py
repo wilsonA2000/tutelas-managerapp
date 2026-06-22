@@ -81,7 +81,7 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--model", default="deepseek-chat")
+    ap.add_argument("--model", default="deepseek-v4-flash")
     args = ap.parse_args()
     api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
     if not api_key:

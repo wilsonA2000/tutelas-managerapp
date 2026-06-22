@@ -73,7 +73,7 @@ LLM_URL = os.getenv("LLM_LOCAL_URL", "https://api.deepseek.com")  # DeepSeek API
 # Sin el flag, jamás se usa DeepSeek aunque haya key (2026-05-25, decisión de Wilson).
 _ALLOW_DEEPSEEK = os.getenv("V9_ALLOW_DEEPSEEK", "false").lower() == "true"
 _LLM_API_KEY = os.getenv("V9_LLM_API_KEY", "") if _ALLOW_DEEPSEEK else ""
-_LLM_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "qwen3-4b-iuris")
+_LLM_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "deepseek-v4-flash")
 
 # Vocabularios cerrados para constrained decoding (json_schema enum). El "" permite
 # al modelo decir "no sé" sin inventar.

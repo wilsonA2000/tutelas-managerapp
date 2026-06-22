@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 # Motor = DeepSeek API (LLM_LOCAL_URL/MODEL_ID apuntan a DeepSeek tras la migración 2026-06-22).
 LLM_URL = os.getenv("LLM_LOCAL_URL", "https://api.deepseek.com")
-LLM_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "deepseek-chat")
+LLM_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "deepseek-v4-flash")
 _LLM_API_KEY = os.getenv("V9_LLM_API_KEY", "") if os.getenv("V9_ALLOW_DEEPSEEK", "false").lower() == "true" else ""
 # El Tier-2 (router + respuesta libre) se activa si DeepSeek está configurado y NO está
 # V9_DISABLE_LLM=true (modo determinista para tests). Sin key → chat 100% Tier-1.

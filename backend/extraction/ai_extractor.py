@@ -30,7 +30,7 @@ _logger = logger
 # ============================================================
 
 _LOCAL_URL = os.getenv("LLM_LOCAL_URL", "http://127.0.0.1:8765")
-_LOCAL_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "qwen3-4b-iuris")
+_LOCAL_MODEL = os.getenv("LLM_LOCAL_MODEL_ID", "deepseek-v4-flash")
 _LOCAL_TIMEOUT = int(os.getenv("LLM_LOCAL_TIMEOUT", "180"))
 # Proveedor externo (DeepSeek) — DESCONECTADO por default. Requiere V9_ALLOW_DEEPSEEK=true
 # (opt-in explícito) Y V9_LLM_API_KEY. Sin el flag, _call_local es SIEMPRE local puro

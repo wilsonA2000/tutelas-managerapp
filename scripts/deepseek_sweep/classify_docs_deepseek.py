@@ -51,7 +51,7 @@ REPORT_FILE  = ROOT / "data" / "experiment" / "classify_report.txt"
 PROD_DB      = ROOT / "data" / "tutelas.db"
 LLM_URL      = os.getenv("LLM_LOCAL_URL", "https://api.deepseek.com")
 LLM_KEY      = os.getenv("V9_LLM_API_KEY", "")
-LLM_MODEL    = os.getenv("LLM_LOCAL_MODEL_ID", "deepseek-chat")
+LLM_MODEL    = os.getenv("LLM_LOCAL_MODEL_ID", "deepseek-v4-flash")
 
 logging.basicConfig(
     level=logging.INFO,
