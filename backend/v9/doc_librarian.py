@@ -934,7 +934,7 @@ def _llm_classify_fallback(text: str, filename: str) -> str | None:
     return None
 
 
-def reclassify_legacy_docs(db, case, *, min_conf: float = 0.5) -> list[dict]:
+def reclassify_legacy_docs(db, case, *, min_conf: float = 0.5, llm_fallback: bool = False) -> list[dict]:
     """Reclasifica con el doc_librarian (por contenido) los docs del `case` que aún
     tengan etiqueta legacy por-filename, persistiendo la etiqueta rica cuando la
     confianza ≥ `min_conf` y no es DESCONOCIDO.
@@ -961,8 +961,9 @@ def reclassify_legacy_docs(db, case, *, min_conf: float = 0.5) -> list[dict]:
                      method="db", pages=0, has_scanned_pages=False, error=None)
         cl = classify(dt)
         if cl.doc_type == DocType.DESCONOCIDO or cl.confidence < min_conf:
-            # El determinista no resolvió → fallback DeepSeek (gateado; off→None = sin cambio).
-            llm_new = _llm_classify_fallback(txt, d.filename or "")
+            # El determinista no resolvió → fallback DeepSeek SOLO si llm_fallback (use_llm):
+            # así el preview dry-run (sin LLM) queda rápido y determinista.
+            llm_new = _llm_classify_fallback(txt, d.filename or "") if llm_fallback else None
             if llm_new and llm_new != cur:
                 d.doc_type = llm_new
                 changes.append({"doc_id": d.id, "filename": d.filename,

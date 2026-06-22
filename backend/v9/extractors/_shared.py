@@ -74,7 +74,7 @@ _CLAIM_NOT_DEMANDA = re.compile(
 
 
 def _best_claim_text(db: Session, case: Case,
-                     max_chars: int = int(os.getenv("V9_LLM_FIELD_CAP", "20000"))) -> tuple[str, bool]:
+                     max_chars: int = int(os.getenv("V9_LLM_FIELD_CAP", "60000"))) -> tuple[str, bool]:
     """Devuelve (texto, es_demanda_real) del doc que mejor refleja el reclamo
     original del accionante. Penaliza autos/desacato/informes (etapa procesal).
     `es_demanda_real=False` ⇒ no hay demanda fiable → el caller debe ser honesto

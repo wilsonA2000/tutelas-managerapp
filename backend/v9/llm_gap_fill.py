@@ -348,9 +348,11 @@ _FIELD_DOC_AFFINITY: dict[str, list[str]] = {
     "abogado_responsable":    ["RESPUESTA", "DOCX_RESPUESTA", "RESPUESTA_SED"],
 }
 
-# Chars máx del contexto LLM por caso. Subido a 40k para DeepSeek (ventana 64K tokens,
-# 2026-06-22): antes 8k era la cota del 4B local. env-tunable V9_LLM_CONTEXT_CAP.
-_CONTEXT_CAP = int(os.getenv("V9_LLM_CONTEXT_CAP", "40000"))
+# Chars máx del contexto LLM por caso. DeepSeek = 64K tokens ≈ ~200K chars; reservando ~8K
+# tokens de salida + scaffolding quedan ~50K tokens de entrada ≈ ~170K chars. Ponemos 150K
+# para aprovechar la ventana al máximo dejando margen (antes 8k=4B, luego 40k tímido).
+# env-tunable V9_LLM_CONTEXT_CAP. (Para >1M tokens habría que cambiar a Gemini, otro proveedor.)
+_CONTEXT_CAP = int(os.getenv("V9_LLM_CONTEXT_CAP", "150000"))
 
 
 def build_context_for_fields(missing: list[str], doc_texts: dict[str, str]) -> str:

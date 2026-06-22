@@ -110,7 +110,9 @@ def extract_case(
         t = time.perf_counter()
         try:
             from backend.v9 import doc_librarian
-            reclassified = doc_librarian.reclassify_legacy_docs(db, case)
+            # El fallback DeepSeek de clasificación solo en extracción real (use_llm), no en
+            # el preview dry-run (que debe ser rápido y 100% determinista).
+            reclassified = doc_librarian.reclassify_legacy_docs(db, case, llm_fallback=use_llm)
             if reclassified:
                 db.flush()  # para que field_extractor_pass vea los nuevos doc_type
                 logger.info("extract_case case=%d: %d docs reclasificados por doc_librarian",
