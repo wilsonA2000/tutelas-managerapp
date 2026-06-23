@@ -24,6 +24,24 @@ _UPPER_FIELDS = ("accionante", "accionados", "vinculados", "ciudad",
 _MESES = {1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
           7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"}
 
+# Mapa asunto→categoria_tematica DERIVADO del cuadro CURADO (verdad humana, 100% consistente).
+# Se usa en vez de legal_schema (cuya taxonomía más amplia devuelve valores fuera del enum del
+# cuadro, ej. INFRAESTRUCTURA_EDUCATIVA). F1.5 fix 2026-06-22.
+_ASUNTO_TO_CATEGORIA = {
+    "ALIMENTACION_PAE": "PERMANENCIA_ESCOLAR", "CALIDAD_EDUCATIVA": "CALIDAD_EDUCATIVA",
+    "CESANTIAS": "PRESTACIONES_SOCIALES", "CNSC_CONCURSO": "CARRERA_DOCENTE",
+    "DEBIDO_PROCESO": "APOYO_JURIDICO", "DERECHO_PETICION": "APOYO_JURIDICO",
+    "EDUCACION": "COBERTURA_EDUCATIVA", "INCIDENTE_DESACATO": "APOYO_JURIDICO",
+    "INCLUSION_DISCAPACIDAD": "COBERTURA_EDUCATIVA", "INSPECCION": "INSPECCION_VIGILANCIA",
+    "MATRICULA": "COBERTURA_EDUCATIVA", "NOMBRAMIENTO": "ADMINISTRACION_PLANTA",
+    "PENSION": "PRESTACIONES_SOCIALES", "PETICION": "APOYO_JURIDICO",
+    "PROTECCION_MENOR": "COBERTURA_EDUCATIVA", "REINTEGRO": "CARRERA_DOCENTE",
+    "SALARIO": "NOMINA", "SALUD_DOCENTE": "PRESTACIONES_SOCIALES",
+    "TESORERIA": "FINANCIERA", "TRANSPORTE_ESCOLAR": "PERMANENCIA_ESCOLAR",
+    "TRASLADO": "CARRERA_DOCENTE", "TUTELA_GENERICA": "DERECHOS_FUNDAMENTALES",
+    "TUTOR_SOMBRA": "COBERTURA_EDUCATIVA",
+}
+
 
 def _to_ddmmyyyy(s: str) -> str:
     """ISO (YYYY-MM-DD) o variantes → DD/MM/YYYY. Si no parsea, deja el original."""
@@ -68,13 +86,9 @@ def normalize_fields(out: dict) -> dict:
     # categoria_tematica + oficina_responsable DERIVADAS de asunto (deterministas, no LLM)
     asunto = (r.get("asunto") or "").strip().upper()
     if asunto and asunto not in ("SIN_DETERMINAR", "OTRO"):
-        try:
-            from backend.cognition.legal_schema import categoria_tematica_de_asunto
-            cat = categoria_tematica_de_asunto(asunto)
-            if cat:
-                r["categoria_tematica"] = cat
-        except Exception as e:  # noqa: BLE001
-            logger.debug("derivar categoria falló: %s", e)
+        cat = _ASUNTO_TO_CATEGORIA.get(asunto)
+        if cat:
+            r["categoria_tematica"] = cat   # mapa del cuadro curado (en el enum del cuadro)
         try:
             from backend.v9.field_extractor import _ASUNTO_TO_L1
             ofi = _ASUNTO_TO_L1.get(asunto)
