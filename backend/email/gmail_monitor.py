@@ -1067,7 +1067,10 @@ def check_inbox(db: Session) -> list[dict]:
         messages = []
         page_token = None
         while True:
-            kwargs = {"userId": "me", "q": "is:unread", "maxResults": 100}
+            # labelIds=UNREAD (no q="is:unread"): el listado por LABEL es inmediato; la
+            # BÚSQUEDA q= depende del índice de Gmail, que tiene lag de minutos tras marcar
+            # UNREAD programáticamente → emails recién marcados no aparecían (FIX 2026-06-22).
+            kwargs = {"userId": "me", "labelIds": ["UNREAD"], "maxResults": 100}
             if page_token:
                 kwargs["pageToken"] = page_token
             response = service.users().messages().list(**kwargs).execute()
@@ -1452,7 +1455,23 @@ def check_inbox(db: Session) -> list[dict]:
                         new_value=f"Email: {subject[:100]}",
                     ))
 
-                # ── MARCAR COMO LEÍDO ──
+                # ── COMMIT POR-EMAIL (antes de marcar leído) ──
+                # FIX 2026-06-22: el commit estaba SOLO al final del loop; si un email
+                # POSTERIOR fallaba, su rollback borraba las filas (flushed, sin commit) de
+                # los emails YA procesados — que igual quedaban marcados leídos → correo
+                # leído pero NO en DB = perdido (causa de los 5 atascados). Commitear aquí
+                # aísla cada email: un fallo posterior no puede borrar éste, y solo se marca
+                # leído DESPUÉS de persistir.
+                try:
+                    db.commit()
+                except Exception as _ce:
+                    logger.error("commit por-email falló (%s) — NO se marca leído: %s",
+                                 subject[:50], _ce)
+                    db.rollback()
+                    results.append({"subject": subject, "accion": "ERROR", "error": f"commit: {str(_ce)[:80]}"})
+                    continue
+
+                # ── MARCAR COMO LEÍDO (solo tras commit exitoso) ──
                 try:
                     service.users().messages().modify(
                         userId="me", id=msg_ref["id"], body={"removeLabelIds": ["UNREAD"]}
