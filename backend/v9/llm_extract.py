@@ -185,6 +185,12 @@ def extract_all(db, case) -> dict:
     # categoria/oficina de asunto. No compite con DeepSeek; snapea su valor al cuadro.
     from backend.v9.normalize_extract import normalize_fields
     out = normalize_fields(out)
+    # Validador determinista: borra identificadores que NO aparecen literal en el expediente
+    # (anti-alucinación: un radicado/FOREST inventado es catastrófico).
+    from backend.v9.validate import apply_identifier_guards
+    out, _vwarn = apply_identifier_guards(out, bundle)
+    if _vwarn:
+        logger.info("extract_all case=%s validaciones: %s", case.id, "; ".join(_vwarn[:4]))
     logger.info("extract_all case=%s: %d/%d campos no vacíos (bundle %d chars)",
                 case.id, sum(1 for x in out.values() if x), len(EXCEL_FIELDS), len(bundle))
     return out
