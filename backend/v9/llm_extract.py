@@ -21,6 +21,13 @@ from backend.v9.types import EXCEL_FIELDS
 
 logger = logging.getLogger("tutelas.v9.llm_extract")
 
+# Campos VERBATIM (transcripción textual del RESUELVE / pretensiones): NO van al LLM —
+# el LLM parafrasea + infla la salida (trunca el JSON). Se llenan con la transcripción
+# determinista (mejor para texto legal literal). Decisión de diseño del benchmark F2.
+_VERBATIM_FIELDS = ("pretensiones", "parte_resolutiva_1st", "parte_resolutiva_2nd",
+                    "parte_resolutiva_incidente")
+_LLM_FIELDS = tuple(f for f in EXCEL_FIELDS if f not in _VERBATIM_FIELDS)
+
 # Presupuesto de chars del expediente que se manda al LLM. v4-flash = 1M tokens ≈ ~3.5M chars;
 # 600k chars ≈ ~170K tokens deja margen de sobra para prompt + salida. env-tunable.
 _BUNDLE_CAP = int(os.getenv("V9_EXTRACT_BUNDLE_CAP", "600000"))
@@ -63,6 +70,8 @@ _RULES = (
     "Gobernación). Si no aparece el de 23, deja vacío.\n"
     "- radicado_forest: SOLO si aparece literal en un correo de la Gobernación (formato GESTA, "
     "ej '2-2026-104200-001763' o continuo year-prefixed). NUNCA lo inventes ni lo derives del PDF.\n"
+    "- derecho_vulnerado: lista TODOS los derechos fundamentales invocados como vulnerados "
+    "(no solo el principal), separados por ' - '. Ej: 'SALUD - PETICION - VIDA'.\n"
     "- accionante: quien interpone. Si es un MENOR, el accionante es el PADRE/MADRE/AGENTE "
     "OFICIOSO (nunca el menor). Si la presenta un personero, accionante = 'PERSONERÍA MUNICIPAL DE <municipio>'.\n"
     "- accionados / vinculados: entidades demandadas / vinculadas (Secretaría de Educación, etc.).\n"
@@ -106,7 +115,7 @@ def build_expediente_bundle(db, case) -> str:
 
 
 def _build_prompt(bundle: str, folder_name: str) -> str:
-    fields_list = ", ".join(EXCEL_FIELDS)
+    fields_list = ", ".join(_LLM_FIELDS)
     vocab_lines = "\n".join(
         f"- {f}: uno de [{', '.join(v)}]" + (" (o 'SIN_DETERMINAR'/'' si no aplica)" if f in
         ("derecho_vulnerado", "asunto", "categoria_tematica") else "")
@@ -124,7 +133,7 @@ def _build_prompt(bundle: str, folder_name: str) -> str:
         "=== EXPEDIENTE ===\n"
         f"{bundle}\n"
         "=== FIN EXPEDIENTE ===\n\n"
-        "Responde SOLO el JSON con las 44 claves. Valores como string (vacío \"\" si no hay dato)."
+        f"Responde SOLO el JSON con esas {len(_LLM_FIELDS)} claves. Valores como string (vacío \"\" si no hay dato)."
     )
 
 
@@ -172,6 +181,10 @@ def extract_all(db, case) -> dict:
     for f in EXCEL_FIELDS:
         v = data.get(f, "")
         out[f] = ("" if v is None else str(v)).strip()
+    # Capa COMPLEMENTO: normaliza al formato canónico (juzgado/fechas/abogado) + deriva
+    # categoria/oficina de asunto. No compite con DeepSeek; snapea su valor al cuadro.
+    from backend.v9.normalize_extract import normalize_fields
+    out = normalize_fields(out)
     logger.info("extract_all case=%s: %d/%d campos no vacíos (bundle %d chars)",
                 case.id, sum(1 for x in out.values() if x), len(EXCEL_FIELDS), len(bundle))
     return out
