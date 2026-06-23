@@ -824,6 +824,35 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _enrich_doc_at_ingest(doc, db) -> None:
+    """En la INGESTA: extrae texto (OCR) + clasifica el documento por CONTENIDO con DeepSeek.
+
+    Así el operador ve la ETIQUETA de cada doc desde el inicio (módulo de expedientes) y la
+    extracción posterior ya sabe qué es cada documento → más peso/precisión. DeepSeek es
+    PRIMARIO (lee el contenido); el tipo por filename queda de respaldo si el LLM no resuelve
+    o no hay texto. Abstención-segura: nunca rompe la ingesta. Gateado (LLM off → filename).
+    Reusa la única autoridad de clasificación (llm_adjudicator.classify_doc_by_content)."""
+    fn = (doc.filename or "").lower()
+    if not fn.endswith((".pdf", ".docx", ".doc")):
+        return
+    try:
+        from backend.extraction.doc_ops import extract_document_text
+        text, _ = extract_document_text(doc)
+        if not (text and text.strip()):
+            return
+        doc.extracted_text = text  # pre-poblar para extracción + visibilidad
+        from backend.email.llm_adjudicator import classify_doc_by_content, llm_on
+        if not llm_on():
+            return
+        v = classify_doc_by_content(text, doc.filename or "")
+        if v.is_confident and v.decision not in ("OTRO", "AMBIGUOUS"):
+            logger.info("ingesta doc-content: %s  %s→%s (conf %.2f)",
+                        (doc.filename or "")[:40], doc.doc_type, v.decision, v.confidence)
+            doc.doc_type = v.decision
+    except Exception as e:  # noqa: BLE001
+        logger.debug("_enrich_doc_at_ingest falló (%s): %s", doc.filename, e)
+
+
 def download_attachments(
     service, msg_id: str, case: Case | None, db: Session,
     email_id: int | None = None, email_message_id: str | None = None,
@@ -876,17 +905,20 @@ def download_attachments(
 
         if case:
             # v4.8 Provenance: vincular al email de origen (si lo conocemos).
-            # Garantiza que los hermanos del mismo email viajen juntos.
-            # Clasificación por filename aquí; la clasificación por CONTENIDO (incl. fallback
-            # DeepSeek) es responsabilidad ÚNICA de doc_librarian.reclassify_legacy_docs, que
-            # corre al inicio de la extracción (consolidación 2026-06-22, antes P1.2 paralela).
-            db.add(Document(
+            doc = Document(
                 case_id=case.id, filename=save_path.name, file_path=str(save_path),
                 doc_type=classify_document(save_path.name), file_size=len(file_data),
                 file_hash=file_hash,
                 email_id=email_id,
                 email_message_id=email_message_id or msg_id,
-            ))
+            )
+            db.add(doc); db.flush()
+            # ── CLASIFICACIÓN POR CONTENIDO EN LA INGESTA (DeepSeek lee + etiqueta) ──
+            # El operador ve la etiqueta de cada doc desde el inicio en el módulo de
+            # expedientes, y la extracción ya sabe qué es cada documento (más peso).
+            # DeepSeek es PRIMARIO (lee el contenido); el filename queda de respaldo si el
+            # LLM no resuelve / no hay texto. Gateado (LLM off → tipo por filename).
+            _enrich_doc_at_ingest(doc, db)
 
     # F3: reenvío que no aportó adjuntos nuevos (todos byte-idénticos ya en el caso).
     # Se marca el Email (no se borra: conserva provenance). NO se colapsa por subject.
