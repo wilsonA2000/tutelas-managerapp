@@ -66,6 +66,14 @@ def normalize_fields(out: dict) -> dict:
     """Devuelve una copia normalizada de los campos extraídos por DeepSeek."""
     r = dict(out)
 
+    # radicado_23: el cuadro guarda 23 DÍGITOS PUROS; DeepSeek a veces pone separadores/desglosa
+    # el año (ej. '683684089001-2026-00008-00'). Stripear no-dígitos → forma canónica.
+    rad = r.get("radicado_23_digitos", "")
+    if rad:
+        d = re.sub(r"\D", "", rad)
+        if len(d) >= 18:
+            r["radicado_23_digitos"] = d
+
     for f in _DATE_FIELDS:
         if r.get(f):
             r[f] = _to_ddmmyyyy(r[f])
